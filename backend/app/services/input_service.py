@@ -4,7 +4,8 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from app.core.config import settings
-from app.core.exceptions import InputNotFound
+from app.core.exceptions import InputNotFound, ProjectNotFound
+from app.repositories.project_repository import ProjectRepository
 from app.repositories.input_repository import InputRepository
 class InputSource(ABC):
     @abstractmethod
@@ -31,8 +32,18 @@ class DatabaseInputSource(InputSource):
                 return dict(row["payload"])
         finally: await engine.dispose()
 class InputService:
-    def __init__(self,session): self.session=session;self.repo=InputRepository(session)
-    async def create_version(self,project_id,payload): row=await self.repo.create_version(project_id,payload);await self.session.commit();return row
+    def __init__(self,session): self.session=session;self.repo=InputRepository(session);self.projects=ProjectRepository(session)
+    async def _ensure_project(self, project_id):
+        project=await self.projects.get(project_id)
+        if not project or not project.is_active: raise ProjectNotFound("Project was not found")
+    async def create_version(self,project_id,payload):
+        await self._ensure_project(project_id)
+        row=await self.repo.create_version(project_id,payload);await self.session.commit();return row
+    async def update_version(self,project_id,input_id,payload):
+        await self._ensure_project(project_id)
+        existing=await self.repo.get_by_id(input_id)
+        if not existing or existing.project_id!=project_id: raise InputNotFound("Project input was not found")
+        row=await self.repo.create_version(project_id,payload,existing.source_type);await self.session.commit();return row
     async def list(self,project_id): return await self.repo.list_by_project(project_id)
     async def current(self,project_id):
         row=await self.repo.get_current(project_id)

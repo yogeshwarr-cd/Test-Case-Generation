@@ -18,6 +18,12 @@ Swagger is at `http://localhost:8001/docs`. Do not point tests at development or
 
 Docker alternative: `docker compose up --build`.
 
+The repository's `.venv` is machine-specific and should not be reused after a
+clone. Delete it locally and create a fresh Python 3.12 environment with the
+commands above. Run the Person 2 test suite with `pytest tests/unit/repositories
+tests/integration tests/api/test_project_api.py tests/api/test_scenario_api.py
+tests/api/test_testcase_api.py` as those suites are added.
+
 ## Backend 1 integration
 
 Manual inputs are versioned in `project_inputs`. API integration reads `GET /projects/{project_id}/approved-context`. Shared-database integration intentionally requires an agreed mapping before use so Backend 1 table names are not spread through this service.

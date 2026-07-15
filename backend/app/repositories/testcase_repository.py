@@ -6,7 +6,13 @@ class TestCaseRepository:
     async def create_testcase(self,**v): row=TestCase(**v);self.session.add(row);await self.session.flush();return row
     async def get_by_id(self,i,lock=False): return await self.session.scalar(select(TestCase).where(TestCase.id==i).with_for_update() if lock else select(TestCase).where(TestCase.id==i))
     async def create_testcase_version(self,t,**v): await self.get_by_id(t.id,True);row=TestCaseVersion(test_case_id=t.id,version_number=t.current_version_number+1,**v);self.session.add(row);await self.session.flush();return row
-    async def create_steps(self,v,steps): rows=[TestCaseStep(test_case_version_id=v.id,step_number=n+1,**s) for n,s in enumerate(steps)];self.session.add_all(rows);await self.session.flush();return rows
+    async def create_steps(self,v,steps):
+        rows=[]
+        for number, step in enumerate(steps, start=1):
+            values=dict(step)
+            values.pop("step_number", None)
+            rows.append(TestCaseStep(test_case_version_id=v.id,step_number=number,**values))
+        self.session.add_all(rows);await self.session.flush();return rows
     async def update_current_version(self,t,v): t.current_version_id=v.id;t.current_version_number=v.version_number;await self.session.flush();return t
     async def list_by_project(self,i): return list((await self.session.scalars(select(TestCase).where(TestCase.project_id==i,TestCase.is_active.is_(True)))).all())
     async def list_by_workflow(self,i): return list((await self.session.scalars(select(TestCase).where(TestCase.workflow_id==i,TestCase.is_active.is_(True)))).all())

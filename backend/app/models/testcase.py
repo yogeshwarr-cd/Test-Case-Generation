@@ -8,9 +8,9 @@ from app.database.base import Base
 from app.models.base import TimestampMixin, UUIDMixin, utcnow
 
 class TestCase(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "test_cases"; __table_args__ = (UniqueConstraint("project_id", "test_case_code"), CheckConstraint("confidence_score BETWEEN 0 AND 1", name="confidence_range"))
+    __tablename__ = "test_cases"; __table_args__ = (UniqueConstraint("project_id", "test_case_code"), CheckConstraint("confidence_score BETWEEN 0 AND 1", name="testcase_confidence_range"))
     project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True); workflow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("generation_workflows.id"), index=True); scenario_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("test_scenarios.id"), index=True)
-    test_case_code: Mapped[str] = mapped_column(String(100)); current_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True)); current_version_number: Mapped[int] = mapped_column(Integer, default=0); validation_status: Mapped[str] = mapped_column(String(50), default="pending", index=True); approval_status: Mapped[str] = mapped_column(String(50), default="pending", index=True); confidence_score: Mapped[Decimal] = mapped_column(Numeric(5,4), default=0); automation_candidate: Mapped[bool] = mapped_column(Boolean, default=False); is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    test_case_code: Mapped[str] = mapped_column(String(100)); current_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True)); current_version_number: Mapped[int] = mapped_column(Integer, default=0); validation_status: Mapped[str] = mapped_column(String(50), default="pending", index=True); approval_status: Mapped[str] = mapped_column(String(50), default="draft", index=True); confidence_score: Mapped[Decimal] = mapped_column(Numeric(5,4), default=0); automation_candidate: Mapped[bool] = mapped_column(Boolean, default=False); is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 class TestCaseVersion(UUIDMixin, Base):
     __tablename__ = "test_case_versions"; __table_args__ = (UniqueConstraint("test_case_id", "version_number"),)

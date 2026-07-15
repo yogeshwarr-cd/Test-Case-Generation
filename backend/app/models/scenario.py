@@ -8,10 +8,10 @@ from app.database.base import Base
 from app.models.base import TimestampMixin, UUIDMixin, utcnow
 
 class TestScenario(UUIDMixin, TimestampMixin, Base):
-    __tablename__ = "test_scenarios"; __table_args__ = (UniqueConstraint("project_id", "scenario_code"), CheckConstraint("confidence_score BETWEEN 0 AND 1", name="confidence_range"))
+    __tablename__ = "test_scenarios"; __table_args__ = (UniqueConstraint("project_id", "scenario_code"), CheckConstraint("confidence_score BETWEEN 0 AND 1", name="scenario_confidence_range"))
     project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), index=True); workflow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("generation_workflows.id"), index=True)
     scenario_code: Mapped[str] = mapped_column(String(100)); current_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True)); current_version_number: Mapped[int] = mapped_column(Integer, default=0)
-    validation_status: Mapped[str] = mapped_column(String(50), default="pending", index=True); approval_status: Mapped[str] = mapped_column(String(50), default="pending", index=True); confidence_score: Mapped[Decimal] = mapped_column(Numeric(5,4), default=0); is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    validation_status: Mapped[str] = mapped_column(String(50), default="pending", index=True); approval_status: Mapped[str] = mapped_column(String(50), default="draft", index=True); confidence_score: Mapped[Decimal] = mapped_column(Numeric(5,4), default=0); is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 class TestScenarioVersion(UUIDMixin, Base):
     __tablename__ = "test_scenario_versions"; __table_args__ = (UniqueConstraint("scenario_id", "version_number"),)

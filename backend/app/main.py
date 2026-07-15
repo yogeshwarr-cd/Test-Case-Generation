@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.api.router import api_router
@@ -14,6 +15,8 @@ app=FastAPI(title=settings.app_name,description="Persistence and review API for 
 app.add_middleware(RequestIDMiddleware);app.add_middleware(CORSMiddleware,allow_origins=settings.cors_origins,allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
 @app.exception_handler(AppError)
 async def app_error(request:Request,exc:AppError): return JSONResponse(status_code=exc.status_code,content={"error_code":exc.error_code,"message":exc.message,"details":exc.details,"request_id":getattr(request.state,"request_id",None)})
+@app.exception_handler(RequestValidationError)
+async def validation_error(request:Request,exc:RequestValidationError): return JSONResponse(status_code=422,content={"error_code":"REQUEST_VALIDATION_ERROR","message":"Request validation failed","details":{"errors":exc.errors()},"request_id":getattr(request.state,"request_id",None)})
 @app.get("/")
 async def root(): return {"name":settings.app_name,"docs":"/docs"}
 @app.get("/health")

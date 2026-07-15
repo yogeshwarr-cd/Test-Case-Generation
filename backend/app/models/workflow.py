@@ -24,5 +24,6 @@ class StructuredContext(UUIDMixin, Base):
 class AgentExecution(UUIDMixin, Base):
     __tablename__ = "agent_executions"
     workflow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("generation_workflows.id"), index=True); agent_name: Mapped[str] = mapped_column(String(100)); execution_number: Mapped[int] = mapped_column(Integer); status: Mapped[str] = mapped_column(String(50), index=True)
-    input_snapshot: Mapped[dict | None] = mapped_column(JSONB); output_snapshot: Mapped[dict | None] = mapped_column(JSONB); provider: Mapped[str | None] = mapped_column(String(100)); model_name: Mapped[str | None] = mapped_column(String(100)); token_usage: Mapped[dict | None] = mapped_column(JSONB); latency_ms: Mapped[int | None]; error_details: Mapped[dict | None] = mapped_column(JSONB)
+    input_snapshot: Mapped[dict | None] = mapped_column(JSONB); output_snapshot: Mapped[dict | None] = mapped_column(JSONB); provider: Mapped[str | None] = mapped_column(String(100)); model_name: Mapped[str | None] = mapped_column(String(100)); token_usage: Mapped[dict | None] = mapped_column(JSONB); error_details: Mapped[dict | None] = mapped_column(JSONB)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow); completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

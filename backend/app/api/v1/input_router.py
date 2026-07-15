@@ -11,4 +11,4 @@ async def list_inputs(project_id:uuid.UUID,db:DBSession): return await InputServ
 @router.get("/current",response_model=InputRead)
 async def current(project_id:uuid.UUID,db:DBSession): return await InputService(db).current(project_id)
 @router.put("/{input_id}",response_model=InputRead)
-async def update(project_id:uuid.UUID,input_id:uuid.UUID,body:InputPayload,db:DBSession): return await InputService(db).create_version(project_id,body.model_dump())
+async def update(project_id:uuid.UUID,input_id:uuid.UUID,body:InputPayload,db:DBSession): return await InputService(db).update_version(project_id,input_id,body.model_dump())
