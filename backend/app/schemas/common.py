@@ -3,7 +3,7 @@ from enum import Enum
 from datetime import datetime
 from pydantic import BaseModel,ConfigDict,Field
 class ORMModel(BaseModel): model_config=ConfigDict(from_attributes=True)
-class ProjectCreate(BaseModel): name:str=Field(examples=["Employee Leave Management Testing"]);description:str|None=None;external_project_id:str|None=None
+class ProjectCreate(BaseModel): name:str=Field(examples=["Employee Leave Management Testing"]);description:str|None=None;external_project_id:str|None=None;status:str="active"
 class ProjectUpdate(BaseModel): name:str|None=None;description:str|None=None;external_project_id:str|None=None;status:str|None=None
 class ProjectRead(ORMModel): id:uuid.UUID;name:str;description:str|None;external_project_id:str|None;status:str;created_at:datetime;updated_at:datetime
 class InputPayload(BaseModel):
