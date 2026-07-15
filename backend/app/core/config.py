@@ -1,23 +1,35 @@
+import json
 from functools import lru_cache
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        # pydantic-settings normally JSON-decodes complex fields before field
+        # validators run. Disabling that lets one explicit parser reliably
+        # support both JSON arrays and developer-friendly comma-separated text.
+        enable_decoding=False,
+    )
     app_name: str = "Test Case Generator"
     app_env: str = "development"
     app_host: str = "0.0.0.0"
     app_port: int = 8001
     debug: bool = True
     database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/testcase_generator"
+        "postgresql://neondb_owner:npg_PXIsV9S7dJWB@ep-billowing-grass-atkw4nta-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
     )
+    database_connect_timeout: float = 30.0
     backend_1_integration_mode: str = "database"
     backend_1_api_url: str = "http://localhost:8000/api/v1"
     backend_1_database_url: str | None = None
-    cors_origins: list[str] = ["http://localhost:3000"]
+    cors_origins: list[str] = Field(default_factory=list)
 
     @field_validator("database_url", "backend_1_database_url", mode="before")
     @classmethod
@@ -55,8 +67,17 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_origins(cls, value: object) -> object:
-        if isinstance(value, str) and not value.startswith("["):
-            return [part.strip() for part in value.split(",") if part.strip()]
+        """Parse JSON arrays, comma-separated origins, or a single origin."""
+        if isinstance(value, str):
+            raw_value = value.strip()
+            if not raw_value:
+                return []
+            if raw_value.startswith("["):
+                parsed = json.loads(raw_value)
+                if not isinstance(parsed, list):
+                    raise ValueError("CORS_ORIGINS JSON value must be an array")
+                return [str(origin).strip() for origin in parsed if str(origin).strip()]
+            return [origin.strip() for origin in raw_value.split(",") if origin.strip()]
         return value
 
 @lru_cache
