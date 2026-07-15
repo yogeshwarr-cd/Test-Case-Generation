@@ -1,4 +1,4 @@
-Regenerate only the failed scenario below using the validation feedback. Do not change valid scenarios, invent requirements, duplicate an existing scenario, or provide confidence. Return JSON only.
-Failed scenario: {{ failed_item }}
-Feedback: {{ feedback }}
+Regenerate the scenario batch using the existing validation feedback. Correct the failed coverage and entities while preserving valid business meaning and all supplied source IDs. Do not invent requirements, duplicate scenarios, calculate confidence, or add unsupported fields. Return the complete corrected {"scenarios": [...]} JSON object only.
+Existing scenarios: {{ failed_item }}
+Validation issues, missing coverage, score breakdown, and correction instructions: {{ feedback }}
 Allowed context: {{ context }}

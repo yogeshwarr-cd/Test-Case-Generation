@@ -1,5 +1,6 @@
 import json
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import Field, field_validator
@@ -8,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -30,6 +31,18 @@ class Settings(BaseSettings):
     backend_1_api_url: str = "http://localhost:8000/api/v1"
     backend_1_database_url: str | None = None
     cors_origins: list[str] = Field(default_factory=list)
+    groq_api_key: str = ""
+    groq_model: str = ""
+    gemini_api_key: str = ""
+    gemini_model: str = ""
+    openai_api_key: str = ""
+    openai_model: str = ""
+    llm_primary_provider: str = "groq"
+    llm_fallback_providers: list[str] = Field(default_factory=lambda: ["gemini", "openai"])
+    llm_request_timeout_seconds: float = 60.0
+    llm_temperature: float = 0.2
+    llm_max_output_tokens: int = 6000
+    llm_provider_retry_count: int = 1
 
     @field_validator("database_url", "backend_1_database_url", mode="before")
     @classmethod
@@ -78,6 +91,13 @@ class Settings(BaseSettings):
                     raise ValueError("CORS_ORIGINS JSON value must be an array")
                 return [str(origin).strip() for origin in parsed if str(origin).strip()]
             return [origin.strip() for origin in raw_value.split(",") if origin.strip()]
+        return value
+
+    @field_validator("llm_fallback_providers", mode="before")
+    @classmethod
+    def parse_provider_names(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [name.strip().lower() for name in value.split(",") if name.strip()]
         return value
 
 @lru_cache

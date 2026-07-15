@@ -1,17 +1,33 @@
-from app.agents.base_agent import BaseAgent,ExecutionContext
+import json
+
+from app.agents.base_agent import BaseAgent, ExecutionContext
+from app.llm.client import build_llm_client
+from app.llm.prompt_loader import PromptLoader
 from app.schemas.context_schema import StructuredContext
-from app.schemas.scenario_schema import ScenarioBatch,Scenario
-from app.schemas.common import ScenarioType,Priority
-from app.utils.validators import item_id,item_text
+from app.schemas.scenario_schema import ScenarioBatch
+
+
 class ScenarioGenerationAgent(BaseAgent[ScenarioBatch]):
-    output_model=ScenarioBatch
-    async def run(self,input_data,execution_context:ExecutionContext)->ScenarioBatch:
-        context=StructuredContext.model_validate(input_data)
-        scenarios=[]
-        ac_ids=[item_id(x,"AC",i) for i,x in enumerate(context.acceptance_criteria)]
-        req_ids=[item_id(x,"REQ",i) for i,x in enumerate(context.functional_requirements)]
-        for i,story in enumerate(context.user_stories):
-            sid=item_id(story,"US",i); text=item_text(story)
-            for kind,title in ((ScenarioType.positive,"Successful"),(ScenarioType.negative,"Invalid"),(ScenarioType.boundary,"Boundary")):
-                scenarios.append(Scenario(project_id=context.project_id,title=f"{title}: {text}",description=f"Verify {kind.value} behavior for {text}",scenario_type=kind,priority=Priority.high if kind==ScenarioType.positive else Priority.medium,preconditions=["System is available"],test_data_requirements=[f"{kind.value} data"],expected_business_outcome=f"The {kind.value} path follows the documented requirement",requirement_ids=req_ids,user_story_ids=[sid],acceptance_criteria_ids=ac_ids,source_references=[sid],generation_metadata={"deterministic":True}))
-        return ScenarioBatch(scenarios=scenarios)
+    output_model = ScenarioBatch
+
+    def __init__(self, llm_client=None, prompt_loader=None):
+        super().__init__(llm_client=llm_client)
+        self.llm_client = llm_client or build_llm_client()
+        self.prompt_loader = prompt_loader or PromptLoader()
+
+    async def run(self, input_data, execution_context: ExecutionContext) -> ScenarioBatch:
+        context_data = input_data.get("context", input_data)
+        context = StructuredContext.model_validate(context_data)
+        template = "scenario_regeneration.jinja2" if "validation" in input_data else "scenario_generation.jinja2"
+        user_prompt = self.prompt_loader.render(
+            template,
+            context=json.dumps(context.model_dump(mode="json"), ensure_ascii=False),
+            failed_item=json.dumps(input_data.get("existing_scenarios", []), ensure_ascii=False),
+            feedback=json.dumps(input_data.get("validation", {}), ensure_ascii=False),
+        )
+        return await self.llm_client.generate_structured_output(
+            system_prompt="You are a senior QA architect. Return schema-compliant JSON only.",
+            user_prompt=user_prompt,
+            response_model=ScenarioBatch,
+            request_id=execution_context.request_id,
+        )

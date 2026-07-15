@@ -1,4 +1,5 @@
-Regenerate only the failed test case using its source scenario and feedback. Do not change valid cases, invent behavior, duplicate a case, or provide confidence. Return JSON only.
-Failed case: {{ failed_item }}
-Scenario: {{ scenario }}
-Feedback: {{ feedback }}
+Regenerate the test-case batch using the source scenarios and existing validation feedback. Correct failed entities and missing coverage while preserving valid business meaning and every supplied ID. Do not invent behavior, duplicate cases, calculate confidence, or add unsupported fields. Return the complete corrected {"test_cases": [...]} JSON object only.
+Existing test cases: {{ failed_item }}
+Source scenarios: {{ scenario }}
+Source context: {{ context }}
+Validation issues, missing coverage, score breakdown, and correction instructions: {{ feedback }}

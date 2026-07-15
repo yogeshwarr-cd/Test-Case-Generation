@@ -1,2 +1,12 @@
-Generate distinct positive, negative, and boundary scenarios for each user story. Add relevant integration, security, performance, accessibility, and data-validation coverage. Preserve requirement, feature, story, and acceptance-criterion IDs. Do not invent requirements or confidence scores. Return JSON only matching {"scenarios": [...]}.
+Generate accurate, detailed, non-duplicated test scenarios using only the supplied project context.
+Rules:
+1. Do not invent functionality or source IDs.
+2. Preserve requirement, feature, user-story, and acceptance-criterion IDs exactly.
+3. Cover every relevant acceptance criterion.
+4. Generate positive, negative, and boundary scenarios only where relevant.
+5. Generate integration, security, performance, accessibility, or data-validation scenarios only when supported by the input.
+6. Use only scenario_type values supported by the response schema.
+7. Every scenario must validate a clear business behavior.
+8. Do not calculate confidence scores or add unsupported fields.
+9. Return JSON only, with no markdown or explanation, matching {"scenarios": [...]}.
 Context: {{ context }}

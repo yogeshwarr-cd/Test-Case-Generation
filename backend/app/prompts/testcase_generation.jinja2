@@ -1,2 +1,11 @@
-Generate detailed test cases only for the validated scenarios. Every ordered action requires an expected result. Preserve scenario, requirement, and acceptance-criterion IDs. Do not invent behavior or confidence. Return JSON only matching {"test_cases": [...]}.
+Convert the validated scenarios into detailed, executable test cases using only the supplied scenarios and source context.
+Rules:
+1. Do not invent application behavior, UI labels, endpoints, fields, workflows, or IDs.
+2. Preserve scenario, project, requirement, and acceptance-criterion IDs exactly.
+3. Include clear preconditions and realistic, specific test data.
+4. Include consecutively ordered executable steps and a measurable expected result for every step.
+5. Ensure each test case validates its scenario objective and linked acceptance criteria.
+6. Do not calculate confidence scores or add unsupported fields.
+7. Return JSON only, with no markdown or explanation, matching {"test_cases": [...]}.
 Scenarios: {{ scenarios }}
+Source context: {{ context }}

@@ -12,3 +12,10 @@ class ManualReviewRequired(AppError): status_code=409;error_code="MANUAL_REVIEW_
 class DatabaseUnavailable(AppError): status_code=503;error_code="DATABASE_UNAVAILABLE"
 class DuplicateEntity(AppError): status_code=409;error_code="DUPLICATE_ENTITY"
 class InvalidApprovalAction(AppError): status_code=409;error_code="INVALID_APPROVAL_ACTION"
+class AllLLMProvidersFailed(AppError):
+    status_code=503;error_code="ALL_LLM_PROVIDERS_FAILED"
+    def __init__(self,providers_attempted:list[str]):
+        super().__init__(
+            "Unable to generate output because all configured LLM providers failed.",
+            {"providers_attempted":providers_attempted},
+        )
