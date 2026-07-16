@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* LIGHT THEME (Elegant & Professional) */
+  --background: #ffffff;
+  --foreground: #0F172A; /* Deep Navy */
+  
+  --card: #F8FAFC;
+  --card-foreground: #0F172A;
+  
+  --popover: #ffffff;
+  --popover-foreground: #0F172A;
+  
+  --primary: #0284C7; /* Sky Blue */
+  --primary-foreground: #ffffff;
+  
+  --secondary: #E0F2FE; /* Light Blue */
+  --secondary-foreground: #0369A1;
+  
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;
+  
+  --accent: #F0F9FF;
+  --accent-foreground: #0284C7;
+  
+  --border: #E2E8F0;
+  --input: #E2E8F0;
+  --ring: #0284C7;
+  
+  --radius: 0.5rem;
+
+  /* Legacy / App-specific tokens */
+  --color-bg-deep: #f8f9fa;
+  --color-bg-card: #ffffff;
+  --color-bg-sidebar-iconbar: #0e0f12;
+  --color-bg-sidebar: #161719;
+  --color-accent-app: #111827;
+  --color-accent-hover: #1f2937;
+  --color-text-primary: #111827;
+  --color-text-secondary: #4b5563;
+  --color-text-muted: #9ca3af;
+  --color-border-app: #e5e7eb;
+  --color-border-hover: #d1d5db;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-processing: #3b82f6;
+}
+
+.dark {
+  /* DARK THEME (ChatGPT Elite with Deep Blues) */
+  --background: #0B1121; /* Very Dark Blue/Navy */
+  --foreground: #F8FAFC; /* Soft White */
+  
+  --card: #111827; /* Elevated Navy */
+  --card-foreground: #F8FAFC;
+  
+  --popover: #0F172A;
+  --popover-foreground: #F8FAFC;
+  
+  --primary: #3B82F6; /* Vibrant Blue */
+  --primary-foreground: #ffffff;
+  
+  --secondary: #1E293B;
+  --secondary-foreground: #F8FAFC;
+  
+  --muted: #1E293B;
+  --muted-foreground: #94A3B8;
+  
+  --accent: #1E293B;
+  --accent-foreground: #3B82F6;
+  
+  --border: #1E293B;
+  --input: #1E293B;
+  --ring: #3B82F6;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-sans: var(--font-outfit), var(--font-geist-sans), 'Inter', sans-serif;
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  background-color: var(--background);
+  color: var(--foreground);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+body {
+  background-color: transparent;
+  color: var(--foreground);
+  transition: color 0.3s ease;
+}
