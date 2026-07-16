@@ -241,7 +241,7 @@ export default function LandingPage() {
           </div>
           
           <motion.div 
-            className="flex items-center gap-[16px] mt-auto pb-[20px]"
+            className="flex flex-wrap items-center gap-[16px] mt-auto pb-[20px]"
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.7, duration: 0.6 }}
@@ -249,6 +249,9 @@ export default function LandingPage() {
             <Link href="/login" className="relative overflow-hidden group/btn bg-primary text-primary-foreground px-[24px] py-[12px] rounded-lg font-medium text-[15px] flex items-center gap-2 hover:scale-[1.02] transition-transform duration-150 shadow-lg shadow-primary/25">
               <span className="relative z-10 flex items-center gap-2">Get Started Free <ArrowRight className="w-4 h-4 group-hover/btn:translate-x-1 transition-transform" /></span>
               <span className="absolute inset-0 -translate-x-full group-hover/btn:translate-x-[200%] transition-transform duration-1000 ease-in-out bg-gradient-to-r from-transparent via-white/20 to-transparent w-1/2 skew-x-12 z-0"></span>
+            </Link>
+            <Link href="/test-case-generation" className="relative overflow-hidden group/next border border-white/40 bg-white/10 text-white backdrop-blur-md px-[24px] py-[12px] rounded-lg font-medium text-[15px] flex items-center gap-2 hover:bg-white/20 hover:scale-[1.02] transition-all duration-150">
+              <span className="relative z-10 flex items-center gap-2">Proceed Next <ArrowRight className="w-4 h-4 group-hover/next:translate-x-1 transition-transform" /></span>
             </Link>
           </motion.div>
 
