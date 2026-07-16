@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import json
 import re
 from typing import Any
 
@@ -74,7 +75,11 @@ def _retry_after(exc: Exception) -> float | None:
     try:
         return max(0.0, float(value))
     except (TypeError, ValueError):
-        match = re.search(r"try again in\s+([0-9.]+)s", str(exc), flags=re.I)
+        match = re.search(
+            r"(?:try again|retry) in\s+([0-9.]+)s",
+            str(exc),
+            flags=re.I,
+        )
         return float(match.group(1)) if match else None
 
 
@@ -92,9 +97,23 @@ def _classify_error(exc: Exception) -> ProviderError:
         return ProviderError("timeout", **details)
     if status == 401 or "authentication" in name or "unauthorized" in message or "invalid api key" in message:
         return ProviderError("authentication", **details)
+    retry_after = _retry_after(exc)
+    if status == 429 and retry_after is not None:
+        return ProviderError(
+            "rate_limited",
+            recoverable=True,
+            retry_after=retry_after,
+            **details,
+        )
     if "insufficient_quota" in message or "quota" in message or "resource_exhausted" in name:
         return ProviderError("quota_exceeded", **details)
-    if status == 429 or "ratelimit" in name or "rate limit" in message:
+    if (
+        status == 429
+        or (status == 413 and ("tokens per minute" in message or "request too large" in message))
+        or "ratelimit" in name
+        or "rate limit" in message
+        or "rate_limit_exceeded" in message
+    ):
         return ProviderError(
             "rate_limited", recoverable=True, retry_after=_retry_after(exc), **details
         )
@@ -113,6 +132,29 @@ def _classify_error(exc: Exception) -> ProviderError:
 
 def _schema(response_model: type[BaseModel]) -> dict[str, Any]:
     return response_model.model_json_schema()
+
+
+def _gemini_schema(response_model: type[BaseModel]) -> dict[str, Any]:
+    """Return Gemini's supported JSON Schema subset without weakening validation."""
+    unsupported = {
+        "$schema",
+        "additionalProperties",
+        "patternProperties",
+        "unevaluatedProperties",
+    }
+
+    def sanitize(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: sanitize(item)
+                for key, item in value.items()
+                if key not in unsupported
+            }
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        return value
+
+    return sanitize(response_model.model_json_schema())
 
 
 class GroqProvider(LLMProvider):
@@ -224,8 +266,20 @@ class CerebrasProvider(LLMProvider):
 class GeminiProvider(LLMProvider):
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str, client: Any = None):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        client: Any = None,
+        *,
+        provider_name: str = "gemini",
+        thinking_level: str = "low",
+        min_output_tokens: int = 4096,
+    ):
         self.api_key, self.model, self._client = api_key, model, client
+        self.name = provider_name
+        self.thinking_level = thinking_level
+        self.min_output_tokens = min_output_tokens
 
     async def generate(self, **kwargs: Any) -> ProviderResponse:
         if not self.api_key or not self.model:
@@ -235,19 +289,33 @@ class GeminiProvider(LLMProvider):
             if self._client is None:
                 from google import genai
                 self._client = genai.Client(api_key=self.api_key)
+            thinking_config = (
+                types.ThinkingConfig(thinking_budget=0)
+                if self.model.startswith("gemini-2.5")
+                else types.ThinkingConfig(thinking_level=self.thinking_level)
+            )
             response = await self._client.aio.models.generate_content(
                 model=self.model,
                 contents=kwargs["user_prompt"],
                 config=types.GenerateContentConfig(
                     system_instruction=kwargs["system_prompt"],
                     temperature=kwargs["temperature"],
-                    max_output_tokens=kwargs["max_output_tokens"],
+                    max_output_tokens=max(
+                        kwargs["max_output_tokens"], self.min_output_tokens
+                    ),
                     response_mime_type="application/json",
-                    response_json_schema=_schema(kwargs["response_model"]),
+                    response_json_schema=_gemini_schema(kwargs["response_model"]),
+                    thinking_config=thinking_config,
                     http_options=types.HttpOptions(timeout=int(kwargs["timeout"] * 1000)),
                 ),
             )
-            content = response.text or ""
+            parsed = getattr(response, "parsed", None)
+            if isinstance(parsed, BaseModel):
+                content = parsed.model_dump_json()
+            elif parsed is not None:
+                content = json.dumps(parsed, separators=(",", ":"))
+            else:
+                content = response.text or ""
             if not content.strip():
                 raise ProviderError("empty_response")
             usage = getattr(response, "usage_metadata", None)

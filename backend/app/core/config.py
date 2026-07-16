@@ -40,7 +40,13 @@ class Settings(BaseSettings):
     groq_model: str = ""
     groq_max_output_tokens: int = 1500
     gemini_api_key: str = ""
+    gemini_primary_api_key: str = ""
+    gemini_fallback_api_key: str = ""
     gemini_model: str = ""
+    gemini_primary_model: str = ""
+    gemini_fallback_model: str = ""
+    gemini_thinking_level: str = "low"
+    gemini_min_output_tokens: int = 4096
     openai_api_key: str = ""
     openai_model: str = ""
     llm_primary_provider: str = "cerebras"
@@ -65,18 +71,19 @@ class Settings(BaseSettings):
     llm_generation_max_output_tokens: int = 1500
     llm_validation_max_output_tokens: int = 2000
     llm_regeneration_max_output_tokens: int = 3000
-    llm_scenario_batch_size: int = 1
-    llm_testcase_batch_size: int = 1
+    llm_scenario_batch_size: int = 10
+    llm_testcase_batch_size: int = 10
     cerebras_max_concurrent_requests: int = 1
     cerebras_provider_retry_count: int = 1
     cerebras_initial_backoff_seconds: float = 2.0
     cerebras_max_backoff_seconds: float = 10.0
     cerebras_min_request_interval_seconds: float = 2.0
+    cerebras_quota_cooldown_seconds: float = 60.0
     groq_concurrency: int = 1
     gemini_concurrency: int = 4
     openai_concurrency: int = 4
-    llm_provider_retry_count: int = 1
-    llm_rate_limit_backoff_seconds: float = 1.0
+    llm_provider_retry_count: int = 3
+    llm_rate_limit_backoff_seconds: float = 2.0
     llm_rate_limit_jitter_seconds: float = 0.25
     llm_rate_limit_fallback_threshold_seconds: float = 10.0
 

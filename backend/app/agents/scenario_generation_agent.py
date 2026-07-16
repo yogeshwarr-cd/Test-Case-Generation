@@ -31,9 +31,10 @@ class ScenarioGenerationAgent(BaseAgent[ScenarioBatch]):
         )
         generated = []
         for batch in batches(work_items, settings.llm_scenario_batch_size):
+            compact_context = scoped_context(context_dict, batch)
             user_prompt = self.prompt_loader.render(
                 template,
-                context=json.dumps(scoped_context(context_dict, batch), ensure_ascii=False),
+                context=json.dumps(compact_context, ensure_ascii=False),
                 failed_item=json.dumps(batch if task == "regeneration" else [], ensure_ascii=False),
                 feedback=json.dumps(input_data.get("validation", {}), ensure_ascii=False),
             )
@@ -43,5 +44,39 @@ class ScenarioGenerationAgent(BaseAgent[ScenarioBatch]):
                 response_model=ScenarioBatch,
                 request_id=execution_context.request_id,
             )
+            story_ids = [
+                str(item["id"]) for item in batch
+                if isinstance(item, dict) and item.get("id")
+            ]
+            if not story_ids:
+                story_ids = [
+                    str(item["id"])
+                    for item in compact_context.get("user_stories", [])
+                    if isinstance(item, dict) and item.get("id")
+                ]
+            requirement_ids = [
+                str(item["id"])
+                for key in ("functional_requirements", "non_functional_requirements")
+                for item in compact_context.get(key, [])
+                if isinstance(item, dict) and item.get("id")
+            ]
+            feature_ids = [
+                str(item["id"]) for item in compact_context.get("features", [])
+                if isinstance(item, dict) and item.get("id")
+            ]
+            acceptance_criteria_ids = [
+                str(item["id"]) for item in compact_context.get("acceptance_criteria", [])
+                if isinstance(item, dict) and item.get("id")
+            ]
+            for scenario in result.scenarios:
+                scenario.user_story_ids = scenario.user_story_ids or story_ids
+                scenario.requirement_ids = scenario.requirement_ids or requirement_ids
+                scenario.feature_ids = scenario.feature_ids or feature_ids
+                scenario.acceptance_criteria_ids = (
+                    scenario.acceptance_criteria_ids or acceptance_criteria_ids
+                )
+                scenario.source_references = (
+                    scenario.source_references or story_ids
+                )
             generated.extend(result.scenarios)
         return ScenarioBatch(scenarios=generated)

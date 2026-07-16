@@ -52,6 +52,34 @@ class StubStructuredClient:
 
 
 @pytest.mark.asyncio
+async def test_plain_text_input_gets_ids_and_generated_traceability():
+    project_id = uuid.uuid4()
+    ctx = ExecutionContext(request_id="plain", workflow_id="plain")
+    prepared = await ContextPreparationAgent().execute({
+        "project_id": project_id,
+        "source_type": "manual",
+        "input_payload": {
+            "user_stories": ["User can log in."],
+            "functional_requirements": ["Support email login."],
+            "acceptance_criteria": ["Valid credentials allow login."],
+            "features": ["Login"],
+        },
+    }, ctx)
+    assert prepared.user_stories[0]["id"] == "US-1"
+    assert prepared.functional_requirements[0]["id"] == "REQ-1"
+    assert prepared.acceptance_criteria[0]["id"] == "AC-1"
+
+    client = StubStructuredClient(project_id)
+    scenarios = await ScenarioGenerationAgent(client).execute(
+        prepared.model_dump(), ctx
+    )
+    scenario = scenarios.scenarios[0]
+    assert scenario.user_story_ids == ["US1"] or scenario.user_story_ids == ["US-1"]
+    assert scenario.requirement_ids
+    assert scenario.acceptance_criteria_ids
+
+
+@pytest.mark.asyncio
 async def test_context_and_validation_logic_remain_unchanged():
     project_id = uuid.uuid4()
     ctx = ExecutionContext(request_id="r", workflow_id="w")

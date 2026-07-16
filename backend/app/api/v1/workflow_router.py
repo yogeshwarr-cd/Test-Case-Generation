@@ -12,13 +12,25 @@ async def start_workflow(request:WorkflowStartRequest):
 async def get_workflow(workflow_id:uuid.UUID): return workflow_service.get(workflow_id)
 @router.get("/{workflow_id}/result",summary="Get generated results")
 async def get_result(workflow_id:uuid.UUID):
-    s=workflow_service.get(workflow_id);return {k:s.get(k) for k in ("workflow_id","status","structured_context","scenarios","scenario_validation","test_cases","testcase_validation")}
+    s=workflow_service.get(workflow_id);return {k:s.get(k) for k in ("workflow_id","project_id","status","current_stage","errors","manual_intervention_reason","structured_context","scenarios","scenario_validation","test_cases","testcase_validation")}
 @router.get("/{workflow_id}/events",summary="Stream workflow status events")
 async def events(workflow_id:uuid.UUID):
     async def stream():
         last=None
         while True:
-            s=workflow_service.get(workflow_id); snapshot={"status":s["status"],"current_stage":s["current_stage"]}
+            s=workflow_service.get(workflow_id)
+            snapshot={
+                "status":s["status"],
+                "current_stage":s["current_stage"],
+                "scenario_attempt_count":s.get("scenario_attempt_count",0),
+                "testcase_attempt_count":s.get("testcase_attempt_count",0),
+                "errors":s.get("errors",[]),
+                "message":(
+                    s.get("manual_intervention_reason")
+                    or (s.get("errors") or [None])[-1]
+                    or s["current_stage"].replace("_"," ")
+                ),
+            }
             if snapshot!=last: yield f"data: {json.dumps(snapshot)}\n\n";last=snapshot
             if s["status"] in {"completed","failed","cancelled","scenario_manual_review","testcase_manual_review"}: break
             await asyncio.sleep(.5)

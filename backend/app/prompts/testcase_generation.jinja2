@@ -6,6 +6,8 @@ Rules:
 4. Include consecutively ordered executable steps and a measurable expected result for every step.
 5. Ensure each test case validates its scenario objective and linked acceptance criteria.
 6. Do not calculate confidence scores or add unsupported fields.
-7. Return JSON only, with no markdown or explanation, matching {"test_cases": [...]}.
+7. Omit test_case_id so the server assigns a UUID. Copy scenario_id and project_id exactly.
+8. Number steps consecutively beginning at 1.
+9. Return JSON only, with no markdown or explanation, matching {"test_cases": [...]}.
 Scenarios: {{ scenarios }}
 Source context: {{ context }}

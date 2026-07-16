@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import time
@@ -24,6 +25,7 @@ T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
 _provider_semaphores: dict[tuple[int, str, int], asyncio.Semaphore] = {}
 _provider_last_request: dict[str, float] = {}
+_provider_unavailable_until: dict[str, float] = {}
 
 
 def _provider_semaphore(provider: str, concurrency: int) -> asyncio.Semaphore:
@@ -50,6 +52,7 @@ class LLMClient:
         cerebras_provider_retry_count: int = 1,
         cerebras_initial_backoff_seconds: float = 2.0,
         cerebras_max_backoff_seconds: float = 10.0,
+        provider_cooldown_seconds: dict[str, float] | None = None,
     ):
         self.providers = list(providers)
         self.timeout = timeout
@@ -64,6 +67,22 @@ class LLMClient:
         self.cerebras_provider_retry_count = cerebras_provider_retry_count
         self.cerebras_initial_backoff_seconds = cerebras_initial_backoff_seconds
         self.cerebras_max_backoff_seconds = cerebras_max_backoff_seconds
+        self.unavailable_providers: set[str] = set()
+        self.provider_cooldown_seconds = provider_cooldown_seconds or {}
+
+    def _globally_unavailable(self, provider: str) -> bool:
+        unavailable_until = _provider_unavailable_until.get(provider, 0)
+        if unavailable_until <= time.monotonic():
+            _provider_unavailable_until.pop(provider, None)
+            return False
+        return True
+
+    def _has_later_available_provider(self, current_index: int) -> bool:
+        return any(
+            provider.name not in self.unavailable_providers
+            and not self._globally_unavailable(provider.name)
+            for provider in self.providers[current_index + 1 :]
+        )
 
     async def _call(
         self,
@@ -115,7 +134,14 @@ class LLMClient:
         request_id: str | None = None,
     ) -> T:
         attempted: list[str] = []
-        for provider in self.providers:
+        failures: dict[str, dict[str, object]] = {}
+        for provider_index, provider in enumerate(self.providers):
+            if provider.name in self.unavailable_providers or self._globally_unavailable(provider.name):
+                logger.info(
+                    "LLM provider skipped provider=%s model=%s request_id=%s reason=provider_cooldown_or_client_unavailable",
+                    provider.name, provider.model, request_id,
+                )
+                continue
             attempted.append(provider.name)
             repair_attempted = False
             retry_count = (
@@ -130,14 +156,32 @@ class LLMClient:
                     try:
                         result = parse_model(response.content, response_model)
                     except (ValueError, ValidationError) as validation_error:
+                        validation_summary = (
+                            [
+                                {"loc": error["loc"], "type": error["type"]}
+                                for error in validation_error.errors()[:10]
+                            ]
+                            if isinstance(validation_error, ValidationError)
+                            else [{"type": type(validation_error).__name__}]
+                        )
+                        logger.warning(
+                            "LLM structured output validation failed provider=%s model=%s request_id=%s content_length=%s errors=%s",
+                            provider.name, provider.model, request_id,
+                            len(response.content), validation_summary,
+                        )
                         if repair_attempted:
                             raise ProviderError("invalid_structured_output") from validation_error
                         repair_attempted = True
+                        compact_schema = json.dumps(
+                            response_model.model_json_schema(),
+                            separators=(",", ":"),
+                        )
+                        compact_error = str(validation_error)[:2000]
+                        invalid_output = response.content[:12000]
                         repair_prompt = (
-                            "Correct the invalid output below. Return corrected JSON only. Preserve the "
-                            "business meaning and supplied IDs. Do not invent requirements or add unsupported "
-                            f"fields. Validation errors: {validation_error}. Required schema: "
-                            f"{response_model.model_json_schema()}. Invalid output: {response.content}"
+                            "Correct this output to match the schema. Return JSON only; preserve supplied IDs "
+                            "and meaning; do not add unsupported fields.\n"
+                            f"Schema:{compact_schema}\nErrors:{compact_error}\nOutput:{invalid_output}"
                         )
                         repaired = await self._call(
                             provider,
@@ -166,6 +210,24 @@ class LLMClient:
                     error.status_code, error.provider_message or "-",
                     round((time.perf_counter() - started) * 1000),
                 )
+                failures[provider.name] = {
+                    "category": error.category,
+                    "status_code": error.status_code,
+                    "retry_after": error.retry_after,
+                }
+                if error.category in {
+                    "authentication",
+                    "missing_configuration",
+                    "permission_denied",
+                    "quota_exceeded",
+                    "unsupported_model",
+                }:
+                    self.unavailable_providers.add(provider.name)
+                    cooldown = self.provider_cooldown_seconds.get(provider.name, 0)
+                    if cooldown > 0:
+                        _provider_unavailable_until[provider.name] = (
+                            time.monotonic() + cooldown
+                        )
                 if provider.name == "cerebras" and error.category == "quota_exceeded":
                     logger.warning(
                         "LLM provider fallback provider=%s model=%s request_id=%s error_category=%s decision=immediate_fallback",
@@ -190,12 +252,26 @@ class LLMClient:
                     )
                     await asyncio.sleep(delay)
                     continue
+                if error.category == "temporary_provider_error" and attempt < retry_count:
+                    delay = self.rate_limit_backoff_seconds * (2**attempt)
+                    delay += random.uniform(0, self.rate_limit_jitter_seconds)
+                    logger.warning(
+                        "LLM temporary-error retry scheduled provider=%s model=%s request_id=%s next_attempt=%s backoff_seconds=%s http_status=%s",
+                        provider.name, provider.model, request_id, attempt + 2,
+                        delay, error.status_code,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
                 if error.category != "rate_limited" or attempt >= retry_count:
                     break
                 if (
                     error.retry_after is not None
                     and error.retry_after > self.rate_limit_fallback_threshold_seconds
+                    and self._has_later_available_provider(provider_index)
                 ):
+                    _provider_unavailable_until[provider.name] = (
+                        time.monotonic() + error.retry_after
+                    )
                     logger.warning(
                         "LLM rate-limit fallback provider=%s model=%s request_id=%s retry_after_seconds=%s threshold_seconds=%s",
                         provider.name, provider.model, request_id, error.retry_after,
@@ -212,7 +288,7 @@ class LLMClient:
                     error.status_code,
                 )
                 await asyncio.sleep(delay)
-        raise AllLLMProvidersFailed(attempted)
+        raise AllLLMProvidersFailed(attempted, failures)
 
 
 def build_llm_client(task: str = "generation") -> LLMClient:
@@ -221,6 +297,16 @@ def build_llm_client(task: str = "generation") -> LLMClient:
         "cerebras": getattr(settings, f"cerebras_{task}_model") or settings.cerebras_model,
         "groq": getattr(settings, f"groq_{task}_model") or settings.groq_model,
         "gemini": getattr(settings, f"gemini_{task}_model") or settings.gemini_model,
+        "gemini_primary": (
+            settings.gemini_primary_model
+            or getattr(settings, f"gemini_{task}_model")
+            or settings.gemini_model
+        ),
+        "gemini_fallback": (
+            settings.gemini_fallback_model
+            or getattr(settings, f"gemini_{task}_model")
+            or settings.gemini_model
+        ),
         "openai": getattr(settings, f"openai_{task}_model") or settings.openai_model,
     }
     max_output_tokens = getattr(settings, f"llm_{task}_max_output_tokens")
@@ -231,10 +317,30 @@ def build_llm_client(task: str = "generation") -> LLMClient:
         "groq": GroqProvider(
             settings.groq_api_key,
             model_by_provider["groq"],
-            max_output_tokens=min(settings.groq_max_output_tokens, max_output_tokens),
+            # Groq on-demand TPM counts requested completion capacity. 1200
+            # stays below the observed 6000 TPM ceiling while avoiding truncation.
+            max_output_tokens=min(
+                settings.groq_max_output_tokens,
+                max_output_tokens,
+                1200 if task == "generation" else max_output_tokens,
+            ),
             structured_output=getattr(settings, f"groq_{task}_structured_output"),
         ),
         "gemini": GeminiProvider(settings.gemini_api_key, model_by_provider["gemini"]),
+        "gemini_primary": GeminiProvider(
+            settings.gemini_primary_api_key,
+            model_by_provider["gemini_primary"],
+            provider_name="gemini_primary",
+            thinking_level=settings.gemini_thinking_level,
+            min_output_tokens=settings.gemini_min_output_tokens,
+        ),
+        "gemini_fallback": GeminiProvider(
+            settings.gemini_fallback_api_key,
+            model_by_provider["gemini_fallback"],
+            provider_name="gemini_fallback",
+            thinking_level=settings.gemini_thinking_level,
+            min_output_tokens=settings.gemini_min_output_tokens,
+        ),
         "openai": OpenAIProvider(settings.openai_api_key, model_by_provider["openai"]),
     }
     order = [settings.llm_primary_provider.lower(), *settings.llm_fallback_providers]
@@ -260,4 +366,7 @@ def build_llm_client(task: str = "generation") -> LLMClient:
         cerebras_provider_retry_count=settings.cerebras_provider_retry_count,
         cerebras_initial_backoff_seconds=settings.cerebras_initial_backoff_seconds,
         cerebras_max_backoff_seconds=settings.cerebras_max_backoff_seconds,
+        provider_cooldown_seconds={
+            "cerebras": settings.cerebras_quota_cooldown_seconds,
+        },
     )

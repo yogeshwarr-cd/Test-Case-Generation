@@ -6,13 +6,22 @@ from pydantic import BaseModel
 
 from app.core.exceptions import AllLLMProvidersFailed
 from app.llm.client import LLMClient
+from app.llm.parser import parse_json
 from app.llm.providers import (
     CerebrasProvider,
+    GeminiProvider,
     LLMProvider,
     ProviderError,
     ProviderResponse,
     _classify_error,
+    _gemini_schema,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_llm_client_global_state(monkeypatch):
+    monkeypatch.setattr("app.llm.client._provider_unavailable_until", {})
+    monkeypatch.setattr("app.llm.client._provider_last_request", {})
 
 
 class Output(BaseModel):
@@ -43,6 +52,83 @@ async def test_groq_success_stops_fallback_chain():
     groq, gemini = StubProvider("groq", ['{"value":"groq"}']), StubProvider("gemini", ['{"value":"gemini"}'])
     result = await generate(LLMClient([groq, gemini]))
     assert result.value == "groq" and gemini.calls == 0
+
+
+def test_gemini_provider_supports_distinct_provider_names():
+    primary = GeminiProvider(
+        "key-one",
+        "gemini-3.5-flash",
+        provider_name="gemini_primary",
+        thinking_level="low",
+        min_output_tokens=4096,
+    )
+    fallback = GeminiProvider(
+        "key-two",
+        "gemini-3.5-flash",
+        provider_name="gemini_fallback",
+        thinking_level="low",
+        min_output_tokens=4096,
+    )
+    assert primary.name == "gemini_primary"
+    assert fallback.name == "gemini_fallback"
+    assert primary.thinking_level == "low"
+    assert primary.min_output_tokens == 4096
+
+
+@pytest.mark.asyncio
+async def test_gemini_uses_parsed_schema_and_reserves_output_tokens():
+    captured = {}
+
+    class Models:
+        async def generate_content(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                parsed={"value": "structured"},
+                text="not used",
+                usage_metadata=None,
+            )
+
+    client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
+    provider = GeminiProvider(
+        "key",
+        "gemini-3.5-flash",
+        client=client,
+        provider_name="gemini_primary",
+        thinking_level="low",
+        min_output_tokens=4096,
+    )
+    response = await provider.generate(
+        system_prompt="system",
+        user_prompt="user",
+        response_model=Output,
+        timeout=30,
+        temperature=0.2,
+        max_output_tokens=1200,
+    )
+    assert response.content == '{"value":"structured"}'
+    assert captured["config"].response_schema is None
+    assert captured["config"].response_json_schema == _gemini_schema(Output)
+    assert captured["config"].max_output_tokens == 4096
+    assert captured["config"].thinking_config.thinking_level.value == "LOW"
+
+
+def test_gemini_schema_removes_unsupported_additional_properties():
+    from app.schemas.scenario_schema import ScenarioBatch
+    from app.schemas.testcase_schema import TestCaseBatch
+    from app.schemas.validation_schema import ValidationResult
+
+    def contains_key(value, target):
+        if isinstance(value, dict):
+            return target in value or any(
+                contains_key(item, target) for item in value.values()
+            )
+        if isinstance(value, list):
+            return any(contains_key(item, target) for item in value)
+        return False
+
+    for model in (ScenarioBatch, TestCaseBatch, ValidationResult):
+        schema = _gemini_schema(model)
+        assert not contains_key(schema, "additionalProperties")
 
 
 @pytest.mark.asyncio
@@ -86,6 +172,28 @@ async def test_rate_limit_is_retried_once(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_temporary_provider_error_is_retried_once(monkeypatch):
+    delays = []
+
+    async def record_sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr("app.llm.client.asyncio.sleep", record_sleep)
+    gemini = StubProvider(
+        "gemini_primary",
+        [ProviderError("temporary_provider_error", status_code=503), '{"value":"ok"}'],
+    )
+    client = LLMClient(
+        [gemini],
+        provider_retry_count=1,
+        rate_limit_backoff_seconds=1,
+        rate_limit_jitter_seconds=0,
+    )
+    assert (await generate(client)).value == "ok"
+    assert delays == [1]
+
+
+@pytest.mark.asyncio
 async def test_long_retry_after_falls_back_without_sleep(monkeypatch):
     delays = []
 
@@ -105,6 +213,31 @@ async def test_long_retry_after_falls_back_without_sleep(monkeypatch):
     assert (await generate(client)).value == "gemini"
     assert delays == []
     assert groq.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_only_available_provider_waits_even_above_fallback_threshold(monkeypatch):
+    delays = []
+
+    async def record_sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr("app.llm.client.asyncio.sleep", record_sleep)
+    groq = StubProvider(
+        "groq",
+        [
+            ProviderError("rate_limited", status_code=429, retry_after=4),
+            '{"value":"groq"}',
+        ],
+    )
+    client = LLMClient(
+        [groq],
+        provider_retry_count=1,
+        rate_limit_fallback_threshold_seconds=3,
+        rate_limit_jitter_seconds=0,
+    )
+    assert (await generate(client)).value == "groq"
+    assert delays == [4]
 
 
 @pytest.mark.asyncio
@@ -145,6 +278,39 @@ async def test_cerebras_request_quota_immediately_falls_back(monkeypatch):
     assert (await generate(client)).value == "openai"
     assert cerebras.calls == 1
     assert delays == []
+
+
+@pytest.mark.asyncio
+async def test_quota_failed_provider_is_skipped_on_next_generation():
+    cerebras = StubProvider("cerebras", [ProviderError("quota_exceeded")])
+    groq = StubProvider("groq", ['{"value":"first"}', '{"value":"second"}'])
+    client = LLMClient([cerebras, groq])
+    assert (await generate(client)).value == "first"
+    assert (await generate(client)).value == "second"
+    assert cerebras.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_quota_cooldown_is_shared_across_clients(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("app.llm.client.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("app.llm.client._provider_unavailable_until", {})
+    first_cerebras = StubProvider("cerebras", [ProviderError("quota_exceeded")])
+    first_groq = StubProvider("groq", ['{"value":"first"}'])
+    first = LLMClient(
+        [first_cerebras, first_groq],
+        provider_cooldown_seconds={"cerebras": 60},
+    )
+    assert (await generate(first)).value == "first"
+
+    second_cerebras = StubProvider("cerebras", ['{"value":"unused"}'])
+    second_groq = StubProvider("groq", ['{"value":"second"}'])
+    second = LLMClient(
+        [second_cerebras, second_groq],
+        provider_cooldown_seconds={"cerebras": 60},
+    )
+    assert (await generate(second)).value == "second"
+    assert second_cerebras.calls == 0
 
 
 @pytest.mark.asyncio
@@ -233,7 +399,28 @@ async def test_all_providers_fail_without_static_output():
     with pytest.raises(AllLLMProvidersFailed) as caught:
         await generate(LLMClient(providers))
     assert caught.value.error_code == "ALL_LLM_PROVIDERS_FAILED"
-    assert caught.value.details == {"providers_attempted": ["groq", "gemini", "openai"]}
+    assert caught.value.details["providers_attempted"] == ["groq", "gemini", "openai"]
+    assert set(caught.value.details["failures"]) == {"groq", "gemini", "openai"}
+
+
+def test_capacity_failure_has_user_friendly_retry_message():
+    error = AllLLMProvidersFailed(
+        ["gemini_primary", "gemini_fallback"],
+        {
+            "gemini_primary": {
+                "category": "rate_limited",
+                "status_code": 429,
+                "retry_after": 59.6,
+            },
+            "gemini_fallback": {
+                "category": "temporary_provider_error",
+                "status_code": 503,
+                "retry_after": None,
+            },
+        },
+    )
+    assert "temporarily unavailable" in error.message
+    assert "60 seconds" in error.message
 
 
 @pytest.mark.asyncio
@@ -248,6 +435,18 @@ async def test_api_keys_are_not_written_to_logs(caplog):
 def test_pydantic_schema_still_rejects_malformed_output():
     with pytest.raises(Exception):
         Output.model_validate({})
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ('Here is the result: {"value":"ok"}', {"value": "ok"}),
+        ('```json\n{"value":"ok"}\n```\nDone.', {"value": "ok"}),
+        ('Reasoning {"value":"brace } inside string"} trailing', {"value": "brace } inside string"}),
+    ],
+)
+def test_parser_extracts_balanced_json_from_wrapped_output(content, expected):
+    assert parse_json(content) == expected
 
 
 @pytest.mark.parametrize(
@@ -285,6 +484,23 @@ def test_groq_message_retry_delay_is_used_when_header_is_missing():
         RateLimitError("Rate limit reached. Please try again in 48.7275s.")
     )
     assert classified.retry_after == 48.7275
+
+
+def test_gemini_retry_message_is_classified_as_recoverable_rate_limit():
+    error = type("ResourceExhausted", (Exception,), {"status_code": 429})(
+        "Quota exceeded. Please retry in 5.824261529s."
+    )
+    classified = _classify_error(error)
+    assert classified.category == "rate_limited"
+    assert classified.retry_after == 5.824261529
+
+
+def test_groq_tpm_413_is_classified_as_rate_limit():
+    error = type("RequestTooLargeError", (Exception,), {"status_code": 413})(
+        "Request too large on tokens per minute (TPM): rate_limit_exceeded"
+    )
+    classified = _classify_error(error)
+    assert classified.category == "rate_limited"
 
 
 @pytest.mark.parametrize(

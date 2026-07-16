@@ -14,8 +14,26 @@ class DuplicateEntity(AppError): status_code=409;error_code="DUPLICATE_ENTITY"
 class InvalidApprovalAction(AppError): status_code=409;error_code="INVALID_APPROVAL_ACTION"
 class AllLLMProvidersFailed(AppError):
     status_code=503;error_code="ALL_LLM_PROVIDERS_FAILED"
-    def __init__(self,providers_attempted:list[str]):
+    def __init__(self,providers_attempted:list[str],failures:dict|None=None):
+        failures=failures or {}
+        retry_delays=[
+            details.get("retry_after")
+            for details in failures.values()
+            if details.get("retry_after") is not None
+        ]
+        retry_after=max(retry_delays) if retry_delays else None
+        temporary_categories={"rate_limited","quota_exceeded","temporary_provider_error","queue_exceeded"}
+        temporary=bool(failures) and all(
+            details.get("category") in temporary_categories
+            for details in failures.values()
+        )
+        message=(
+            "AI generation is temporarily unavailable because the configured Gemini project has exhausted quota or model capacity."
+            + (f" Retry after approximately {round(retry_after)} seconds." if retry_after else " Please wait and try again.")
+            if temporary
+            else "Unable to generate output because all configured LLM providers failed."
+        )
         super().__init__(
-            "Unable to generate output because all configured LLM providers failed.",
-            {"providers_attempted":providers_attempted},
+            message,
+            {"providers_attempted":providers_attempted,"failures":failures,"retry_after":retry_after},
         )
