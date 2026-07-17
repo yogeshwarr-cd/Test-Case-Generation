@@ -2,7 +2,7 @@ import asyncio,json,uuid
 from fastapi import APIRouter,status
 from fastapi.responses import StreamingResponse
 from app.schemas.input_schema import WorkflowStartRequest
-from app.schemas.workflow_schema import WorkflowStartResponse,ResumeRequest
+from app.schemas.workflow_schema import WorkflowStartResponse,ResumeRequest,WorkflowEntityDecisionRequest,WorkflowBulkDecisionRequest,WorkflowRegenerationRequest,WorkflowReviewApprovalRequest
 from app.services.workflow_service import workflow_service
 router=APIRouter(prefix="/workflows",tags=["AI workflows"])
 @router.post("/start",response_model=WorkflowStartResponse,status_code=status.HTTP_202_ACCEPTED,summary="Start test generation workflow")
@@ -39,3 +39,11 @@ async def events(workflow_id:uuid.UUID):
 async def resume(workflow_id:uuid.UUID,request:ResumeRequest): return await workflow_service.resume(workflow_id,request)
 @router.post("/{workflow_id}/cancel",summary="Cancel workflow")
 async def cancel(workflow_id:uuid.UUID): return await workflow_service.cancel(workflow_id)
+@router.post("/{workflow_id}/decision")
+async def decide(workflow_id:uuid.UUID,request:WorkflowEntityDecisionRequest): return workflow_service.decide(workflow_id,request)
+@router.post("/{workflow_id}/decision/all")
+async def decide_all(workflow_id:uuid.UUID,request:WorkflowBulkDecisionRequest): return workflow_service.decide_all(workflow_id,request)
+@router.post("/{workflow_id}/regenerate")
+async def regenerate(workflow_id:uuid.UUID,request:WorkflowRegenerationRequest): return await workflow_service.regenerate_entity(workflow_id,request)
+@router.post("/{workflow_id}/review/approve")
+async def approve_review(workflow_id:uuid.UUID,request:WorkflowReviewApprovalRequest): return await workflow_service.approve_review(workflow_id,request)

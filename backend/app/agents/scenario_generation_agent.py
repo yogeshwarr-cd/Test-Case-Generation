@@ -76,7 +76,7 @@ class ScenarioGenerationAgent(BaseAgent[ScenarioBatch]):
                     scenario.acceptance_criteria_ids or acceptance_criteria_ids
                 )
                 scenario.source_references = (
-                    scenario.source_references or story_ids
+                    list(dict.fromkeys((scenario.source_references or story_ids) + [str(x) for x in context_dict.get("image_ids", [])]))
                 )
             generated.extend(result.scenarios)
         return ScenarioBatch(scenarios=generated)

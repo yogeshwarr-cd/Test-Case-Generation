@@ -9,5 +9,7 @@ Rules:
 7. Omit test_case_id so the server assigns a UUID. Copy scenario_id and project_id exactly.
 8. Number steps consecutively beginning at 1.
 9. Return JSON only, with no markdown or explanation, matching {"test_cases": [...]}.
+10. Use compact visual context only for visible UI interactions and accessibility checks; textual requirements remain authoritative.
+11. Do not infer authorization, API, database, performance, or security behavior from screenshots alone.
 Scenarios: {{ scenarios }}
 Source context: {{ context }}

@@ -1,0 +1,77 @@
+▲ Next.js 16.2.10 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.2.22:3000
+- Environments: .env.local
+✓ Ready in 1789ms
+Creating turbopack project {
+  dir: 'E:\\Cloud Destinations\\Test Case Generation\\frontend',
+  testMode: true
+}
+
+ GET /test-case-generation/results 200 in 102ms (next.js: 16ms, application-code: 86ms)
+ GET /test-case-generation/results 200 in 3.3s (next.js: 2.2s, application-code: 1060ms)
+ GET / 200 in 3.4s (next.js: 3.0s, application-code: 392ms)
+ GET /test-case-generation 200 in 2.8s (next.js: 2.3s, application-code: 523ms)
+✓ Compiled in 523ms
+ GET / 200 in 674ms (next.js: 107ms, application-code: 567ms)
+ GET /test-case-generation 200 in 498ms (next.js: 422ms, application-code: 76ms)
+ GET /test-case-generation/results 200 in 506ms (next.js: 193ms, application-code: 312ms)
+✓ Compiled in 214ms
+ GET / 200 in 490ms (next.js: 97ms, application-code: 393ms)
+ GET /test-case-generation 200 in 345ms (next.js: 142ms, application-code: 203ms)
+ GET /test-case-generation/results 200 in 348ms (next.js: 297ms, application-code: 51ms)
+✓ Compiled in 211ms
+ GET / 200 in 464ms (next.js: 99ms, application-code: 365ms)
+ GET /test-case-generation 200 in 316ms (next.js: 121ms, application-code: 195ms)
+ GET /test-case-generation/results 200 in 318ms (next.js: 254ms, application-code: 64ms)
+✓ Compiled in 640ms
+ GET / 200 in 583ms (next.js: 148ms, application-code: 434ms)
+ GET /test-case-generation 200 in 577ms (next.js: 322ms, application-code: 255ms)
+ GET /test-case-generation/results 200 in 583ms (next.js: 526ms, application-code: 57ms)
+ GET / 200 in 281ms (next.js: 34ms, application-code: 247ms)
+ GET /test-case-generation 200 in 196ms (next.js: 45ms, application-code: 150ms)
+ GET /test-case-generation/results 200 in 197ms (next.js: 118ms, application-code: 79ms)
+ GET / 200 in 218ms (next.js: 22ms, application-code: 196ms)
+ GET /test-case-generation 200 in 132ms (next.js: 15ms, application-code: 117ms)
+ GET /test-case-generation/results 200 in 134ms (next.js: 80ms, application-code: 53ms)
+ GET / 200 in 198ms (next.js: 16ms, application-code: 182ms)
+ GET /test-case-generation 200 in 145ms (next.js: 13ms, application-code: 131ms)
+ GET /test-case-generation/results 200 in 146ms (next.js: 78ms, application-code: 68ms)
+ GET / 200 in 186ms (next.js: 11ms, application-code: 175ms)
+ GET /test-case-generation 200 in 142ms (next.js: 14ms, application-code: 128ms)
+ GET /test-case-generation/results 200 in 143ms (next.js: 72ms, application-code: 71ms)
+ GET / 200 in 171ms (next.js: 12ms, application-code: 159ms)
+ GET /test-case-generation 200 in 116ms (next.js: 13ms, application-code: 103ms)
+ GET /test-case-generation/results 200 in 117ms (next.js: 66ms, application-code: 51ms)
+✓ Compiled in 477ms
+ GET / 200 in 1062ms (next.js: 994ms, application-code: 68ms)
+ GET /test-case-generation 200 in 1087ms (next.js: 622ms, application-code: 465ms)
+ GET /test-case-generation/results 200 in 1071ms (next.js: 891ms, application-code: 180ms)
+✓ Compiled in 376ms
+ GET / 200 in 723ms (next.js: 138ms, application-code: 585ms)
+ GET /test-case-generation 200 in 459ms (next.js: 165ms, application-code: 294ms)
+ GET /test-case-generation/results 200 in 459ms (next.js: 362ms, application-code: 97ms)
+✓ Compiled in 276ms
+ GET / 200 in 513ms (next.js: 90ms, application-code: 423ms)
+ GET /test-case-generation 200 in 536ms (next.js: 278ms, application-code: 257ms)
+ GET /test-case-generation/results 200 in 407ms (next.js: 325ms, application-code: 82ms)
+✓ Compiled in 313ms
+ GET / 200 in 613ms (next.js: 173ms, application-code: 440ms)
+ GET /test-case-generation 200 in 613ms (next.js: 523ms, application-code: 90ms)
+ GET /test-case-generation/results 200 in 621ms (next.js: 342ms, application-code: 279ms)
+✓ Compiled in 251ms
+ GET /test-case-generation 200 in 480ms (next.js: 140ms, application-code: 340ms)
+ GET / 200 in 254ms (next.js: 34ms, application-code: 220ms)
+ GET /test-case-generation/results 200 in 167ms (next.js: 107ms, application-code: 60ms)
+✓ Compiled in 326ms
+ GET /test-case-generation 200 in 456ms (next.js: 136ms, application-code: 320ms)
+ GET / 200 in 261ms (next.js: 208ms, application-code: 53ms)
+ GET /test-case-generation/results 200 in 285ms (next.js: 155ms, application-code: 131ms)
+✓ Compiled in 498ms
+ GET /test-case-generation 200 in 870ms (next.js: 229ms, application-code: 641ms)
+ GET / 200 in 522ms (next.js: 57ms, application-code: 466ms)
+ GET /test-case-generation/results 200 in 533ms (next.js: 367ms, application-code: 165ms)
+ GET /test-case-generation 200 in 674ms (next.js: 27ms, application-code: 647ms)
+ GET /test-case-generation/progress 200 in 489ms (next.js: 362ms, application-code: 128ms)
+ GET /test-case-generation/review 200 in 268ms (next.js: 172ms, application-code: 96ms)
+ GET /test-case-generation/results 200 in 85ms (next.js: 17ms, application-code: 67ms)

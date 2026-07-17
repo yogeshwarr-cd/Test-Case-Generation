@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { LoaderCircle, RotateCcw } from 'lucide-react';
+import { Check, LoaderCircle, RotateCcw } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
@@ -28,7 +28,7 @@ export function ReviewPage() {
     }).catch((requestError) => setError(friendlyError(requestError))).finally(() => setLoading(false));
   }, [data, setResult, workflowId]);
 
-  const stage = snapshot?.status === 'testcase_manual_review' ? 'testcase_manual_review' : 'scenario_manual_review';
+  const stage = snapshot?.status === 'testcase_manual_review' || data?.current_stage === 'testcase_manual_review' ? 'testcase_manual_review' : 'scenario_manual_review';
   const validation = stage === 'scenario_manual_review' ? data?.scenario_validation : data?.testcase_validation;
   const generated = stage === 'scenario_manual_review' ? data?.scenarios : data?.test_cases;
   const reviewLabel = stage === 'scenario_manual_review' ? 'Scenario review' : 'Test-case review';
@@ -61,6 +61,18 @@ export function ReviewPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+  const approve = async () => {
+    if (!workflowId || submitting) return;
+    setSubmitting(true);setError('');
+    try {
+      const response = await testCaseApi.approveManualReview(workflowId, stage);
+      setSnapshot(response);
+      if (response.status === 'completed') {
+        const completed = await testCaseApi.getWorkflowResult(workflowId);setResult(completed);router.push('/test-case-generation/results');
+      } else router.push('/test-case-generation/progress');
+    } catch (requestError) { setError(friendlyError(requestError)); }
+    finally { setSubmitting(false); }
   };
 
   if (!workflowId) return <StatePanel type="error" title="No active workflow" message="The manual-review page needs an active workflow ID." />;
@@ -96,6 +108,18 @@ export function ReviewPage() {
             <summary className="cursor-pointer p-4 text-sm font-semibold">Original generated data</summary>
             <pre className="max-h-[520px] overflow-auto border-t border-border p-4 text-xs">{JSON.stringify(generated ?? [], null, 2)}</pre>
           </details>
+          <div>
+            <h2 className="font-semibold">Generated {stage === 'scenario_manual_review' ? 'scenarios' : 'test cases'}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">All generated outputs remain visible for review, including items with low confidence.</p>
+            <div className="mt-3 space-y-3">
+              {generated?.map((item) => {
+                const isTestCase = 'test_case_id' in item;
+                const id = isTestCase ? item.test_case_id : item.scenario_id;
+                const score = confidencePercent(validation?.entity_scores?.[id] ?? validation?.confidence_score);
+                return <article key={id} className="rounded-xl border border-border bg-background p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold text-primary">{id}</p><h3 className="mt-1 font-semibold">{item.title}</h3></div><span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">Confidence {score}%</span></div><p className="mt-2 text-sm text-muted-foreground">{item.description}</p>{isTestCase && item.steps?.length ? <ol className="mt-3 space-y-2">{item.steps.map((step) => <li key={step.step_number} className="rounded-lg bg-muted p-3 text-sm"><span className="font-semibold">{step.step_number}. {step.action}</span><p className="mt-1 text-muted-foreground">Expected: {step.expected_result}</p></li>)}</ol> : null}</article>;
+              })}
+            </div>
+          </div>
         </section>
         <section className="space-y-5 rounded-2xl border border-border bg-card p-5 sm:p-6">
           <label className="block space-y-2">
@@ -111,6 +135,9 @@ export function ReviewPage() {
             <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-muted p-3 text-xs">{preview}</pre>
           </div>
           <div className="flex flex-wrap gap-3">
+            <button onClick={approve} disabled={submitting || !generated?.length} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-60">
+              {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Approve generated {stage === 'scenario_manual_review' ? 'scenarios' : 'test cases'}
+            </button>
             <button onClick={resume} disabled={submitting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-60">
               {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Resume workflow
             </button>

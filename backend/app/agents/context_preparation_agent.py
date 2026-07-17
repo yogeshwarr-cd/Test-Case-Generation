@@ -4,6 +4,8 @@ from app.schemas.context_schema import StructuredContext,TraceabilityEntry
 from app.schemas.input_schema import ManualInputPayload
 from app.schemas.common import SourceType
 from app.utils.validators import deduplicate,item_id,item_text
+from app.image_processing.image_pipeline import ImagePipeline
+from app.image_processing.context_fusion import fuse
 
 PREFIXES = {
     "functional_requirements": "REQ",
@@ -39,6 +41,11 @@ class ContextPreparationAgent(BaseAgent[StructuredContext]):
         if not payload["user_stories"]: raise ValueError("At least one user story is required")
         for key, prefix in PREFIXES.items():
             payload[key] = _structured_items(payload[key], prefix)
+        visual_context=[]
+        for image_id in payload.get("image_ids",[]):
+            record=ImagePipeline.get(image_id)
+            if record: visual_context.append(record["compact_context"])
+        payload["visual_context"]=[fuse(payload,visual_context)] if visual_context else []
         target_ids = [
             str(item["id"])
             for key in (

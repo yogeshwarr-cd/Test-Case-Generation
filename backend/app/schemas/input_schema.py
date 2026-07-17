@@ -11,6 +11,7 @@ class ManualInputPayload(BaseModel):
     epics:list[Any]=Field(default_factory=list); features:list[Any]=Field(default_factory=list)
     user_stories:list[Any]=Field(default_factory=list); acceptance_criteria:list[Any]=Field(default_factory=list)
     business_rules:list[Any]=Field(default_factory=list); dependencies:list[Any]=Field(default_factory=list); constraints:list[Any]=Field(default_factory=list)
+    image_ids:list[str]=Field(default_factory=list)
 
 class WorkflowStartRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")

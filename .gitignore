@@ -1,4 +1,16 @@
 # Environment files
+.venv/
+**/__pycache__/
 .env
 *.env
 backend/.env
+storage/images/
+backend/storage/images/
+ml/models/*.pt
+ml/models/*.onnx
+ml/runs/
+ml/datasets/ui_elements/images/**/*.png
+ml/datasets/ui_elements/images/**/*.jpg
+ml/datasets/ui_elements/images/**/*.jpeg
+ml/datasets/ui_elements/images/**/*.webp
+ml/datasets/ui_elements/labels/**/*.txt

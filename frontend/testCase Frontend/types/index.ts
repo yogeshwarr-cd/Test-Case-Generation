@@ -29,6 +29,7 @@ export interface ManualInputPayload {
   business_rules: string[];
   dependencies: string[];
   constraints: string[];
+  image_ids: string[];
   tech_stack: TechStack;
 }
 
@@ -55,6 +56,7 @@ export interface ValidationIssue {
 export interface ValidationResult {
   confidence_score?: number;
   score_breakdown?: Record<string, number>;
+  entity_scores?: Record<string, number>;
   status?: string;
   issues?: ValidationIssue[];
   failed_entity_ids?: string[];
@@ -76,6 +78,7 @@ export interface Scenario {
   acceptance_criteria_ids?: string[];
   confidence_score?: number;
   validation_status?: string;
+  source_references?: string[];
 }
 
 export interface TestStep {
@@ -100,6 +103,7 @@ export interface TestCase {
   automation_candidate?: boolean;
   confidence_score?: number;
   validation_status?: string;
+  source_references?: string[];
 }
 
 export interface StructuredContext {
@@ -126,6 +130,7 @@ export interface WorkflowEvent {
 export interface WorkflowResult {
   workflow_id: string;
   status: WorkflowStatus;
+  current_stage?: string;
   structured_context?: StructuredContext | null;
   scenarios: Scenario[];
   scenario_validation?: ValidationResult | null;

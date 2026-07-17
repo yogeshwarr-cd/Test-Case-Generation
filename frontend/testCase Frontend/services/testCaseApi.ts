@@ -35,6 +35,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const testCaseApi = {
+  async uploadImage(image: File, imageDescription: string) {
+    if (process.env.NEXT_PUBLIC_TESTCASE_USE_MOCK_DATA === 'true') {
+      return { image_id: `mock-image-${image.name}`, status: 'analyzed', screen_type: imageDescription.toLowerCase().includes('login') ? 'login' : 'unknown', analysis_confidence: 0.82, warnings: ['Mock-mode image analysis preview'], cached: false };
+    }
+    const form = new FormData();form.append('image', image);if (imageDescription.trim()) form.append('image_description', imageDescription.trim());
+    const response = await fetch(`${BASE_URL}/api/v1/images/upload`, { method: 'POST', body: form });
+    if (!response.ok) { const body = await response.json().catch(() => ({}));throw new Error(String(body.detail ?? `Image upload failed (${response.status})`)); }
+    return response.json() as Promise<{ image_id: string; status: string; screen_type: string; analysis_confidence: number; warnings: string[]; cached: boolean }>;
+  },
   startWorkflow(payload: WorkflowStartRequest) {
     return request<WorkflowStartResponse>('/api/v1/workflows/start', {
       method: 'POST',
@@ -59,6 +68,44 @@ export const testCaseApi = {
 
   cancelWorkflow(workflowId: string) {
     return request<WorkflowEvent>(`/api/v1/workflows/${workflowId}/cancel`, { method: 'POST' });
+  },
+
+  regenerateScenario(scenarioId: string, feedback: string) {
+    return request<{ status: string; feedback_id: string }>(`/api/v1/scenarios/${scenarioId}/regenerate`, {
+      method: 'POST',
+      body: JSON.stringify({ feedback }),
+    });
+  },
+
+  regenerateTestCase(testCaseId: string, feedback: string) {
+    return request<{ status: string; feedback_id: string }>(`/api/v1/testcases/${testCaseId}/regenerate`, {
+      method: 'POST',
+      body: JSON.stringify({ feedback }),
+    });
+  },
+
+  regenerateWorkflowItem(workflowId: string, entityType: 'scenario' | 'testCase', entityId: string, feedback: string) {
+    return request<{ status: string; result: Pick<WorkflowResult, 'scenarios' | 'scenario_validation' | 'test_cases' | 'testcase_validation'> }>(`/api/v1/workflows/${workflowId}/regenerate`, {
+      method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId, feedback }),
+    });
+  },
+
+  saveDecision(workflowId: string, entityType: 'scenario' | 'testCase', entityId: string, decision: 'approved' | 'rejected') {
+    return request<{ status: string }>(`/api/v1/workflows/${workflowId}/decision`, {
+      method: 'POST', body: JSON.stringify({ entity_type: entityType, entity_id: entityId, decision }),
+    });
+  },
+
+  saveAllDecisions(workflowId: string, entityType: 'scenario' | 'testCase') {
+    return request<{ status: string; count: number }>(`/api/v1/workflows/${workflowId}/decision/all`, {
+      method: 'POST', body: JSON.stringify({ entity_type: entityType, decision: 'approved' }),
+    });
+  },
+
+  approveManualReview(workflowId: string, stage: 'scenario_manual_review' | 'testcase_manual_review') {
+    return request<WorkflowEvent>(`/api/v1/workflows/${workflowId}/review/approve`, {
+      method: 'POST', body: JSON.stringify({ stage }),
+    });
   },
 
   connectToWorkflowEvents(

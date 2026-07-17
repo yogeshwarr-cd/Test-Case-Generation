@@ -7,6 +7,10 @@ asyncpg==0.30.0
 alembic==1.15.2
 httpx==0.28.1
 python-multipart==0.0.20
+Pillow>=10.4,<12
+numpy>=1.26,<3
+opencv-python-headless>=4.10,<5
+onnxruntime>=1.20,<2
 pytest==8.3.5
 pytest-asyncio==0.26.0
 ruff==0.11.10

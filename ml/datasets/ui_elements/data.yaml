@@ -1,0 +1,29 @@
+path: ml/datasets/ui_elements
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: text_input
+  1: password_input
+  2: textarea
+  3: button
+  4: link
+  5: checkbox
+  6: radio_button
+  7: dropdown
+  8: toggle
+  9: search_box
+  10: date_picker
+  11: file_upload
+  12: table
+  13: pagination
+  14: navigation_menu
+  15: tab
+  16: card
+  17: modal
+  18: alert
+  19: error_message
+  20: image
+  21: icon
+  22: heading
+  23: label

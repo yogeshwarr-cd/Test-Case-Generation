@@ -85,6 +85,27 @@ class Settings(BaseSettings):
     llm_provider_retry_count: int = 3
     llm_rate_limit_backoff_seconds: float = 2.0
     llm_rate_limit_jitter_seconds: float = 0.25
+    image_upload_enabled: bool = True
+    image_max_size_mb: int = 10
+    image_max_width: int = 4096
+    image_max_height: int = 4096
+    image_allowed_types: str = "image/png,image/jpeg,image/webp"
+    image_storage_backend: str = "local"
+    image_storage_path: str = "./storage/images"
+    ocr_provider: str = "paddleocr"
+    ocr_language: str = "en"
+    ocr_min_confidence: float = 0.60
+    ui_detector_provider: str = "yolo"
+    yolo_model_path: str = "./ml/models/ui_detector.onnx"
+    yolo_min_confidence: float = 0.50
+    yolo_iou_threshold: float = 0.45
+    yolo_device: str = "cpu"
+    enable_heuristic_ui_detection: bool = True
+    enable_vision_llm_fallback: bool = False
+    vision_llm_min_local_confidence: float = 0.60
+    vision_llm_max_calls_per_image: int = 1
+    image_analysis_cache_enabled: bool = True
+    image_analysis_cache_ttl_seconds: int = 604800
     llm_rate_limit_fallback_threshold_seconds: float = 10.0
 
     @field_validator("database_url", "backend_1_database_url", mode="before")

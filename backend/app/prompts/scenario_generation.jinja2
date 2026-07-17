@@ -10,4 +10,6 @@ Rules:
 8. Do not calculate confidence scores or add unsupported fields.
 9. Omit scenario_id so the server assigns a UUID. Copy project_id exactly from the context.
 10. Return JSON only, with no markdown or explanation, matching {"scenarios": [...]}.
+11. Treat textual requirements as the source of truth. Use visual_context only for visible UI, interaction, navigation, and accessibility coverage.
+12. Do not infer backend behavior or business rules from images. Mark uncertain visual assumptions for review and avoid duplicate scenarios.
 Context: {{ context }}

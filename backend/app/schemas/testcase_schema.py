@@ -7,7 +7,7 @@ class TestStep(BaseModel): step_number:int=Field(ge=1); action:str=Field(min_len
 class TestCase(BaseModel):
     model_config=ConfigDict(extra="ignore")
     test_case_id:uuid.UUID=Field(default_factory=uuid.uuid4); scenario_id:uuid.UUID; project_id:uuid.UUID; title:str=Field(min_length=1); description:str=Field(min_length=1); test_case_type:str; priority:Priority=Priority.medium
-    preconditions:list[str]=Field(default_factory=list); test_data:dict[str,Any]=Field(default_factory=dict); steps:list[TestStep]=Field(min_length=1); postconditions:list[str]=Field(default_factory=list); requirement_ids:list[str]=Field(default_factory=list); acceptance_criteria_ids:list[str]=Field(default_factory=list); automation_candidate:bool=False; generation_metadata:dict[str,Any]=Field(default_factory=dict)
+    preconditions:list[str]=Field(default_factory=list); test_data:dict[str,Any]=Field(default_factory=dict); steps:list[TestStep]=Field(min_length=1); postconditions:list[str]=Field(default_factory=list); requirement_ids:list[str]=Field(default_factory=list); acceptance_criteria_ids:list[str]=Field(default_factory=list); source_references:list[str]=Field(default_factory=list); automation_candidate:bool=False; generation_metadata:dict[str,Any]=Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod

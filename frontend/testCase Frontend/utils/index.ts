@@ -12,6 +12,7 @@ export function cleanPayload(payload: ManualInputPayload): ManualInputPayload {
     business_rules: cleanList(payload.business_rules),
     dependencies: cleanList(payload.dependencies),
     constraints: cleanList(payload.constraints),
+    image_ids: payload.image_ids,
     tech_stack: Object.fromEntries(
       Object.entries(payload.tech_stack).map(([key, value]) => [key, value.trim()])
     ) as ManualInputPayload['tech_stack'],

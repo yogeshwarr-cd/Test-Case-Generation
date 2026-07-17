@@ -51,5 +51,7 @@ class TestCaseGenerationAgent(BaseAgent[TestCaseBatch]):
                 response_model=TestCaseBatch,
                 request_id=execution_context.request_id,
             )
+            for test_case in result.test_cases:
+                test_case.source_references=list(dict.fromkeys(test_case.source_references+[str(x) for x in context_dict.get("image_ids",[])]))
             generated.extend(result.test_cases)
         return TestCaseBatch(test_cases=generated)

@@ -24,6 +24,7 @@ export const EMPTY_PAYLOAD: ManualInputPayload = {
   business_rules: [''],
   dependencies: [''],
   constraints: [''],
+  image_ids: [],
   tech_stack: { frontend: '', backend: '', database: '', testing: '', other: '' },
 };
 
@@ -37,4 +38,5 @@ export const FIELD_LABELS: Record<Exclude<keyof ManualInputPayload, 'tech_stack'
   business_rules: 'Business rules',
   dependencies: 'Dependencies',
   constraints: 'Constraints',
+  image_ids: 'Reference images',
 };

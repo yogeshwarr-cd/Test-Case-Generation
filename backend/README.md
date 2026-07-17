@@ -19,6 +19,34 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 
 Swagger is at `http://localhost:8001/docs`. Do not point tests at development or production data.
 
+## Optional wireframe and screenshot analysis
+
+The input form uses a two-step flow: `POST /api/v1/images/upload` analyzes and stores an optional image locally, then the normal `POST /api/v1/workflows/start` request references the returned `image_id`. The existing workflow is unchanged when `image_ids` is empty.
+
+Images are validated, orientation-corrected, resized, metadata-stripped, OCR-optimized, analyzed with local PaddleOCR (Tesseract fallback), and passed through a configured YOLO UI detector. If custom weights are unavailable, OpenCV contour heuristics keep the workflow operational. OCR labels are coordinate-matched to controls, the screen is classified with rules, and only compact JSON is fused into the existing scenario/test-case prompts. Raw images, OCR blocks, and bounding boxes are not sent to text LLMs.
+
+Identical images reuse SHA-256 cached analysis under `IMAGE_STORAGE_PATH`; no additional vision-LLM call occurs. Vision fallback is disabled by default. A screenshot cannot prove backend behavior, authorization, database/API behavior, performance, or security rules; textual requirements remain authoritative.
+
+Upload example:
+
+```powershell
+curl.exe -X POST http://localhost:8001/api/v1/images/upload -F "image=@login.png" -F "image_description=Customer login wireframe"
+```
+
+Then include `"image_ids":["<returned-uuid>"]` inside `input_payload` when starting the existing workflow. Inspect and test both endpoints at `http://localhost:8001/docs`.
+
+Install runtime dependencies with `pip install -r requirements.txt`. For PaddleOCR and YOLO training use `pip install -r requirements-ml.txt` plus the platform-appropriate PaddlePaddle runtime. Tesseract fallback also requires the local Tesseract executable.
+
+YOLO dataset layout and annotation rules live under `../ml/`. Train, validate, and export:
+
+```powershell
+python ..\ml\training\train_yolo.py --device cpu --epochs 100 --batch 16 --imgsz 960
+python ..\ml\training\validate_yolo.py --model ..\ml\runs\ui_detector\weights\best.pt
+python ..\ml\training\export_yolo.py --model ..\ml\runs\ui_detector\weights\best.pt
+```
+
+Run image tests with `pytest tests/unit/image_processing -q`. Detector accuracy depends on the quality and quantity of annotated UI screenshots; heuristic detections deliberately carry lower confidence.
+
 Docker alternative: `docker compose up --build`.
 
 ## PostgreSQL on Windows

@@ -3,7 +3,7 @@ from app.schemas.context_schema import StructuredContext
 from app.schemas.scenario_schema import ScenarioBatch
 from app.schemas.validation_schema import ValidationResult,ValidationIssue
 from app.schemas.common import ValidationStatus,ScenarioType
-from app.services.confidence_service import weighted_score,coverage,SCENARIO_WEIGHTS
+from app.services.confidence_service import weighted_score,coverage,mapping_quality,content_quality,SCENARIO_WEIGHTS
 from app.utils.similarity import duplicate_indexes
 from app.utils.validators import item_id
 class ScenarioValidationAgent(BaseAgent[ValidationResult]):
@@ -29,4 +29,12 @@ class ScenarioValidationAgent(BaseAgent[ValidationResult]):
                     description=f"Incomplete {label}: {round(vals[metric]*100)}%",
                     recommendation=f"Populate the missing {label} mappings",
                 ))
-        score=weighted_score(vals,SCENARIO_WEIGHTS); return ValidationResult(confidence_score=score,score_breakdown=vals,status=ValidationStatus.passed if score>=.95 else ValidationStatus.failed,issues=issues,failed_entity_ids=[ss[i].scenario_id for i in duplicates],regeneration_instructions=[x.recommendation for x in issues if x.recommendation])
+        entity_scores={}
+        for i,s in enumerate(ss):
+            req_quality=mapping_quality(req,s.requirement_ids); ac_quality=mapping_quality(ac,s.acceptance_criteria_ids)
+            traceability=sum((req_quality,ac_quality,float(bool(s.user_story_ids))))/3
+            completeness=sum((content_quality(s.description,120),content_quality(s.expected_business_outcome,80),float(bool(s.preconditions)),float(bool(s.test_data_requirements))))/4
+            entity_vals={"requirement_coverage":req_quality,"acceptance_criteria_coverage":ac_quality,"traceability":traceability,"completeness":completeness,"consistency":sum((req_quality,ac_quality))/2,"technical_feasibility":sum((float(bool(s.preconditions)),float(bool(s.test_data_requirements))))/2,"duplicate_hallucination_control":float(i not in duplicates)}
+            entity_scores[str(s.scenario_id)]=weighted_score(entity_vals,SCENARIO_WEIGHTS)
+        score=round(sum(entity_scores.values())/len(entity_scores),4) if entity_scores else 0.0
+        return ValidationResult(confidence_score=score,score_breakdown=vals,entity_scores=entity_scores,status=ValidationStatus.passed if score>=.95 else ValidationStatus.failed,issues=issues,failed_entity_ids=[ss[i].scenario_id for i in duplicates],regeneration_instructions=[x.recommendation for x in issues if x.recommendation])
