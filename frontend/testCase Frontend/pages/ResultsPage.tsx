@@ -8,16 +8,14 @@ import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { Scenario, TestCase, WorkflowResult } from '../types';
 import { confidencePercent, downloadFile, friendlyError, testCaseText } from '../utils';
-import { MOCK_WORKFLOW_RESULT } from '../mock/results';
 
 type Tab = 'scenarios' | 'testCases' | 'validation' | 'traceability';
-const MOCK_DATA_ENABLED = process.env.NEXT_PUBLIC_TESTCASE_USE_MOCK_DATA === 'true';
 
 export function ResultsPage() {
   const router = useRouter();
   const { workflowId, result, hydrate, setResult, clear } = useTestCaseWorkflowStore();
-  const [data, setData] = useState<WorkflowResult | null>(MOCK_DATA_ENABLED ? MOCK_WORKFLOW_RESULT : result);
-  const [loading, setLoading] = useState(!MOCK_DATA_ENABLED && !result);
+  const [data, setData] = useState<WorkflowResult | null>(result);
+  const [loading, setLoading] = useState(!result);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<Tab>('scenarios');
   const [page, setPage] = useState(1);
@@ -31,7 +29,7 @@ export function ResultsPage() {
 
   useEffect(() => hydrate(), [hydrate]);
   useEffect(() => {
-    if (MOCK_DATA_ENABLED || !workflowId || data) return;
+    if (!workflowId || data) return;
     testCaseApi.getWorkflowResult(workflowId).then((response) => {
       setData(response);
       setResult(response);
@@ -58,16 +56,11 @@ export function ResultsPage() {
     setRegenerating(id);
     setNotice('');
     try {
-      if (MOCK_DATA_ENABLED) {
-        setData((current) => current ? regenerateMockItem(current, kind, id, improvements.trim()) : current);
-        setNotice(`${kind === 'scenario' ? 'Scenario' : 'Test case'} regenerated in mock mode.`);
-      } else {
-        if (!activeWorkflowId) throw new Error('Workflow is unavailable.');
-        const response = await testCaseApi.regenerateWorkflowItem(activeWorkflowId, kind, id, improvements.trim());
-        setData((current) => current ? { ...current, ...response.result } : current);
-        setResult(data ? { ...data, ...response.result } : null);
-        setNotice(`${kind === 'scenario' ? 'Scenario' : 'Test case'} regenerated and revalidated successfully.`);
-      }
+      if (!activeWorkflowId) throw new Error('Workflow is unavailable.');
+      const response = await testCaseApi.regenerateWorkflowItem(activeWorkflowId, kind, id, improvements.trim());
+      setData((current) => current ? { ...current, ...response.result } : current);
+      setResult(data ? { ...data, ...response.result } : null);
+      setNotice(`${kind === 'scenario' ? 'Scenario' : 'Test case'} regenerated and revalidated successfully.`);
     } catch (requestError) {
       setNotice(friendlyError(requestError));
     } finally {
@@ -111,7 +104,7 @@ export function ResultsPage() {
     } catch (requestError) { setNotice(friendlyError(requestError)); }
   };
 
-  const activeWorkflowId = workflowId ?? (MOCK_DATA_ENABLED ? MOCK_WORKFLOW_RESULT.workflow_id : null);
+  const activeWorkflowId = workflowId;
   if (!activeWorkflowId) return <StatePanel type="error" title="No workflow result selected" message="Complete a workflow to view its results dashboard." />;
   if (loading) return <StatePanel type="loading" title="Loading results" message="Fetching generated scenarios, test cases, and validation data." />;
   if (error) return <StatePanel type="error" title="Results unavailable" message={error} />;
@@ -121,7 +114,7 @@ export function ResultsPage() {
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-500">{MOCK_DATA_ENABLED ? 'Mock data preview' : 'Workflow completed'}</p>
+          <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-500">Workflow completed</p>
           <h1 className="mt-2 text-2xl font-bold">Test Case Generation results</h1>
           <p className="mt-1 text-sm text-muted-foreground">{data.scenarios.length} scenarios · {data.test_cases.length} test cases</p>
           <p className="mt-1 text-sm text-muted-foreground">Overall confidence: scenarios {confidencePercent(data.scenario_validation?.confidence_score)}% · test cases {confidencePercent(data.testcase_validation?.confidence_score)}%</p>
@@ -214,26 +207,6 @@ function TraceabilityView({ data }: { data: WorkflowResult }) {
 function itemConfidence(item: Scenario | TestCase, entityScores?: Record<string, number>, fallback?: number): number {
   const id = 'test_case_id' in item ? item.test_case_id : item.scenario_id;
   return confidencePercent(item.confidence_score ?? entityScores?.[id] ?? fallback);
-}
-
-function regenerateMockItem(data: WorkflowResult, kind: 'scenario' | 'testCase', id: string, feedback: string): WorkflowResult {
-  const validationKey = kind === 'scenario' ? 'scenario_validation' : 'testcase_validation';
-  const collectionKey = kind === 'scenario' ? 'scenarios' : 'test_cases';
-  const validation = data[validationKey];
-  const previousScore = validation?.entity_scores?.[id] ?? 0.9;
-  const entityScores = { ...validation?.entity_scores, [id]: Math.min(0.99, previousScore + 0.03) };
-  const overall = Object.values(entityScores).reduce((sum, score) => sum + score, 0) / Object.keys(entityScores).length;
-  const items = data[collectionKey].map((item) => {
-    const itemId = kind === 'scenario' ? (item as Scenario).scenario_id : (item as TestCase).test_case_id;
-    return itemId === id
-      ? { ...item, description: `${item.description} Improvement applied: ${feedback}`, validation_status: 'passed' }
-      : item;
-  });
-  return {
-    ...data,
-    [collectionKey]: items,
-    [validationKey]: { ...validation, confidence_score: overall, entity_scores: entityScores },
-  } as WorkflowResult;
 }
 
 function Pills({ values }: { values: Array<string | undefined> }) { return <div className="flex flex-wrap gap-2">{values.filter(Boolean).map((value) => <span key={value} className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium capitalize">{value?.replaceAll('_', ' ')}</span>)}</div>; }

@@ -36,9 +36,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const testCaseApi = {
   async uploadImage(image: File, imageDescription: string) {
-    if (process.env.NEXT_PUBLIC_TESTCASE_USE_MOCK_DATA === 'true') {
-      return { image_id: `mock-image-${image.name}`, status: 'analyzed', screen_type: imageDescription.toLowerCase().includes('login') ? 'login' : 'unknown', analysis_confidence: 0.82, warnings: ['Mock-mode image analysis preview'], cached: false };
-    }
     const form = new FormData();form.append('image', image);if (imageDescription.trim()) form.append('image_description', imageDescription.trim());
     const response = await fetch(`${BASE_URL}/api/v1/images/upload`, { method: 'POST', body: form });
     if (!response.ok) { const body = await response.json().catch(() => ({}));throw new Error(String(body.detail ?? `Image upload failed (${response.status})`)); }
