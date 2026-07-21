@@ -153,3 +153,62 @@ export interface ResultFilters {
   requirement: string;
   minConfidence: number;
 }
+
+export interface GeneratedScript {
+  script_id: string;
+  test_case_id: string;
+  scenario_id: string;
+  name: string;
+  source: string;
+  download_path: string;
+  requirement_ids: string[];
+  user_story_ids: string[];
+}
+
+export interface ScriptGeneration {
+  generation_id: string;
+  application_url: string;
+  reachable: boolean;
+  page_title?: string;
+  discovered_elements: Array<{ role?: string; name?: string; label?: string; test_id?: string; tag: string }>;
+  scripts: GeneratedScript[];
+}
+
+export interface FailureAnalysis {
+  test_case_id: string;
+  failed_step?: number;
+  expected_result?: string;
+  actual_result?: string;
+  failure_reason: string;
+  page_url?: string;
+  ui_element?: string;
+  screenshot?: string;
+  console_logs: string[];
+  network_errors: string[];
+  stack_trace?: string;
+  skyvern_attempted: boolean;
+  skyvern_succeeded: boolean;
+}
+
+export interface ExecutionReport {
+  execution_id: string;
+  generation_id: string;
+  mode: 'automated' | 'manual';
+  total_scripts: number;
+  passed_scripts: number;
+  failed_scripts: number;
+  skipped_scripts: number;
+  execution_time_seconds: number;
+  success_percentage: number;
+  results: Array<{
+    script_id: string;
+    script_name: string;
+    test_case_id: string;
+    scenario_id: string;
+    status: 'passed' | 'failed' | 'skipped';
+    duration_seconds: number;
+    error_message?: string;
+    failure?: FailureAnalysis;
+    traceability: Record<string, unknown>;
+  }>;
+}

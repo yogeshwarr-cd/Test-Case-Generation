@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     backend_1_database_url: str | None = None
     cors_origins: list[str] = Field(default_factory=list)
     cerebras_api_key: str = ""
+    cerebras_fallback_api_key: str = ""
     cerebras_model: str = "gpt-oss-120b"
+    cerebras_fallback_model: str = ""
     cerebras_generation_model: str = ""
     cerebras_validation_model: str = ""
     cerebras_regeneration_model: str = ""
@@ -63,7 +65,7 @@ class Settings(BaseSettings):
     openai_validation_model: str = ""
     openai_regeneration_model: str = ""
     llm_fallback_providers: list[str] = Field(
-        default_factory=lambda: ["openai", "gemini", "groq"]
+        default_factory=lambda: ["cerebras_fallback"]
     )
     llm_request_timeout_seconds: float = 60.0
     llm_temperature: float = 0.2
@@ -107,6 +109,17 @@ class Settings(BaseSettings):
     image_analysis_cache_enabled: bool = True
     image_analysis_cache_ttl_seconds: int = 604800
     llm_rate_limit_fallback_threshold_seconds: float = 10.0
+    automation_artifacts_path: str = "./artifacts/automation"
+    automation_navigation_timeout_seconds: float = 30.0
+    automation_action_timeout_seconds: float = 10.0
+    skyvern_fallback_enabled: bool = False
+    skyvern_integration_mode: str = "self_hosted"
+    skyvern_base_url: str = "http://localhost:8000"
+    skyvern_api_key: str = ""
+    skyvern_timeout_seconds: float = 30.0
+    skyvern_max_attempts: int = 1
+    skyvern_max_calls_per_test: int = 2
+    skyvern_max_calls_per_run: int = 20
 
     @field_validator("database_url", "backend_1_database_url", mode="before")
     @classmethod

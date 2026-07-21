@@ -75,6 +75,15 @@ def test_gemini_provider_supports_distinct_provider_names():
     assert primary.min_output_tokens == 4096
 
 
+def test_cerebras_provider_supports_distinct_fallback_name():
+    primary = CerebrasProvider("key-one", "gpt-oss-120b")
+    fallback = CerebrasProvider(
+        "key-two", "gpt-oss-120b", provider_name="cerebras_fallback"
+    )
+    assert primary.name == "cerebras"
+    assert fallback.name == "cerebras_fallback"
+
+
 @pytest.mark.asyncio
 async def test_gemini_uses_parsed_schema_and_reserves_output_tokens():
     captured = {}

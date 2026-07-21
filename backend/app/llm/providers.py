@@ -218,8 +218,16 @@ class GroqProvider(LLMProvider):
 class CerebrasProvider(LLMProvider):
     name = "cerebras"
 
-    def __init__(self, api_key: str, model: str, client: Any = None):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        client: Any = None,
+        *,
+        provider_name: str = "cerebras",
+    ):
         self.api_key, self.model, self._client = api_key, model, client
+        self.name = provider_name
 
     async def generate(self, **kwargs: Any) -> ProviderResponse:
         if not self.api_key or not self.model:

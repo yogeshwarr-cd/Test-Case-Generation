@@ -146,7 +146,7 @@ class LLMClient:
             repair_attempted = False
             retry_count = (
                 self.cerebras_provider_retry_count
-                if provider.name == "cerebras"
+                if provider.name.startswith("cerebras")
                 else self.provider_retry_count
             )
             for attempt in range(retry_count + 1):
@@ -228,13 +228,13 @@ class LLMClient:
                         _provider_unavailable_until[provider.name] = (
                             time.monotonic() + cooldown
                         )
-                if provider.name == "cerebras" and error.category == "quota_exceeded":
+                if provider.name.startswith("cerebras") and error.category == "quota_exceeded":
                     logger.warning(
                         "LLM provider fallback provider=%s model=%s request_id=%s error_category=%s decision=immediate_fallback",
                         provider.name, provider.model, request_id, error.category,
                     )
                     break
-                if provider.name == "cerebras" and error.category == "queue_exceeded":
+                if provider.name.startswith("cerebras") and error.category == "queue_exceeded":
                     if attempt >= retry_count:
                         logger.warning(
                             "LLM provider fallback provider=%s model=%s request_id=%s error_category=%s decision=retry_exhausted",
@@ -295,6 +295,7 @@ def build_llm_client(task: str = "generation") -> LLMClient:
     task = task if task in {"generation", "validation", "regeneration"} else "generation"
     model_by_provider = {
         "cerebras": getattr(settings, f"cerebras_{task}_model") or settings.cerebras_model,
+        "cerebras_fallback": settings.cerebras_fallback_model or settings.cerebras_model,
         "groq": getattr(settings, f"groq_{task}_model") or settings.groq_model,
         "gemini": getattr(settings, f"gemini_{task}_model") or settings.gemini_model,
         "gemini_primary": (
@@ -313,6 +314,11 @@ def build_llm_client(task: str = "generation") -> LLMClient:
     provider_map = {
         "cerebras": CerebrasProvider(
             settings.cerebras_api_key, model_by_provider["cerebras"]
+        ),
+        "cerebras_fallback": CerebrasProvider(
+            settings.cerebras_fallback_api_key,
+            model_by_provider["cerebras_fallback"],
+            provider_name="cerebras_fallback",
         ),
         "groq": GroqProvider(
             settings.groq_api_key,
@@ -356,17 +362,20 @@ def build_llm_client(task: str = "generation") -> LLMClient:
         rate_limit_fallback_threshold_seconds=settings.llm_rate_limit_fallback_threshold_seconds,
         provider_concurrency={
             "cerebras": settings.cerebras_max_concurrent_requests,
+            "cerebras_fallback": settings.cerebras_max_concurrent_requests,
             "groq": settings.groq_concurrency,
             "gemini": settings.gemini_concurrency,
             "openai": settings.openai_concurrency,
         },
         provider_min_request_interval={
             "cerebras": settings.cerebras_min_request_interval_seconds,
+            "cerebras_fallback": settings.cerebras_min_request_interval_seconds,
         },
         cerebras_provider_retry_count=settings.cerebras_provider_retry_count,
         cerebras_initial_backoff_seconds=settings.cerebras_initial_backoff_seconds,
         cerebras_max_backoff_seconds=settings.cerebras_max_backoff_seconds,
         provider_cooldown_seconds={
             "cerebras": settings.cerebras_quota_cooldown_seconds,
+            "cerebras_fallback": settings.cerebras_quota_cooldown_seconds,
         },
     )

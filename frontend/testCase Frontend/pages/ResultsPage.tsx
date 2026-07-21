@@ -120,6 +120,7 @@ export function ResultsPage() {
           <p className="mt-1 text-sm text-muted-foreground">Overall confidence: scenarios {confidencePercent(data.scenario_validation?.confidence_score)}% · test cases {confidencePercent(data.testcase_validation?.confidence_score)}%</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button onClick={() => router.push('/test-case-generation/automation')} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">Proceed to Test Scripts</button>
           <button onClick={() => downloadFile(`testcase-results-${activeWorkflowId}.json`, JSON.stringify(data, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted"><Download className="h-4 w-4" /> Export JSON</button>
           <button onClick={startAnother} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">Start another generation</button>
         </div>

@@ -6,6 +6,7 @@
 backend/.env
 storage/images/
 backend/storage/images/
+backend/artifacts/automation/
 ml/models/*.pt
 ml/models/*.onnx
 ml/runs/

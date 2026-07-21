@@ -4,14 +4,16 @@ import type {
   WorkflowResult,
   WorkflowStartRequest,
   WorkflowStartResponse,
+  ScriptGeneration,
+  ExecutionReport,
 } from '../types';
 import { parseWorkflowEvent } from '../utils';
 
 const BASE_URL = (process.env.NEXT_PUBLIC_TESTCASE_API_BASE_URL ?? 'http://127.0.0.1:8001').replace(/\/$/, '');
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, timeoutMs = 30000): Promise<T> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 30000);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${BASE_URL}${path}`, {
       ...init,
@@ -35,6 +37,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const testCaseApi = {
+  generateScripts(workflowId: string, applicationUrl: string) {
+    return request<ScriptGeneration>('/api/v1/automation/scripts/generate', {
+      method: 'POST', body: JSON.stringify({ workflow_id: workflowId, application_url: applicationUrl }),
+    });
+  },
+
+  executeScripts(generationId: string, mode: 'automated' | 'manual') {
+    return request<ExecutionReport>('/api/v1/automation/executions', {
+      method: 'POST', body: JSON.stringify({ generation_id: generationId, mode }),
+    }, 600000);
+  },
+
   async uploadImage(image: File, imageDescription: string) {
     const form = new FormData();form.append('image', image);if (imageDescription.trim()) form.append('image_description', imageDescription.trim());
     const response = await fetch(`${BASE_URL}/api/v1/images/upload`, { method: 'POST', body: form });
