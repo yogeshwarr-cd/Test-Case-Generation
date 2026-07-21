@@ -15,7 +15,7 @@ class WorkflowService:
     async def start(self,request):
         project_id=request.project_id or uuid.uuid4()
         payload=(request.input_payload.model_dump() if request.input_payload else await DatabaseInputSource().load(project_id))
-        workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload)
+        workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload,request.mock_mode)
         self._states[workflow_id]=state; self._tasks[workflow_id]=asyncio.create_task(self._run(workflow_id)); return state
     async def _run(self,wid): self._states[wid]=await self.orchestrator.run(self._states[wid])
     def get(self,wid):
@@ -43,7 +43,7 @@ class WorkflowService:
         for item in state.get(collection,[]): decisions[f"{request.entity_type}:{item[id_key]}"]=request.decision
         return {"status":"saved","count":len(state.get(collection,[])),"decision":request.decision}
     async def regenerate_entity(self,wid,request):
-        state=self.get(wid); ctx=ExecutionContext(request_id=str(wid),workflow_id=str(wid))
+        state=self.get(wid); ctx=ExecutionContext(request_id=str(wid),workflow_id=str(wid),metadata={"mock_mode":state.get("mock_mode",False)})
         if request.entity_type=="scenario":
             index=next(i for i,x in enumerate(state["scenarios"]) if str(x["scenario_id"])==request.entity_id); original=state["scenarios"][index]
             payload={"context":state["structured_context"],"existing_scenarios":[original],"validation":{"regeneration_instructions":[request.feedback]}}
@@ -63,11 +63,16 @@ class WorkflowService:
         state["testcase_validation"]["status"]="passed"
         state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);self._states[wid]=state;return state
     async def _continue_after_scenario_approval(self,wid):
-        state=self._states[wid];state=await nodes.generate_test_cases_node(state)
-        while True:
-            state=await nodes.validate_test_cases_node(state)
-            if state["testcase_validation"].get("confidence_score",0)>=.95: state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);break
-            if state.get("testcase_attempt_count",0)>=3: state=await nodes.testcase_manual_review_node(state);break
-            state=await nodes.regenerate_test_cases_node(state)
+        state=self._states[wid]
+        try:
+            state=await nodes.generate_test_cases_node(state)
+            while True:
+                state=await nodes.validate_test_cases_node(state)
+                if state["testcase_validation"].get("confidence_score",0)>=.95: state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);break
+                if state.get("testcase_attempt_count",0)>=3: state=await nodes.testcase_manual_review_node(state);break
+                state=await nodes.regenerate_test_cases_node(state)
+        except Exception as exc:
+            state.setdefault("errors",[]).append({"stage":"testcase_generation","message":str(exc),"type":type(exc).__name__})
+            state=await nodes.fail_workflow_node(state)
         self._states[wid]=state
 workflow_service=WorkflowService()

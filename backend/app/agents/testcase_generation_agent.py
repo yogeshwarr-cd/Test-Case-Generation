@@ -25,7 +25,9 @@ class TestCaseGenerationAgent(BaseAgent[TestCaseBatch]):
             context = StructuredContext.model_validate(input_data["context"])
         template = "testcase_regeneration.jinja2" if "validation" in input_data else "testcase_generation.jinja2"
         task = "regeneration" if "validation" in input_data else "generation"
-        client = self.llm_client or build_llm_client(task)
+        client = self.llm_client or build_llm_client(
+            task, mock_mode=execution_context.metadata.get("mock_mode")
+        )
         context_dict = context.model_dump(mode="json") if context else {}
         scenario_items = scenarios.model_dump(mode="json")["scenarios"]
         generated = []

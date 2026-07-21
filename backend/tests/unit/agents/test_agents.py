@@ -7,6 +7,9 @@ from app.agents.context_preparation_agent import ContextPreparationAgent
 from app.agents.scenario_generation_agent import ScenarioGenerationAgent
 from app.agents.scenario_validation_agent import ScenarioValidationAgent
 from app.agents.testcase_generation_agent import TestCaseGenerationAgent as CaseGenerationAgent
+from app.agents.testcase_validation_agent import TestCaseValidationAgent as CaseValidationAgent
+from app.core.config import settings
+from app.llm.client import build_llm_client
 from app.schemas.scenario_schema import Scenario, ScenarioBatch
 from app.schemas.testcase_schema import TestCase as CaseModel
 from app.schemas.testcase_schema import TestCaseBatch as CaseBatch
@@ -115,3 +118,36 @@ async def test_testcase_generation_agent_uses_structured_llm_client():
     )
     assert result.test_cases[0].scenario_id == scenario_id
     assert client.calls[0]["response_model"] is CaseBatch
+
+
+@pytest.mark.asyncio
+async def test_mock_mode_runs_generation_and_validation_without_live_provider(monkeypatch):
+    monkeypatch.setattr(settings, "app_mock_mode", True)
+    project_id = uuid.uuid4()
+    ctx = ExecutionContext(request_id="mock", workflow_id="mock")
+    assert [provider.name for provider in build_llm_client().providers] == ["mock"]
+    prepared = await ContextPreparationAgent().execute({
+        "project_id": project_id,
+        "source_type": "manual",
+        "input_payload": {
+            "user_stories": ["As a user I can log in."],
+            "functional_requirements": ["Support email login."],
+            "acceptance_criteria": ["Valid credentials allow login."],
+            "features": ["Login"],
+        },
+    }, ctx)
+    scenarios = await ScenarioGenerationAgent().execute(prepared.model_dump(), ctx)
+    scenario_validation = await ScenarioValidationAgent().execute(
+        {"context": prepared.model_dump(), "scenarios": scenarios.model_dump()}, ctx
+    )
+    assert scenario_validation.confidence_score >= 0.95
+    test_cases = await CaseGenerationAgent().execute({
+        "scenarios": scenarios.model_dump(mode="json")["scenarios"],
+        "context": prepared.model_dump(mode="json"),
+    }, ctx)
+    testcase_validation = await CaseValidationAgent().execute({
+        "scenarios": scenarios.model_dump(mode="json"),
+        "test_cases": test_cases.model_dump(mode="json"),
+    }, ctx)
+    assert testcase_validation.confidence_score >= 0.95
+    assert all(case.steps for case in test_cases.test_cases)

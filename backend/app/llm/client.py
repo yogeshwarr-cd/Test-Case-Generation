@@ -11,12 +11,13 @@ from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
 from app.core.exceptions import AllLLMProvidersFailed
-from app.llm.parser import parse_model
+from app.llm.parser import InvalidJSONResponse, parse_model
 from app.llm.providers import (
     CerebrasProvider,
     GeminiProvider,
     GroqProvider,
     LLMProvider,
+    MockLLMProvider,
     OpenAIProvider,
     ProviderError,
 )
@@ -28,8 +29,34 @@ _provider_last_request: dict[str, float] = {}
 _provider_unavailable_until: dict[str, float] = {}
 
 
+def _provider_lane(provider: str) -> str:
+    """Pace each configured credential independently."""
+    return provider
+
+
+def _field_path(location: tuple[object, ...]) -> str:
+    return ".".join(str(part) for part in location)
+
+
+def _validation_details(error: ValidationError) -> tuple[list[dict[str, object]], list[str]]:
+    details = [
+        {"field": _field_path(item["loc"]), "type": item["type"]}
+        for item in error.errors()[:20]
+    ]
+    mandatory = [
+        str(item["field"])
+        for item in details
+        if item["type"] == "missing"
+        or (
+            item["type"] == "too_short"
+            and str(item["field"]).endswith(("steps", "test_cases", "scenarios"))
+        )
+    ]
+    return details, mandatory
+
+
 def _provider_semaphore(provider: str, concurrency: int) -> asyncio.Semaphore:
-    key = (id(asyncio.get_running_loop()), provider, max(1, concurrency))
+    key = (id(asyncio.get_running_loop()), _provider_lane(provider), max(1, concurrency))
     if key not in _provider_semaphores:
         _provider_semaphores[key] = asyncio.Semaphore(key[2])
     return _provider_semaphores[key]
@@ -91,12 +118,15 @@ class LLMClient:
         user_prompt: str,
         response_model: type[T],
     ):
+        lane = _provider_lane(provider.name)
         semaphore = _provider_semaphore(
             provider.name, self.provider_concurrency.get(provider.name, 1)
         )
         async with semaphore:
-            interval = self.provider_min_request_interval.get(provider.name, 0)
-            elapsed = time.monotonic() - _provider_last_request.get(provider.name, 0)
+            interval = self.provider_min_request_interval.get(
+                provider.name, self.provider_min_request_interval.get(lane, 0)
+            )
+            elapsed = time.monotonic() - _provider_last_request.get(lane, 0)
             if interval > 0 and elapsed < interval:
                 delay = interval - elapsed
                 logger.info(
@@ -104,7 +134,7 @@ class LLMClient:
                     provider.name, provider.model, round(delay, 3),
                 )
                 await asyncio.sleep(delay)
-            _provider_last_request[provider.name] = time.monotonic()
+            _provider_last_request[lane] = time.monotonic()
             return await asyncio.wait_for(
                 provider.generate(
                     system_prompt=system_prompt,
@@ -121,6 +151,8 @@ class LLMClient:
     def _record_metadata(result: T, provider: str, model: str) -> None:
         for collection_name in ("scenarios", "test_cases"):
             for item in getattr(result, collection_name, []):
+                if not hasattr(item, "generation_metadata"):
+                    continue
                 metadata = dict(getattr(item, "generation_metadata", {}) or {})
                 metadata.update({"provider": provider, "model": model})
                 item.generation_metadata = metadata
@@ -135,6 +167,11 @@ class LLMClient:
     ) -> T:
         attempted: list[str] = []
         failures: dict[str, dict[str, object]] = {}
+        compact_schema = json.dumps(response_model.model_json_schema(), separators=(",", ":"))
+        schema_system_prompt = (
+            f"{system_prompt}\nPopulate every required field in the JSON schema. Never omit required "
+            f"arrays or return them empty when minItems is 1. JSON schema:{compact_schema}"
+        )
         for provider_index, provider in enumerate(self.providers):
             if provider.name in self.unavailable_providers or self._globally_unavailable(provider.name):
                 logger.info(
@@ -144,6 +181,7 @@ class LLMClient:
                 continue
             attempted.append(provider.name)
             repair_attempted = False
+            mandatory_regeneration_attempted = False
             retry_count = (
                 self.cerebras_provider_retry_count
                 if provider.name.startswith("cerebras")
@@ -152,30 +190,103 @@ class LLMClient:
             for attempt in range(retry_count + 1):
                 started = time.perf_counter()
                 try:
-                    response = await self._call(provider, system_prompt, user_prompt, response_model)
+                    response = await self._call(
+                        provider, schema_system_prompt, user_prompt, response_model
+                    )
+                    if not response.content or not response.content.strip():
+                        logger.warning(
+                            "LLM response rejected provider=%s model=%s request_id=%s failure_type=empty_response",
+                            provider.name, provider.model, request_id,
+                        )
+                        raise ProviderError("empty_response")
                     try:
                         result = parse_model(response.content, response_model)
-                    except (ValueError, ValidationError) as validation_error:
-                        validation_summary = (
-                            [
-                                {"loc": error["loc"], "type": error["type"]}
-                                for error in validation_error.errors()[:10]
-                            ]
-                            if isinstance(validation_error, ValidationError)
-                            else [{"type": type(validation_error).__name__}]
+                    except InvalidJSONResponse as invalid_json:
+                        logger.warning(
+                            "LLM response rejected provider=%s model=%s request_id=%s failure_type=invalid_json content_length=%s reason=%s",
+                            provider.name, provider.model, request_id,
+                            len(response.content), str(invalid_json),
+                        )
+                        if not settings.llm_structured_output_repair_enabled or repair_attempted:
+                            raise ProviderError("invalid_json") from invalid_json
+                        repair_attempted = True
+                        repair_prompt = (
+                            "Return a valid JSON object matching this schema. Preserve the original meaning "
+                            f"and do not add unsupported fields. Schema:{compact_schema}\n"
+                            f"Invalid output:{response.content[:12000]}"
+                        )
+                        repaired = await self._call(
+                            provider,
+                            "You repair invalid JSON. Return JSON only.",
+                            repair_prompt,
+                            response_model,
+                        )
+                        result = parse_model(repaired.content, response_model)
+                        response = repaired
+                    except ValidationError as validation_error:
+                        validation_summary, missing_fields = _validation_details(validation_error)
+                        failure_type = (
+                            "missing_required_fields" if missing_fields else "schema_validation_error"
                         )
                         logger.warning(
-                            "LLM structured output validation failed provider=%s model=%s request_id=%s content_length=%s errors=%s",
+                            "LLM response rejected provider=%s model=%s request_id=%s failure_type=%s content_length=%s missing_fields=%s validation_errors=%s",
                             provider.name, provider.model, request_id,
-                            len(response.content), validation_summary,
+                            failure_type, len(response.content), missing_fields, validation_summary,
                         )
+                        if missing_fields and not mandatory_regeneration_attempted:
+                            mandatory_regeneration_attempted = True
+                            regeneration_prompt = (
+                                "Regenerate the complete JSON response. The prior response omitted or emptied "
+                                f"mandatory fields: {missing_fields}. Populate every required field, especially "
+                                "test_cases[].steps with at least one step containing step_number, action, and "
+                                f"expected_result. Return JSON only. Schema:{compact_schema}\n"
+                                f"Original request:{user_prompt}\nInvalid response:{response.content[:12000]}"
+                            )
+                            regenerated = await self._call(
+                                provider,
+                                schema_system_prompt,
+                                regeneration_prompt,
+                                response_model,
+                            )
+                            if not regenerated.content or not regenerated.content.strip():
+                                raise ProviderError("empty_response")
+                            try:
+                                result = parse_model(regenerated.content, response_model)
+                            except InvalidJSONResponse as regenerated_json_error:
+                                logger.warning(
+                                    "LLM mandatory-field regeneration failed provider=%s model=%s request_id=%s failure_type=invalid_json",
+                                    provider.name, provider.model, request_id,
+                                )
+                                raise ProviderError("invalid_json") from regenerated_json_error
+                            except ValidationError as regenerated_validation_error:
+                                regenerated_details, regenerated_missing = _validation_details(
+                                    regenerated_validation_error
+                                )
+                                logger.warning(
+                                    "LLM mandatory-field regeneration failed provider=%s model=%s request_id=%s failure_type=%s missing_fields=%s validation_errors=%s",
+                                    provider.name, provider.model, request_id,
+                                    "missing_required_fields" if regenerated_missing else "schema_validation_error",
+                                    regenerated_missing, regenerated_details,
+                                )
+                                raise ProviderError(
+                                    "missing_required_fields"
+                                    if regenerated_missing
+                                    else "schema_validation_error"
+                                ) from regenerated_validation_error
+                            response = regenerated
+                            self._record_metadata(result, response.provider, response.model)
+                            logger.info(
+                                "LLM mandatory-field regeneration succeeded provider=%s model=%s request_id=%s",
+                                response.provider, response.model, request_id,
+                            )
+                            return result
+                        elif missing_fields:
+                            raise ProviderError("missing_required_fields") from validation_error
+                        if not settings.llm_structured_output_repair_enabled:
+                            raise ProviderError("schema_validation_error") from validation_error
                         if repair_attempted:
-                            raise ProviderError("invalid_structured_output") from validation_error
+                            raise ProviderError("schema_validation_error") from validation_error
                         repair_attempted = True
-                        compact_schema = json.dumps(
-                            response_model.model_json_schema(),
-                            separators=(",", ":"),
-                        )
                         compact_error = str(validation_error)[:2000]
                         invalid_output = response.content[:12000]
                         repair_prompt = (
@@ -202,8 +313,13 @@ class LLMClient:
                     error = ProviderError("timeout")
                 except ProviderError as exc:
                     error = exc
-                except (ValueError, ValidationError):
-                    error = ProviderError("invalid_structured_output")
+                except InvalidJSONResponse:
+                    error = ProviderError("invalid_json")
+                except ValidationError as validation_error:
+                    _, missing_fields = _validation_details(validation_error)
+                    error = ProviderError(
+                        "missing_required_fields" if missing_fields else "schema_validation_error"
+                    )
                 logger.warning(
                     "LLM generation failed provider=%s model=%s request_id=%s attempt=%s retry_count=%s failure_reason=%s http_status=%s provider_message=%s latency_ms=%s",
                     provider.name, provider.model, request_id, attempt + 1, attempt, error.category,
@@ -291,8 +407,18 @@ class LLMClient:
         raise AllLLMProvidersFailed(attempted, failures)
 
 
-def build_llm_client(task: str = "generation") -> LLMClient:
+def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None) -> LLMClient:
     task = task if task in {"generation", "validation", "regeneration"} else "generation"
+    use_mock = settings.app_mock_mode if mock_mode is None else mock_mode
+    if use_mock:
+        return LLMClient(
+            [MockLLMProvider()],
+            timeout=settings.llm_request_timeout_seconds,
+            temperature=0,
+            max_output_tokens=getattr(settings, f"llm_{task}_max_output_tokens", settings.llm_max_output_tokens),
+            provider_retry_count=0,
+            cerebras_provider_retry_count=0,
+        )
     model_by_provider = {
         "cerebras": getattr(settings, f"cerebras_{task}_model") or settings.cerebras_model,
         "cerebras_fallback": settings.cerebras_fallback_model or settings.cerebras_model,

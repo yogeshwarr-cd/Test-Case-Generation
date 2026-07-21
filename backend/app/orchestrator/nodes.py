@@ -5,7 +5,7 @@ from app.agents.scenario_generation_agent import ScenarioGenerationAgent
 from app.agents.scenario_validation_agent import ScenarioValidationAgent
 from app.agents.testcase_generation_agent import TestCaseGenerationAgent
 from app.agents.testcase_validation_agent import TestCaseValidationAgent
-def _ctx(s): return ExecutionContext(request_id=str(s["workflow_id"]),workflow_id=str(s["workflow_id"]))
+def _ctx(s): return ExecutionContext(request_id=str(s["workflow_id"]),workflow_id=str(s["workflow_id"]),metadata={"mock_mode":s.get("mock_mode",False)})
 async def load_input_node(s): s["current_stage"]="load_input"; return s
 async def prepare_context_node(s): s["status"]=s["current_stage"]="preparing_context"; s["structured_context"]=(await ContextPreparationAgent().execute({"project_id":s["project_id"],"source_type":s["source_type"],"input_payload":s["input_payload"]},_ctx(s))).model_dump(mode="json"); return s
 async def generate_scenarios_node(s): s["status"]=s["current_stage"]="generating_scenarios"; s["scenario_attempt_count"]+=1; s["scenarios"]=(await ScenarioGenerationAgent().execute(s["structured_context"],_ctx(s))).model_dump(mode="json")["scenarios"]; return s

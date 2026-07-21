@@ -36,6 +36,7 @@ export interface ManualInputPayload {
 export interface WorkflowStartRequest {
   source_type: 'manual';
   input_payload: ManualInputPayload;
+  mock_mode?: boolean;
 }
 
 export interface WorkflowStartResponse {

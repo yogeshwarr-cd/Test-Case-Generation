@@ -2,7 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 
 from app.core.exceptions import AllLLMProvidersFailed
 from app.llm.client import LLMClient
@@ -26,6 +26,15 @@ def clear_llm_client_global_state(monkeypatch):
 
 class Output(BaseModel):
     value: str
+
+
+class RequiredTestCase(BaseModel):
+    title: str
+    steps: list[str] = Field(min_length=1)
+
+
+class RequiredTestCaseOutput(BaseModel):
+    test_cases: list[RequiredTestCase]
 
 
 class StubProvider(LLMProvider):
@@ -52,6 +61,39 @@ async def test_groq_success_stops_fallback_chain():
     groq, gemini = StubProvider("groq", ['{"value":"groq"}']), StubProvider("gemini", ['{"value":"gemini"}'])
     result = await generate(LLMClient([groq, gemini]))
     assert result.value == "groq" and gemini.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_primary_response_invokes_fallback_without_parsing():
+    primary = StubProvider("cerebras", [""])
+    fallback = StubProvider("cerebras_fallback", ['{"value":"fallback"}'])
+    result = await generate(LLMClient([primary, fallback], cerebras_provider_retry_count=0))
+    assert result.value == "fallback"
+    assert primary.calls == 1
+    assert fallback.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_required_steps_triggers_one_targeted_regeneration(caplog):
+    provider = StubProvider(
+        "cerebras",
+        [
+            '{"test_cases":[{"title":"Login"}]}',
+            '{"test_cases":[{"title":"Login","steps":["Open login page"]}]}',
+        ],
+    )
+    result = await LLMClient(
+        [provider], cerebras_provider_retry_count=0
+    ).generate_structured_output(
+        system_prompt="system",
+        user_prompt="generate test cases",
+        response_model=RequiredTestCaseOutput,
+        request_id="missing-steps",
+    )
+    assert result.test_cases[0].steps == ["Open login page"]
+    assert provider.calls == 2
+    assert "failure_type=missing_required_fields" in caplog.text
+    assert "test_cases.0.steps" in caplog.text
 
 
 def test_gemini_provider_supports_distinct_provider_names():
@@ -290,6 +332,39 @@ async def test_cerebras_request_quota_immediately_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cerebras_fallback_uses_independent_rate_limit_lane(monkeypatch):
+    delays = []
+
+    async def record_sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr("app.llm.client.asyncio.sleep", record_sleep)
+    monkeypatch.setattr("app.llm.client.time.monotonic", lambda: 100.0)
+    monkeypatch.setattr("app.llm.client._provider_last_request", {})
+    primary = StubProvider("cerebras", [ProviderError("quota_exceeded")])
+    fallback = StubProvider("cerebras_fallback", ['{"value":"fallback"}'])
+    client = LLMClient(
+        [primary, fallback],
+        cerebras_provider_retry_count=0,
+        provider_min_request_interval={"cerebras": 65, "cerebras_fallback": 65},
+    )
+
+    assert (await generate(client)).value == "fallback"
+    assert primary.calls == fallback.calls == 1
+    assert delays == []
+
+
+def test_generation_batches_reject_empty_outputs():
+    from app.schemas.scenario_schema import ScenarioBatch
+    from app.schemas.testcase_schema import TestCaseBatch
+
+    with pytest.raises(ValidationError):
+        ScenarioBatch(scenarios=[])
+    with pytest.raises(ValidationError):
+        TestCaseBatch(test_cases=[])
+
+
+@pytest.mark.asyncio
 async def test_quota_failed_provider_is_skipped_on_next_generation():
     cerebras = StubProvider("cerebras", [ProviderError("quota_exceeded")])
     groq = StubProvider("groq", ['{"value":"first"}', '{"value":"second"}'])
@@ -388,7 +463,8 @@ async def test_timeout_is_not_retried_and_falls_back_immediately():
 
 
 @pytest.mark.asyncio
-async def test_invalid_json_gets_one_successful_repair():
+async def test_optional_remote_repair_can_be_enabled(monkeypatch):
+    monkeypatch.setattr("app.llm.client.settings.llm_structured_output_repair_enabled", True)
     groq = StubProvider("groq", ["not json", '{"value":"repaired"}'])
     assert (await generate(LLMClient([groq]))).value == "repaired"
     assert groq.calls == 2
@@ -399,7 +475,7 @@ async def test_failed_repair_moves_to_next_provider():
     groq = StubProvider("groq", ["not json", "still not json"])
     gemini = StubProvider("gemini", ['{"value":"gemini"}'])
     assert (await generate(LLMClient([groq, gemini]))).value == "gemini"
-    assert groq.calls == 2
+    assert groq.calls == 1
 
 
 @pytest.mark.asyncio
@@ -452,6 +528,7 @@ def test_pydantic_schema_still_rejects_malformed_output():
         ('Here is the result: {"value":"ok"}', {"value": "ok"}),
         ('```json\n{"value":"ok"}\n```\nDone.', {"value": "ok"}),
         ('Reasoning {"value":"brace } inside string"} trailing', {"value": "brace } inside string"}),
+        ('{"value":"locally repaired"', {"value": "locally repaired"}),
     ],
 )
 def test_parser_extracts_balanced_json_from_wrapped_output(content, expected):

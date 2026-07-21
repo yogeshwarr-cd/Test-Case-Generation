@@ -1,7 +1,12 @@
 import json
 import re
 
+from json_repair import repair_json
 from pydantic import BaseModel
+
+
+class InvalidJSONResponse(ValueError):
+    """The provider response cannot be converted into a JSON object."""
 
 
 def _first_json_object(content: str) -> str:
@@ -34,15 +39,20 @@ def _first_json_object(content: str) -> str:
 
 
 def parse_json(content: str) -> dict:
+    if not content or not content.strip():
+        raise InvalidJSONResponse("LLM response is empty")
     clean = re.sub(
         r"^\s*```(?:json)?\s*|\s*```\s*$", "", content.strip(), flags=re.I
     ).strip()
     try:
         value = json.loads(clean)
     except json.JSONDecodeError:
-        value = json.loads(_first_json_object(clean))
+        try:
+            value = json.loads(_first_json_object(clean))
+        except (json.JSONDecodeError, ValueError):
+            value = repair_json(clean, return_objects=True)
     if not isinstance(value, dict):
-        raise ValueError("LLM response must be a JSON object")
+        raise InvalidJSONResponse("LLM response is not a valid JSON object")
     return value
 
 

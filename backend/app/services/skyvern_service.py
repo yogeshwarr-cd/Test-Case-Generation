@@ -21,7 +21,7 @@ class SkyvernAdapter:
     """Optional, bounded execution recovery client; never participates in generation."""
 
     def __init__(self) -> None:
-        self.enabled = settings.skyvern_fallback_enabled
+        self.enabled = settings.skyvern_fallback_enabled and not settings.app_mock_mode
         self.base_url = settings.skyvern_base_url.rstrip("/")
 
     @property

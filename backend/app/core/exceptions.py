@@ -28,7 +28,7 @@ class AllLLMProvidersFailed(AppError):
             for details in failures.values()
         )
         message=(
-            "AI generation is temporarily unavailable because the configured Gemini project has exhausted quota or model capacity."
+            "AI generation is temporarily unavailable because the configured providers have exhausted quota or model capacity."
             + (f" Retry after approximately {round(retry_after)} seconds." if retry_after else " Please wait and try again.")
             if temporary
             else "Unable to generate output because all configured LLM providers failed."

@@ -22,7 +22,9 @@ class ScenarioGenerationAgent(BaseAgent[ScenarioBatch]):
         context = StructuredContext.model_validate(context_data)
         template = "scenario_regeneration.jinja2" if "validation" in input_data else "scenario_generation.jinja2"
         task = "regeneration" if "validation" in input_data else "generation"
-        client = self.llm_client or build_llm_client(task)
+        client = self.llm_client or build_llm_client(
+            task, mock_mode=execution_context.metadata.get("mock_mode")
+        )
         context_dict = context.model_dump(mode="json")
         work_items = (
             input_data.get("existing_scenarios", [])

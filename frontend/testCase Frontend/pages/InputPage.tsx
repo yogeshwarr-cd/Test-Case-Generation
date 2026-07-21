@@ -19,6 +19,7 @@ export function InputPage() {
   const setWorkflow = useTestCaseWorkflowStore((state) => state.setWorkflow);
   const [payload, setPayload] = useState<ManualInputPayload>(() => structuredClone(EMPTY_PAYLOAD));
   const [submitting, setSubmitting] = useState(false);
+  const [mockMode, setMockMode] = useState(false);
   const [error, setError] = useState('');
   const [userStoryError, setUserStoryError] = useState('');
   const [imageError, setImageError] = useState('');
@@ -61,7 +62,7 @@ export function InputPage() {
         cleaned.image_ids = [analysis.image_id];
         setAnalysisStatus(`Image analyzed: ${analysis.screen_type} (${Math.round(analysis.analysis_confidence * 100)}% confidence)`);
       }
-      const response = await testCaseApi.startWorkflow({ source_type: 'manual', input_payload: cleaned });
+      const response = await testCaseApi.startWorkflow({ source_type: 'manual', input_payload: cleaned, mock_mode: mockMode });
       setWorkflow(response.workflow_id, response.project_id);
       router.push('/test-case-generation/progress');
     } catch (requestError) {
@@ -86,6 +87,10 @@ export function InputPage() {
 
       <form onSubmit={submit} className="space-y-6">
         {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600 dark:text-red-300">{error}</div>}
+        <div className="flex items-center justify-between rounded-2xl border border-border bg-card p-4 shadow-sm">
+          <div><p className="font-semibold">Generation mode</p><p className="text-xs text-muted-foreground">Mock uses local sample output. When off, the configured live LLM is used.</p></div>
+          <button type="button" role="switch" aria-checked={mockMode} onClick={() => setMockMode((current) => !current)} className={`rounded-xl border px-5 py-2 text-sm font-bold transition ${mockMode ? 'border-primary bg-primary text-primary-foreground' : 'border-input bg-background text-foreground hover:border-primary'}`}>Mock {mockMode ? 'ON' : 'OFF'}</button>
+        </div>
         <section className="grid gap-6 rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6 lg:grid-cols-2">
           {VISIBLE_INPUT_FIELDS.map((key) => (
             <DynamicListField

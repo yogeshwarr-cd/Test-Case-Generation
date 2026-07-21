@@ -1,4 +1,4 @@
-Regenerate the test-case batch using the source scenarios and existing validation feedback. Correct failed entities and missing coverage while preserving valid business meaning and every supplied ID. Do not invent behavior, duplicate cases, calculate confidence, or add unsupported fields. Return the complete corrected {"test_cases": [...]} JSON object only.
+Regenerate the test-case batch using the source scenarios and existing validation feedback. Correct failed entities and missing coverage while preserving valid business meaning and every supplied ID. Do not invent behavior, duplicate cases, calculate confidence, or add unsupported fields. Return the complete corrected {"test_cases": [...]} JSON object only. Every test_cases[] item MUST include scenario_id, project_id, title, description, test_case_type, and a non-empty steps array. Every steps[] item MUST include step_number, non-empty action, and non-empty expected_result. Never omit mandatory fields.
 Existing test cases: {{ failed_item }}
 Source scenarios: {{ scenario }}
 Source context: {{ context }}

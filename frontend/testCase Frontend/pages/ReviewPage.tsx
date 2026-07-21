@@ -112,11 +112,11 @@ export function ReviewPage() {
             <h2 className="font-semibold">Generated {stage === 'scenario_manual_review' ? 'scenarios' : 'test cases'}</h2>
             <p className="mt-1 text-sm text-muted-foreground">All generated outputs remain visible for review, including items with low confidence.</p>
             <div className="mt-3 space-y-3">
-              {generated?.map((item) => {
+              {generated?.map((item, itemIndex) => {
                 const isTestCase = 'test_case_id' in item;
                 const id = isTestCase ? item.test_case_id : item.scenario_id;
                 const score = confidencePercent(validation?.entity_scores?.[id] ?? validation?.confidence_score);
-                return <article key={id} className="rounded-xl border border-border bg-background p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold text-primary">{id}</p><h3 className="mt-1 font-semibold">{item.title}</h3></div><span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">Confidence {score}%</span></div><p className="mt-2 text-sm text-muted-foreground">{item.description}</p>{isTestCase && item.steps?.length ? <ol className="mt-3 space-y-2">{item.steps.map((step) => <li key={step.step_number} className="rounded-lg bg-muted p-3 text-sm"><span className="font-semibold">{step.step_number}. {step.action}</span><p className="mt-1 text-muted-foreground">Expected: {step.expected_result}</p></li>)}</ol> : null}</article>;
+                return <article key={`${id}-${itemIndex}`} className="rounded-xl border border-border bg-background p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold text-primary">{id}</p><h3 className="mt-1 font-semibold">{item.title}</h3></div><span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">Confidence {score}%</span></div><p className="mt-2 text-sm text-muted-foreground">{item.description}</p>{isTestCase && item.steps?.length ? <ol className="mt-3 space-y-2">{item.steps.map((step, stepIndex) => <li key={`${step.step_number}-${stepIndex}`} className="rounded-lg bg-muted p-3 text-sm"><span className="font-semibold">{step.step_number}. {step.action}</span><p className="mt-1 text-muted-foreground">Expected: {step.expected_result}</p></li>)}</ol> : null}</article>;
               })}
             </div>
           </div>

@@ -54,7 +54,7 @@ async def unexpected_error(request: Request, exc: Exception):
 @app.get("/")
 async def root(): return {"name":settings.app_name,"docs":"/docs"}
 @app.get("/health")
-async def health(): return {"status":"healthy"}
+async def health(): return {"status":"healthy","mode":"mock" if settings.app_mock_mode else "live"}
 @app.get("/health/database")
 async def db_health():
     healthy = await database_is_healthy(engine)

@@ -50,4 +50,4 @@ class Scenario(BaseModel):
         if isinstance(value, Enum):
             return value.value
         return str(value).strip().lower().replace("-", "_").replace(" ", "_")
-class ScenarioBatch(BaseModel): scenarios:list[Scenario]
+class ScenarioBatch(BaseModel): scenarios:list[Scenario]=Field(min_length=1)

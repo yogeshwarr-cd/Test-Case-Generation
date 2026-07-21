@@ -128,6 +128,8 @@ class AutomationService:
         return root
 
     async def _validate_url(self, url: str) -> None:
+        if settings.app_mock_mode:
+            return
         try:
             async with httpx.AsyncClient(
                 follow_redirects=True, timeout=settings.automation_navigation_timeout_seconds
@@ -139,6 +141,11 @@ class AutomationService:
             raise AutomationError("Application URL is not reachable") from exc
 
     async def _discover(self, url: str) -> tuple[str | None, list[DiscoveredElement]]:
+        if settings.app_mock_mode:
+            return "Mock Application", [
+                DiscoveredElement(tag="button", role="button", name="Mock submit"),
+                DiscoveredElement(tag="input", label="Mock input", input_type="text"),
+            ]
         try:
             from playwright.async_api import async_playwright
 
@@ -311,6 +318,21 @@ class AutomationService:
             ]
             return self._save_report(request, results, 0)
 
+        if settings.app_mock_mode:
+            results = [
+                ScriptExecutionResult(
+                    script_id=script.script_id,
+                    script_name=script.name,
+                    test_case_id=script.test_case_id,
+                    scenario_id=script.scenario_id,
+                    status="passed",
+                    duration_seconds=0.01,
+                    traceability=self._traceability(script),
+                )
+                for script in response.scripts
+            ]
+            return self._save_report(request, results, 0.01 * len(results))
+
         started = time.perf_counter()
         results: list[ScriptExecutionResult] = []
         state = generation["workflow"]
@@ -465,6 +487,16 @@ class AutomationService:
             raise AutomationNotFound("Execution report was not found") from exc
 
     async def health(self) -> AutomationHealth:
+        if settings.app_mock_mode:
+            return AutomationHealth(
+                status="healthy",
+                playwright_available=True,
+                browser_available=True,
+                skyvern_enabled=False,
+                skyvern_api_reachable=None,
+                skyvern_configuration_valid=True,
+                details={"mode": "mock"},
+            )
         playwright_available = False
         browser_available = False
         details = {}

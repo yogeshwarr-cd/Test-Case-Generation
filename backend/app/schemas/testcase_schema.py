@@ -63,4 +63,4 @@ class TestCase(BaseModel):
     def ordered(self):
         if [s.step_number for s in self.steps]!=list(range(1,len(self.steps)+1)): raise ValueError("steps must be consecutively ordered")
         return self
-class TestCaseBatch(BaseModel): test_cases:list[TestCase]
+class TestCaseBatch(BaseModel): test_cases:list[TestCase]=Field(min_length=1)

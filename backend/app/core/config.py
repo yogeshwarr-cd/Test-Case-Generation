@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8001
     debug: bool = True
+    app_mock_mode: bool = True
     database_url: str = (
         "postgresql://neondb_owner:npg_PXIsV9S7dJWB@ep-billowing-grass-atkw4nta-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
     )
@@ -67,19 +68,20 @@ class Settings(BaseSettings):
     llm_fallback_providers: list[str] = Field(
         default_factory=lambda: ["cerebras_fallback"]
     )
-    llm_request_timeout_seconds: float = 60.0
+    llm_request_timeout_seconds: float = 45.0
     llm_temperature: float = 0.2
     llm_max_output_tokens: int = 6000
     llm_generation_max_output_tokens: int = 1500
     llm_validation_max_output_tokens: int = 2000
     llm_regeneration_max_output_tokens: int = 3000
-    llm_scenario_batch_size: int = 10
-    llm_testcase_batch_size: int = 10
+    llm_structured_output_repair_enabled: bool = False
+    llm_scenario_batch_size: int = 5
+    llm_testcase_batch_size: int = 5
     cerebras_max_concurrent_requests: int = 1
-    cerebras_provider_retry_count: int = 1
+    cerebras_provider_retry_count: int = 0
     cerebras_initial_backoff_seconds: float = 2.0
     cerebras_max_backoff_seconds: float = 10.0
-    cerebras_min_request_interval_seconds: float = 2.0
+    cerebras_min_request_interval_seconds: float = 15.0
     cerebras_quota_cooldown_seconds: float = 60.0
     groq_concurrency: int = 1
     gemini_concurrency: int = 4

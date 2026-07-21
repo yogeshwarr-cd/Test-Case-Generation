@@ -52,6 +52,78 @@ class LLMProvider(ABC):
     ) -> ProviderResponse: ...
 
 
+class MockLLMProvider(LLMProvider):
+    """Deterministic schema-valid provider for offline end-to-end verification."""
+
+    name = "mock"
+    model = "deterministic-mock-v1"
+
+    @staticmethod
+    def _ids(prompt: str, prefix: str) -> list[str]:
+        return list(dict.fromkeys(re.findall(rf'"({prefix}[^"\\]*)"', prompt)))
+
+    async def generate(self, **kwargs: Any) -> ProviderResponse:
+        prompt = kwargs["user_prompt"]
+        model_name = kwargs["response_model"].__name__
+        project_ids = re.findall(r'"project_id"\s*:\s*"([0-9a-fA-F-]{36})"', prompt)
+        project_id = project_ids[0] if project_ids else "00000000-0000-4000-8000-000000000001"
+        requirement_ids = self._ids(prompt, "REQ-")
+        acceptance_ids = self._ids(prompt, "AC-")
+        user_story_ids = self._ids(prompt, "US-")
+        feature_ids = self._ids(prompt, "FEAT-")
+
+        if model_name == "ScenarioBatch":
+            scenarios = []
+            for index, scenario_type in enumerate(("positive", "negative", "boundary"), start=1):
+                scenarios.append({
+                    "project_id": project_id,
+                    "title": f"Mock {scenario_type} scenario {index}",
+                    "description": f"Verify the supplied user story through the {scenario_type} path using the provided requirements and observable business behavior.",
+                    "scenario_type": scenario_type,
+                    "priority": "medium",
+                    "preconditions": ["The mock application is available and test data is prepared."],
+                    "test_data_requirements": ["Deterministic valid and invalid mock data."],
+                    "expected_business_outcome": "The application produces the expected observable result and preserves the supplied business rule.",
+                    "requirement_ids": requirement_ids,
+                    "feature_ids": feature_ids,
+                    "user_story_ids": user_story_ids or ["US-MOCK-1"],
+                    "acceptance_criteria_ids": acceptance_ids,
+                    "source_references": user_story_ids or ["US-MOCK-1"],
+                })
+            content = json.dumps({"scenarios": scenarios})
+        elif model_name == "TestCaseBatch":
+            scenario_ids = list(dict.fromkeys(re.findall(
+                r'"scenario_id"\s*:\s*"([0-9a-fA-F-]{36})"', prompt
+            )))
+            test_cases = []
+            for index, scenario_id in enumerate(scenario_ids or ["00000000-0000-4000-8000-000000000002"], start=1):
+                test_cases.append({
+                    "scenario_id": scenario_id,
+                    "project_id": project_id,
+                    "title": f"Mock executable test case {scenario_id[:8]}",
+                    "description": "Execute the scenario with deterministic mock inputs and verify every observable result against the supplied acceptance criteria.",
+                    "test_case_type": "functional",
+                    "priority": "medium",
+                    "preconditions": ["The mock application is available in a clean test state."],
+                    "test_data": {"mode": "mock", "case": index},
+                    "steps": [
+                        {"step_number": 1, "action": "Open the target feature and confirm the initial interface is ready for deterministic test execution.", "expected_result": "The target feature loads successfully and displays all controls required to execute the scenario."},
+                        {"step_number": 2, "action": "Enter the prepared mock data, perform the documented business action, and submit the transaction.", "expected_result": "The application accepts the mock input and presents the expected business outcome without an error."},
+                    ],
+                    "postconditions": ["The mock result is recorded for review."],
+                    "requirement_ids": requirement_ids,
+                    "acceptance_criteria_ids": acceptance_ids,
+                    "source_references": [scenario_id],
+                    "automation_candidate": True,
+                })
+            content = json.dumps({"test_cases": test_cases})
+        else:
+            raise ProviderError("unsupported_model")
+        return ProviderResponse(
+            content, self.name, self.model, {"input_tokens": 0, "output_tokens": 0}
+        )
+
+
 def _status_code(exc: Exception) -> int | None:
     raw = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     try:

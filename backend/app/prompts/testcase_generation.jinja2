@@ -11,5 +11,7 @@ Rules:
 9. Return JSON only, with no markdown or explanation, matching {"test_cases": [...]}.
 10. Use compact visual context only for visible UI interactions and accessibility checks; textual requirements remain authoritative.
 11. Do not infer authorization, API, database, performance, or security behavior from screenshots alone.
+12. Every test_cases[] item MUST populate these required fields: scenario_id, project_id, title, description, test_case_type, and steps.
+13. steps MUST be a non-empty array. Every steps[] item MUST contain step_number, a non-empty action, and a non-empty expected_result. Never omit steps and never return an empty steps array.
 Scenarios: {{ scenarios }}
 Source context: {{ context }}
