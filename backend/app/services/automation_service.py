@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import sys
 import time
@@ -31,6 +32,7 @@ from app.services.cache_service import cache
 from app.services.workflow_service import workflow_service
 
 R = TypeVar("R")
+logger = logging.getLogger(__name__)
 
 
 async def _on_playwright_loop(factory: Callable[[], Awaitable[R]]) -> R:
@@ -307,19 +309,41 @@ class AutomationService:
 
     async def _cache_generation(self, generation_id: str) -> None:
         generation = self._generations[generation_id]
+        manifest = {
+            "response": generation["response"].model_dump(mode="json"),
+            "workflow": generation["workflow"],
+            "directory": str(generation["directory"]),
+        }
+        (generation["directory"] / "generation.json").write_text(
+            json.dumps(manifest, default=str, indent=2), encoding="utf-8"
+        )
         await cache.set_json(
             cache.key("generation", generation_id),
-            {
-                "response": generation["response"].model_dump(mode="json"),
-                "workflow": generation["workflow"],
-                "directory": str(generation["directory"]),
-            },
+            manifest,
             settings.redis_script_ttl_seconds,
         )
 
     async def generation(self, generation_id: str) -> dict[str, Any]:
         if generation_id in self._generations:
             return self._generations[generation_id]
+        safe_generation_id = _safe_name(generation_id)
+        if safe_generation_id == generation_id:
+            manifest_path = self.artifact_root / generation_id / "generation.json"
+            if manifest_path.is_file():
+                try:
+                    stored = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    generation = {
+                        "response": ScriptGenerationResponse.model_validate(stored["response"]),
+                        "workflow": stored["workflow"],
+                        "directory": manifest_path.parent,
+                    }
+                    self._generations[generation_id] = generation
+                    return generation
+                except (KeyError, ValueError, TypeError):
+                    logger.warning(
+                        "Automation generation manifest is invalid generation_id=%s",
+                        generation_id,
+                    )
         cached = await cache.get_json(cache.key("generation", generation_id))
         if cached:
             generation = {
@@ -589,13 +613,26 @@ class AutomationService:
         self._reports[execution_id] = report
         path = directory / f"{execution_id}.json"
         path.write_text(json.dumps(report.model_dump(mode="json"), indent=2), encoding="utf-8")
+        reports_directory = self.artifact_root / "reports"
+        reports_directory.mkdir(parents=True, exist_ok=True)
+        (reports_directory / f"{execution_id}.json").write_text(
+            json.dumps(report.model_dump(mode="json"), indent=2), encoding="utf-8"
+        )
         return report
 
     def report(self, execution_id: str) -> ExecutionReport:
-        try:
+        if execution_id in self._reports:
             return self._reports[execution_id]
-        except KeyError as exc:
-            raise AutomationNotFound("Execution report was not found") from exc
+        if _safe_name(execution_id) == execution_id:
+            path = self.artifact_root / "reports" / f"{execution_id}.json"
+            if path.is_file():
+                try:
+                    report = ExecutionReport.model_validate_json(path.read_text(encoding="utf-8"))
+                    self._reports[execution_id] = report
+                    return report
+                except ValueError:
+                    logger.warning("Automation report file is invalid execution_id=%s", execution_id)
+        raise AutomationNotFound("Execution report was not found")
 
     async def health(self, *, _dedicated_loop: bool = False) -> AutomationHealth:
         if settings.app_mock_mode:

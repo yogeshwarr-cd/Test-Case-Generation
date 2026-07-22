@@ -92,9 +92,13 @@ async def test_manual_mode_skips_execution_and_produces_report(monkeypatch, tmp_
     generated = await service.generate(
         GenerateScriptsRequest(workflow_id=workflow_id, application_url="https://example.com")
     )
-    report = await service.execute(
+    # A new service instance simulates a Uvicorn reload between generation and execution.
+    restarted_service = AutomationService()
+    report = await restarted_service.execute(
         ExecuteScriptsRequest(generation_id=generated.generation_id, mode="manual")
     )
     assert report.total_scripts == 1
     assert report.skipped_scripts == 1
     assert report.results[0].traceability["test_case_id"] == "TC-1"
+    reloaded_report = AutomationService().report(report.execution_id)
+    assert reloaded_report.execution_id == report.execution_id

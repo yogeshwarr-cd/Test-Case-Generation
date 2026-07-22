@@ -11,7 +11,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
 from app.core.exceptions import AllLLMProvidersFailed
-from app.llm.parser import InvalidJSONResponse, parse_model
+from app.llm.parser import InvalidJSONResponse, parse_json, parse_model
 from app.llm.providers import (
     CerebrasProvider,
     LLMProvider,
@@ -48,8 +48,47 @@ def _validation_details(error: ValidationError) -> tuple[list[dict[str, object]]
             item["type"] == "too_short"
             and str(item["field"]).endswith(("steps", "test_cases", "scenarios"))
         )
+        or (
+            item["type"] in {"model_type", "dict_type"}
+            and ".steps." in f".{item['field']}."
+        )
     ]
     return details, mandatory
+
+
+def _salvage_valid_collection(
+    content: str, response_model: type[T], error: ValidationError
+) -> tuple[T, list[str]] | None:
+    """Keep valid generated items when only some batch entries are malformed."""
+    invalid: dict[str, set[int]] = {}
+    removed_fields: list[str] = []
+    for item in error.errors():
+        location = item["loc"]
+        if (
+            len(location) >= 2
+            and location[0] in {"test_cases", "scenarios"}
+            and isinstance(location[1], int)
+            and item["type"] in {"missing", "too_short", "model_type", "dict_type"}
+        ):
+            invalid.setdefault(str(location[0]), set()).add(location[1])
+            removed_fields.append(_field_path(location))
+        else:
+            return None
+    if len(invalid) != 1:
+        return None
+    payload = parse_json(content)
+    collection, indexes = next(iter(invalid.items()))
+    items = payload.get(collection)
+    if not isinstance(items, list):
+        return None
+    kept = [item for index, item in enumerate(items) if index not in indexes]
+    if not kept:
+        return None
+    payload[collection] = kept
+    try:
+        return response_model.model_validate(payload), removed_fields
+    except ValidationError:
+        return None
 
 
 def _provider_semaphore(provider: str, concurrency: int) -> asyncio.Semaphore:
@@ -167,7 +206,9 @@ class LLMClient:
         compact_schema = json.dumps(response_model.model_json_schema(), separators=(",", ":"))
         schema_system_prompt = (
             f"{system_prompt}\nPopulate every required field in the JSON schema. Never omit required "
-            f"arrays or return them empty when minItems is 1. JSON schema:{compact_schema}"
+            "arrays or return them empty when minItems is 1. Every test_cases[].steps item must be a "
+            "JSON object containing step_number, action, and expected_result. Never return steps as "
+            f"strings and never omit the steps field. JSON schema:{compact_schema}"
         )
         for provider_index, provider in enumerate(self.providers):
             if provider.name in self.unavailable_providers or self._globally_unavailable(provider.name):
@@ -235,8 +276,9 @@ class LLMClient:
                             regeneration_prompt = (
                                 "Regenerate the complete JSON response. The prior response omitted or emptied "
                                 f"mandatory fields: {missing_fields}. Populate every required field, especially "
-                                "test_cases[].steps with at least one step containing step_number, action, and "
-                                f"expected_result. Return JSON only. Schema:{compact_schema}\n"
+                                "test_cases[].steps with at least one JSON object containing step_number, action, "
+                                "and expected_result. Do not return steps as strings and never omit steps. "
+                                f"Return JSON only. Schema:{compact_schema}\n"
                                 f"Original request:{user_prompt}\nInvalid response:{response.content[:12000]}"
                             )
                             regenerated = await self._call(
@@ -259,6 +301,20 @@ class LLMClient:
                                 regenerated_details, regenerated_missing = _validation_details(
                                     regenerated_validation_error
                                 )
+                                salvaged = _salvage_valid_collection(
+                                    regenerated.content,
+                                    response_model,
+                                    regenerated_validation_error,
+                                )
+                                if salvaged is not None:
+                                    result, removed_fields = salvaged
+                                    response = regenerated
+                                    self._record_metadata(result, response.provider, response.model)
+                                    logger.warning(
+                                        "LLM malformed batch items removed provider=%s model=%s request_id=%s removed_fields=%s",
+                                        response.provider, response.model, request_id, removed_fields,
+                                    )
+                                    return result
                                 logger.warning(
                                     "LLM mandatory-field regeneration failed provider=%s model=%s request_id=%s failure_type=%s missing_fields=%s validation_errors=%s",
                                     provider.name, provider.model, request_id,

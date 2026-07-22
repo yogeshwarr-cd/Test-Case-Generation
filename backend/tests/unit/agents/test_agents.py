@@ -101,6 +101,8 @@ async def test_context_and_validation_logic_remain_unchanged():
     assert client.calls and client.calls[0]["response_model"] is ScenarioBatch
     result = await ScenarioValidationAgent().execute({"context": prepared.model_dump(), "scenarios": scenarios.model_dump()}, ctx)
     assert result.score_breakdown["traceability"] == 1.0
+    assert result.score_breakdown["completeness"] < 1.0
+    assert any(issue.issue_code == "LOW_COMPLETENESS" for issue in result.issues)
 
 
 @pytest.mark.asyncio

@@ -96,6 +96,61 @@ async def test_missing_required_steps_triggers_one_targeted_regeneration(caplog)
     assert "test_cases.0.steps" in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_string_steps_trigger_mandatory_object_regeneration():
+    class ObjectStep(BaseModel):
+        step_number: int
+        action: str
+        expected_result: str
+
+    class ObjectStepCase(BaseModel):
+        title: str
+        steps: list[ObjectStep] = Field(min_length=1)
+
+    class ObjectStepBatch(BaseModel):
+        test_cases: list[ObjectStepCase]
+
+    provider = StubProvider(
+        "cerebras",
+        [
+            '{"test_cases":[{"title":"Login","steps":["Open login"]}]}',
+            '{"test_cases":[{"title":"Login","steps":[{"step_number":1,"action":"Open login","expected_result":"Login page opens"}]}]}',
+        ],
+    )
+    result = await LLMClient(
+        [provider], cerebras_provider_retry_count=0
+    ).generate_structured_output(
+        system_prompt="system",
+        user_prompt="generate test cases",
+        response_model=ObjectStepBatch,
+        request_id="string-steps",
+    )
+    assert result.test_cases[0].steps[0].step_number == 1
+    assert provider.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_regeneration_keeps_only_schema_valid_batch_items(caplog):
+    provider = StubProvider(
+        "cerebras",
+        [
+            '{"test_cases":[{"title":"Login","steps":["Open"]},{"title":"Logout"}]}',
+            '{"test_cases":[{"title":"Login","steps":["Open"]},{"title":"Logout"}]}',
+        ],
+    )
+    result = await LLMClient(
+        [provider], cerebras_provider_retry_count=0
+    ).generate_structured_output(
+        system_prompt="system",
+        user_prompt="generate test cases",
+        response_model=RequiredTestCaseOutput,
+        request_id="partially-valid-batch",
+    )
+    assert [item.title for item in result.test_cases] == ["Login"]
+    assert provider.calls == 2
+    assert "LLM malformed batch items removed" in caplog.text
+
+
 def test_gemini_provider_supports_distinct_provider_names():
     primary = GeminiProvider(
         "key-one",
