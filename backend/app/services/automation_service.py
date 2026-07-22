@@ -34,6 +34,7 @@ from app.services.workflow_service import workflow_service
 
 R = TypeVar("R")
 logger = logging.getLogger(__name__)
+SCRIPT_ARTIFACT_SUFFIX = ".pwscript"
 
 
 async def _on_playwright_loop(factory: Callable[[], Awaitable[R]]) -> R:
@@ -310,7 +311,11 @@ class AutomationService:
                 restored["workflow_id"] = request.workflow_id
                 restored["download_path"] = f"/api/v1/automation/scripts/{generation_id}/{restored['script_id']}/download"
                 script = GeneratedScript.model_validate(restored)
-                (directory / f"{script.script_id}.py").write_text(script.source, encoding="utf-8")
+                # Keep runtime artifacts outside WatchFiles' default *.py include.
+                # Otherwise every generation restarts Uvicorn when --reload is enabled.
+                (directory / f"{script.script_id}{SCRIPT_ARTIFACT_SUFFIX}").write_text(
+                    script.source, encoding="utf-8"
+                )
                 scripts.append(script)
             response = ScriptGenerationResponse(
                 generation_id=generation_id,
@@ -332,7 +337,7 @@ class AutomationService:
         scripts = []
         for index, test_case in enumerate(state.get("test_cases", []), start=1):
             script_id = f"pw-{index:03d}-{_safe_name(str(test_case['test_case_id']))}"
-            path = directory / f"{script_id}.py"
+            path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
             source = _python_source(
                 test_case,
                 _best_page_url(test_case, url, [element.model_dump(mode="json") for element in elements]),
@@ -434,7 +439,15 @@ class AutomationService:
         )
         if not script:
             raise AutomationNotFound("Generated script was not found")
-        return generation["directory"] / f"{script_id}.py"
+        path = generation["directory"] / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
+        if path.is_file():
+            return path
+        # Backward compatibility for generations created before runtime scripts
+        # moved to the reload-safe artifact extension.
+        legacy_path = generation["directory"] / f"{script_id}.py"
+        if legacy_path.is_file():
+            return legacy_path
+        raise AutomationNotFound("Generated script artifact was not found")
 
     @staticmethod
     def _locator_phrase(action: str) -> str:

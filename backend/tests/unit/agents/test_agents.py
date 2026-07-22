@@ -123,6 +123,28 @@ async def test_testcase_generation_agent_uses_structured_llm_client():
 
 
 @pytest.mark.asyncio
+async def test_missing_acceptance_criteria_reduces_confidence():
+    project_id = uuid.uuid4()
+    scenario = Scenario(
+        project_id=project_id, title="Login", description="Verify that a registered customer can log in successfully",
+        scenario_type="positive", priority="high", preconditions=["A registered customer exists"],
+        test_data_requirements=["Valid credentials"], expected_business_outcome="The customer account page is displayed",
+        requirement_ids=["REQ-1"], user_story_ids=["US-1"],
+    )
+    context = await ContextPreparationAgent().execute({
+        "project_id": project_id,
+        "input_payload": {"user_stories": ["As a customer, I want to log in"], "functional_requirements": ["Support login"]},
+    }, ExecutionContext(request_id="missing-ac", workflow_id="missing-ac"))
+    result = await ScenarioValidationAgent().execute(
+        {"context": context.model_dump(), "scenarios": {"scenarios": [scenario.model_dump(mode="json")]}},
+        ExecutionContext(request_id="missing-ac", workflow_id="missing-ac"),
+    )
+    assert result.score_breakdown["acceptance_criteria_coverage"] == 0.0
+    assert result.confidence_score < 0.8
+    assert any(issue.issue_code == "LOW_ACCEPTANCE_CRITERIA_COVERAGE" for issue in result.issues)
+
+
+@pytest.mark.asyncio
 async def test_mock_mode_runs_generation_and_validation_without_live_provider(monkeypatch):
     monkeypatch.setattr(settings, "app_mock_mode", True)
     project_id = uuid.uuid4()

@@ -7,7 +7,12 @@ from app.schemas.automation_schema import (
     ExecuteScriptsRequest,
     GenerateScriptsRequest,
 )
-from app.services.automation_service import AutomationService, _best_page_url, _python_source
+from app.services.automation_service import (
+    SCRIPT_ARTIFACT_SUFFIX,
+    AutomationService,
+    _best_page_url,
+    _python_source,
+)
 
 
 def test_generated_source_is_playwright_page_object_and_contains_traceable_id():
@@ -80,6 +85,8 @@ async def test_generation_reads_completed_workflow_without_mutating_it(monkeypat
     assert response.scripts[0].requirement_ids == ["REQ-1"]
     assert response.scripts[0].user_story_ids == ["US-1"]
     assert repr(state) == original
+    assert (tmp_path / response.generation_id / f"{response.scripts[0].script_id}{SCRIPT_ARTIFACT_SUFFIX}").is_file()
+    assert not list((tmp_path / response.generation_id).glob("*.py"))
 
 
 @pytest.mark.asyncio

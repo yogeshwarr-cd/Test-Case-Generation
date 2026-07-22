@@ -20,7 +20,7 @@ async def generate_scripts(request: GenerateScriptsRequest):
 @router.get("/scripts/{generation_id}/{script_id}/download", summary="Download a script")
 async def download_script(generation_id: str, script_id: str):
     path = await automation_service.script_path(generation_id, script_id)
-    return FileResponse(path, filename=path.name, media_type="text/x-python")
+    return FileResponse(path, filename=f"{script_id}.py", media_type="text/x-python")
 
 
 @router.post("/executions", summary="Run scripts automatically or prepare a manual report")

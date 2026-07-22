@@ -6,16 +6,17 @@ interface DynamicListFieldProps {
   label: string;
   values: string[];
   required?: boolean;
+  recommended?: boolean;
   error?: string;
   onChange: (values: string[]) => void;
 }
 
-export function DynamicListField({ label, values, required, error, onChange }: DynamicListFieldProps) {
+export function DynamicListField({ label, values, required, recommended, error, onChange }: DynamicListFieldProps) {
   return (
     <fieldset className="space-y-3">
       <div>
-        <legend className="text-sm font-semibold">{label}{required && <span className="ml-1 text-red-500">*</span>}</legend>
-        <p className="mt-1 text-xs text-muted-foreground">Add each item separately for cleaner traceability.</p>
+        <legend className="text-sm font-semibold">{label}{required && <span className="ml-1 text-red-500">*</span>}{recommended && <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary">Highly recommended</span>}</legend>
+        <p className="mt-1 text-xs text-muted-foreground">{recommended ? 'Used directly in coverage, traceability, and confidence scoring. Add each criterion separately.' : 'Add each item separately for cleaner traceability.'}</p>
       </div>
       {values.map((value, index) => (
         <div key={index} className="flex items-start gap-2">

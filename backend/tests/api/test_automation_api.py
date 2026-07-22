@@ -37,6 +37,14 @@ async def test_automation_routes_are_registered_and_execute_end_to_end(monkeypat
         )
         assert generated_response.status_code == 200
         generation_id = generated_response.json()["generation_id"]
+        script = generated_response.json()["scripts"][0]
+
+        downloaded_response = await client.get(script["download_path"])
+        assert downloaded_response.status_code == 200
+        assert downloaded_response.headers["content-disposition"].endswith(
+            f'filename="{script["script_id"]}.py"'
+        )
+        assert "from playwright.sync_api import Page" in downloaded_response.text
 
         # Simulate process-local state disappearing before Playwright execution.
         automation_service._generations.clear()

@@ -12,7 +12,7 @@ class ScenarioValidationAgent(BaseAgent[ValidationResult]):
         c=StructuredContext.model_validate(input_data["context"]); batch=ScenarioBatch.model_validate(input_data["scenarios"]); ss=batch.scenarios
         req=[item_id(x,"REQ",i) for i,x in enumerate(c.functional_requirements)]; ac=[item_id(x,"AC",i) for i,x in enumerate(c.acceptance_criteria)]
         duplicates=duplicate_indexes([s.title for s in ss]); types={s.scenario_type for s in ss}; complete=[s for s in ss if s.description and s.expected_business_outcome]
-        vals={"requirement_coverage":coverage(req,[x for s in ss for x in s.requirement_ids]),"acceptance_criteria_coverage":coverage(ac,[x for s in ss for x in s.acceptance_criteria_ids]),"traceability":sum(bool(s.user_story_ids) for s in ss)/len(ss) if ss else 0,"completeness":len(complete)/len(ss) if ss else 0,"consistency":0.0,"technical_feasibility":0.0,"duplicate_hallucination_control":1-len(duplicates)/len(ss) if ss else 0}
+        vals={"requirement_coverage":coverage(req,[x for s in ss for x in s.requirement_ids]),"acceptance_criteria_coverage":coverage(ac,[x for s in ss for x in s.acceptance_criteria_ids]) if ac else 0.0,"traceability":sum(bool(s.user_story_ids) for s in ss)/len(ss) if ss else 0,"completeness":len(complete)/len(ss) if ss else 0,"consistency":0.0,"technical_feasibility":0.0,"duplicate_hallucination_control":1-len(duplicates)/len(ss) if ss else 0}
         missing={ScenarioType.positive,ScenarioType.negative,ScenarioType.boundary}-types; issues=[]
         if missing: issues.append(ValidationIssue(issue_code="MISSING_PATHS",description=f"Missing scenario types: {sorted(x.value for x in missing)}",recommendation="Generate only the missing path types"))
         for i in duplicates: issues.append(ValidationIssue(issue_code="DUPLICATE_SCENARIO",description="Scenario duplicates another scenario",affected_entity_id=ss[i].scenario_id,recommendation="Regenerate this scenario only"))
@@ -24,7 +24,7 @@ class ScenarioValidationAgent(BaseAgent[ValidationResult]):
         }
         entity_scores={}; entity_breakdowns=[]
         for i,s in enumerate(ss):
-            req_quality=mapping_quality(req,s.requirement_ids); ac_quality=mapping_quality(ac,s.acceptance_criteria_ids)
+            req_quality=mapping_quality(req,s.requirement_ids); ac_quality=mapping_quality(ac,s.acceptance_criteria_ids) if ac else 0.0
             traceability=sum((req_quality,ac_quality,float(bool(s.user_story_ids))))/3
             completeness=sum((content_quality(s.description,120),content_quality(s.expected_business_outcome,80),float(bool(s.preconditions)),float(bool(s.test_data_requirements))))/4
             entity_vals={"requirement_coverage":req_quality,"acceptance_criteria_coverage":ac_quality,"traceability":traceability,"completeness":completeness,"consistency":sum((req_quality,ac_quality))/2,"technical_feasibility":sum((float(bool(s.preconditions)),float(bool(s.test_data_requirements))))/2,"duplicate_hallucination_control":float(i not in duplicates)}
