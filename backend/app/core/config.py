@@ -28,6 +28,12 @@ class Settings(BaseSettings):
         "postgresql://neondb_owner:npg_PXIsV9S7dJWB@ep-billowing-grass-atkw4nta-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
     )
     database_connect_timeout: float = 30.0
+    redis_cache_enabled: bool = True
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    redis_key_prefix: str = "testcase-generator:v1"
+    redis_connect_timeout_seconds: float = 2.0
+    redis_workflow_ttl_seconds: int = 86400
+    redis_script_ttl_seconds: int = 86400
     backend_1_integration_mode: str = "database"
     backend_1_api_url: str = "http://localhost:8000/api/v1"
     backend_1_database_url: str | None = None
@@ -39,35 +45,6 @@ class Settings(BaseSettings):
     cerebras_generation_model: str = ""
     cerebras_validation_model: str = ""
     cerebras_regeneration_model: str = ""
-    groq_api_key: str = ""
-    groq_model: str = ""
-    groq_max_output_tokens: int = 1500
-    gemini_api_key: str = ""
-    gemini_primary_api_key: str = ""
-    gemini_fallback_api_key: str = ""
-    gemini_model: str = ""
-    gemini_primary_model: str = ""
-    gemini_fallback_model: str = ""
-    gemini_thinking_level: str = "low"
-    gemini_min_output_tokens: int = 4096
-    openai_api_key: str = ""
-    openai_model: str = ""
-    llm_primary_provider: str = "cerebras"
-    groq_generation_model: str = ""
-    groq_validation_model: str = ""
-    groq_regeneration_model: str = ""
-    groq_generation_structured_output: bool = False
-    groq_validation_structured_output: bool = True
-    groq_regeneration_structured_output: bool = True
-    gemini_generation_model: str = ""
-    gemini_validation_model: str = ""
-    gemini_regeneration_model: str = ""
-    openai_generation_model: str = ""
-    openai_validation_model: str = ""
-    openai_regeneration_model: str = ""
-    llm_fallback_providers: list[str] = Field(
-        default_factory=lambda: ["cerebras_fallback"]
-    )
     llm_request_timeout_seconds: float = 45.0
     llm_temperature: float = 0.2
     llm_max_output_tokens: int = 6000
@@ -83,9 +60,6 @@ class Settings(BaseSettings):
     cerebras_max_backoff_seconds: float = 10.0
     cerebras_min_request_interval_seconds: float = 15.0
     cerebras_quota_cooldown_seconds: float = 60.0
-    groq_concurrency: int = 1
-    gemini_concurrency: int = 4
-    openai_concurrency: int = 4
     llm_provider_retry_count: int = 3
     llm_rate_limit_backoff_seconds: float = 2.0
     llm_rate_limit_jitter_seconds: float = 0.25
@@ -170,13 +144,6 @@ class Settings(BaseSettings):
                     raise ValueError("CORS_ORIGINS JSON value must be an array")
                 return [str(origin).strip() for origin in parsed if str(origin).strip()]
             return [origin.strip() for origin in raw_value.split(",") if origin.strip()]
-        return value
-
-    @field_validator("llm_fallback_providers", mode="before")
-    @classmethod
-    def parse_provider_names(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [name.strip().lower() for name in value.split(",") if name.strip()]
         return value
 
 @lru_cache

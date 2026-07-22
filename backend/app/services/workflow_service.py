@@ -1,4 +1,6 @@
 import asyncio,uuid
+from datetime import datetime,timezone
+from app.core.config import settings
 from app.core.exceptions import WorkflowNotFound,ManualReviewRequired
 from app.orchestrator.state import initial_state
 from app.orchestrator.workflow import WorkflowOrchestrator
@@ -9,15 +11,29 @@ from app.agents.scenario_validation_agent import ScenarioValidationAgent
 from app.agents.testcase_generation_agent import TestCaseGenerationAgent
 from app.agents.testcase_validation_agent import TestCaseValidationAgent
 from app.orchestrator import nodes
+from app.services.cache_service import cache
 class WorkflowService:
     """Coordinates agents; persistence adapters can subscribe to state transitions."""
     def __init__(self): self._states={};self._tasks={};self.orchestrator=WorkflowOrchestrator()
     async def start(self,request):
         project_id=request.project_id or uuid.uuid4()
         payload=(request.input_payload.model_dump() if request.input_payload else await DatabaseInputSource().load(project_id))
-        workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload,request.mock_mode)
+        cache_key=cache.fingerprint("workflow",{"input":payload,"mock_mode":request.mock_mode,"models":{"generation":settings.cerebras_generation_model or settings.cerebras_model,"regeneration":settings.cerebras_regeneration_model or settings.cerebras_model}})
+        workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload,request.mock_mode);state["cache_key"]=cache_key;state["cache_hit"]=False
+        cached=await cache.get_json(cache_key)
+        if cached:
+            state.update({key:cached.get(key,value) for key,value in {"structured_context":{},"scenarios":[],"scenario_validation":{},"test_cases":[],"testcase_validation":{}}.items()})
+            for collection in ("scenarios","test_cases"):
+                for item in state[collection]: item["project_id"]=str(project_id)
+            state["status"]=state["current_stage"]="completed";state["completed_at"]=datetime.now(timezone.utc);state["cache_hit"]=True
+            self._states[workflow_id]=state;return state
         self._states[workflow_id]=state; self._tasks[workflow_id]=asyncio.create_task(self._run(workflow_id)); return state
-    async def _run(self,wid): self._states[wid]=await self.orchestrator.run(self._states[wid])
+    async def _run(self,wid):
+        self._states[wid]=await self.orchestrator.run(self._states[wid])
+        await self._cache_completed(self._states[wid])
+    async def _cache_completed(self,state):
+        if state.get("status")!="completed" or not state.get("cache_key"): return
+        await cache.set_json(state["cache_key"],{"input_payload":state.get("input_payload",{}),"structured_context":state.get("structured_context",{}),"scenarios":state.get("scenarios",[]),"scenario_validation":state.get("scenario_validation",{}),"test_cases":state.get("test_cases",[]),"testcase_validation":state.get("testcase_validation",{})},settings.redis_workflow_ttl_seconds)
     def get(self,wid):
         if wid not in self._states: raise WorkflowNotFound("Workflow was not found")
         return self._states[wid]
@@ -61,7 +77,7 @@ class WorkflowService:
             state["scenario_validation"]["status"]="passed";state["status"]=state["current_stage"]="generating_test_cases"
             self._tasks[wid]=asyncio.create_task(self._continue_after_scenario_approval(wid));return state
         state["testcase_validation"]["status"]="passed"
-        state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);self._states[wid]=state;return state
+        state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);self._states[wid]=state;await self._cache_completed(state);return state
     async def _continue_after_scenario_approval(self,wid):
         state=self._states[wid]
         try:
@@ -75,4 +91,5 @@ class WorkflowService:
             state.setdefault("errors",[]).append({"stage":"testcase_generation","message":str(exc),"type":type(exc).__name__})
             state=await nodes.fail_workflow_node(state)
         self._states[wid]=state
+        await self._cache_completed(state)
 workflow_service=WorkflowService()

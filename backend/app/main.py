@@ -11,6 +11,7 @@ from app.core.exceptions import AppError
 from app.core.middleware import RequestIDMiddleware
 from app.database.health import database_is_healthy
 from app.database.session import engine
+from app.services.cache_service import cache
 
 logger = logging.getLogger(__name__)
 
@@ -65,4 +66,8 @@ async def db_health():
             "database": "connected" if healthy else "disconnected",
         },
     )
+@app.get("/health/cache")
+async def cache_health():
+    healthy = await cache.health()
+    return JSONResponse(status_code=200 if healthy else 503,content={"status":"healthy" if healthy else "unavailable","enabled":settings.redis_cache_enabled,"backend":"redis"})
 app.include_router(api_router)

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import sys
 import time
 import traceback
 import uuid
 from pathlib import Path
 from pprint import pformat
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
 import httpx
 
@@ -25,7 +27,32 @@ from app.schemas.automation_schema import (
     ScriptGenerationResponse,
 )
 from app.services.skyvern_service import SkyvernAdapter
+from app.services.cache_service import cache
 from app.services.workflow_service import workflow_service
+
+R = TypeVar("R")
+
+
+async def _on_playwright_loop(factory: Callable[[], Awaitable[R]]) -> R:
+    """Run Playwright on a subprocess-capable loop on Windows.
+
+    Uvicorn reload mode selects a Selector loop on Windows. That loop cannot
+    start Playwright's Node subprocess, so browser work gets an isolated
+    Proactor loop in a worker thread.
+    """
+    if sys.platform != "win32":
+        return await factory()
+
+    def run() -> R:
+        loop = asyncio.ProactorEventLoop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(factory())
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+
+    return await asyncio.to_thread(run)
 
 
 class AutomationError(AppError):
@@ -173,11 +200,55 @@ class AutomationService:
                 "The URL responded, but Chromium could not inspect it. Run `playwright install chromium`."
             ) from exc
 
-    async def generate(self, request: GenerateScriptsRequest) -> ScriptGenerationResponse:
+    async def generate(
+        self, request: GenerateScriptsRequest, *, _dedicated_loop: bool = False
+    ) -> ScriptGenerationResponse:
+        if sys.platform == "win32" and not settings.app_mock_mode and not _dedicated_loop:
+            return await _on_playwright_loop(
+                lambda: self.generate(request, _dedicated_loop=True)
+            )
         state = workflow_service.get(request.workflow_id)
         if state.get("status") != "completed":
             raise AutomationError("Test scripts can only be generated for a completed workflow")
         url = str(request.application_url)
+        script_cache_key = cache.fingerprint(
+            "scripts",
+            {
+                "application_url": url,
+                "scenarios": [
+                    {key:value for key,value in item.items() if key != "project_id"}
+                    for item in state.get("scenarios", [])
+                ],
+                "test_cases": [
+                    {key:value for key,value in item.items() if key != "project_id"}
+                    for item in state.get("test_cases", [])
+                ],
+            },
+        )
+        cached = await cache.get_json(script_cache_key)
+        if cached:
+            generation_id = f"gen-{uuid.uuid4()}"
+            directory = self.artifact_root / generation_id
+            directory.mkdir(parents=True, exist_ok=False)
+            scripts = []
+            for item in cached.get("scripts", []):
+                restored = dict(item)
+                restored["workflow_id"] = request.workflow_id
+                restored["download_path"] = f"/api/v1/automation/scripts/{generation_id}/{restored['script_id']}/download"
+                script = GeneratedScript.model_validate(restored)
+                (directory / f"{script.script_id}.py").write_text(script.source, encoding="utf-8")
+                scripts.append(script)
+            response = ScriptGenerationResponse(
+                generation_id=generation_id,
+                application_url=url,
+                reachable=True,
+                page_title=cached.get("page_title"),
+                discovered_elements=[DiscoveredElement.model_validate(item) for item in cached.get("discovered_elements", [])],
+                scripts=scripts,
+            )
+            self._generations[generation_id] = {"response":response,"workflow":state,"directory":directory}
+            await self._cache_generation(generation_id)
+            return response
         await self._validate_url(url)
         title, elements = await self._discover(url)
         generation_id = f"gen-{uuid.uuid4()}"
@@ -222,16 +293,46 @@ class AutomationService:
             "workflow": state,
             "directory": directory,
         }
+        await self._cache_generation(generation_id)
+        await cache.set_json(
+            script_cache_key,
+            {
+                "page_title": title,
+                "discovered_elements": [item.model_dump(mode="json") for item in elements],
+                "scripts": [item.model_dump(mode="json") for item in scripts],
+            },
+            settings.redis_script_ttl_seconds,
+        )
         return response
 
-    def generation(self, generation_id: str) -> dict[str, Any]:
-        try:
-            return self._generations[generation_id]
-        except KeyError as exc:
-            raise AutomationNotFound("Script generation was not found") from exc
+    async def _cache_generation(self, generation_id: str) -> None:
+        generation = self._generations[generation_id]
+        await cache.set_json(
+            cache.key("generation", generation_id),
+            {
+                "response": generation["response"].model_dump(mode="json"),
+                "workflow": generation["workflow"],
+                "directory": str(generation["directory"]),
+            },
+            settings.redis_script_ttl_seconds,
+        )
 
-    def script_path(self, generation_id: str, script_id: str) -> Path:
-        generation = self.generation(generation_id)
+    async def generation(self, generation_id: str) -> dict[str, Any]:
+        if generation_id in self._generations:
+            return self._generations[generation_id]
+        cached = await cache.get_json(cache.key("generation", generation_id))
+        if cached:
+            generation = {
+                "response": ScriptGenerationResponse.model_validate(cached["response"]),
+                "workflow": cached["workflow"],
+                "directory": Path(cached["directory"]),
+            }
+            self._generations[generation_id] = generation
+            return generation
+        raise AutomationNotFound("Script generation was not found")
+
+    async def script_path(self, generation_id: str, script_id: str) -> Path:
+        generation = await self.generation(generation_id)
         script = next(
             (item for item in generation["response"].scripts if item.script_id == script_id), None
         )
@@ -295,8 +396,14 @@ class AutomationService:
         else:
             await page.locator("body").wait_for(state="visible")
 
-    async def execute(self, request: ExecuteScriptsRequest) -> ExecutionReport:
-        generation = self.generation(request.generation_id)
+    async def execute(
+        self, request: ExecuteScriptsRequest, *, _dedicated_loop: bool = False
+    ) -> ExecutionReport:
+        if sys.platform == "win32" and not settings.app_mock_mode and not _dedicated_loop:
+            return await _on_playwright_loop(
+                lambda: self.execute(request, _dedicated_loop=True)
+            )
+        generation = await self.generation(request.generation_id)
         response: ScriptGenerationResponse = generation["response"]
         if request.mode == "manual":
             results = [
@@ -316,7 +423,7 @@ class AutomationService:
                 )
                 for script in response.scripts
             ]
-            return self._save_report(request, results, 0)
+            return self._save_report(request, results, 0, generation["directory"])
 
         if settings.app_mock_mode:
             results = [
@@ -331,7 +438,7 @@ class AutomationService:
                 )
                 for script in response.scripts
             ]
-            return self._save_report(request, results, 0.01 * len(results))
+            return self._save_report(request, results, 0.01 * len(results), generation["directory"])
 
         started = time.perf_counter()
         results: list[ScriptExecutionResult] = []
@@ -444,7 +551,7 @@ class AutomationService:
                 finally:
                     await page.close()
             await browser.close()
-        return self._save_report(request, results, time.perf_counter() - started)
+        return self._save_report(request, results, time.perf_counter() - started, generation["directory"])
 
     @staticmethod
     def _traceability(script: GeneratedScript) -> dict[str, Any]:
@@ -457,7 +564,11 @@ class AutomationService:
         }
 
     def _save_report(
-        self, request: ExecuteScriptsRequest, results: list[ScriptExecutionResult], duration: float
+        self,
+        request: ExecuteScriptsRequest,
+        results: list[ScriptExecutionResult],
+        duration: float,
+        directory: Path,
     ) -> ExecutionReport:
         execution_id = f"exec-{uuid.uuid4()}"
         passed = sum(result.status == "passed" for result in results)
@@ -476,7 +587,7 @@ class AutomationService:
             results=results,
         )
         self._reports[execution_id] = report
-        path = self.generation(request.generation_id)["directory"] / f"{execution_id}.json"
+        path = directory / f"{execution_id}.json"
         path.write_text(json.dumps(report.model_dump(mode="json"), indent=2), encoding="utf-8")
         return report
 
@@ -486,7 +597,7 @@ class AutomationService:
         except KeyError as exc:
             raise AutomationNotFound("Execution report was not found") from exc
 
-    async def health(self) -> AutomationHealth:
+    async def health(self, *, _dedicated_loop: bool = False) -> AutomationHealth:
         if settings.app_mock_mode:
             return AutomationHealth(
                 status="healthy",
@@ -496,6 +607,10 @@ class AutomationService:
                 skyvern_api_reachable=None,
                 skyvern_configuration_valid=True,
                 details={"mode": "mock"},
+            )
+        if sys.platform == "win32" and not _dedicated_loop:
+            return await _on_playwright_loop(
+                lambda: self.health(_dedicated_loop=True)
             )
         playwright_available = False
         browser_available = False

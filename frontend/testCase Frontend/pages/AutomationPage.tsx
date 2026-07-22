@@ -34,7 +34,16 @@ export function AutomationPage() {
     if (!generation) return;
     setBusy(true); setError('');
     try { setReport(await testCaseApi.executeScripts(generation.generation_id, mode)); }
-    catch (requestError) { setError(friendlyError(requestError)); }
+    catch (requestError) {
+      if (requestError instanceof Error && requestError.message.includes('(404)') && workflowId && applicationUrl.trim()) {
+        try {
+          const refreshed = await testCaseApi.generateScripts(workflowId, applicationUrl.trim());
+          setGeneration(refreshed);
+          setSelectedScript(0);
+          setReport(await testCaseApi.executeScripts(refreshed.generation_id, mode));
+        } catch (retryError) { setError(friendlyError(retryError)); }
+      } else { setError(friendlyError(requestError)); }
+    }
     finally { setBusy(false); }
   };
 

@@ -19,7 +19,7 @@ async def generate_scripts(request: GenerateScriptsRequest):
 
 @router.get("/scripts/{generation_id}/{script_id}/download", summary="Download a script")
 async def download_script(generation_id: str, script_id: str):
-    path = automation_service.script_path(generation_id, script_id)
+    path = await automation_service.script_path(generation_id, script_id)
     return FileResponse(path, filename=path.name, media_type="text/x-python")
 
 

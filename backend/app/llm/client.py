@@ -14,11 +14,8 @@ from app.core.exceptions import AllLLMProvidersFailed
 from app.llm.parser import InvalidJSONResponse, parse_model
 from app.llm.providers import (
     CerebrasProvider,
-    GeminiProvider,
-    GroqProvider,
     LLMProvider,
     MockLLMProvider,
-    OpenAIProvider,
     ProviderError,
 )
 
@@ -422,19 +419,6 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
     model_by_provider = {
         "cerebras": getattr(settings, f"cerebras_{task}_model") or settings.cerebras_model,
         "cerebras_fallback": settings.cerebras_fallback_model or settings.cerebras_model,
-        "groq": getattr(settings, f"groq_{task}_model") or settings.groq_model,
-        "gemini": getattr(settings, f"gemini_{task}_model") or settings.gemini_model,
-        "gemini_primary": (
-            settings.gemini_primary_model
-            or getattr(settings, f"gemini_{task}_model")
-            or settings.gemini_model
-        ),
-        "gemini_fallback": (
-            settings.gemini_fallback_model
-            or getattr(settings, f"gemini_{task}_model")
-            or settings.gemini_model
-        ),
-        "openai": getattr(settings, f"openai_{task}_model") or settings.openai_model,
     }
     max_output_tokens = getattr(settings, f"llm_{task}_max_output_tokens")
     provider_map = {
@@ -446,37 +430,8 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
             model_by_provider["cerebras_fallback"],
             provider_name="cerebras_fallback",
         ),
-        "groq": GroqProvider(
-            settings.groq_api_key,
-            model_by_provider["groq"],
-            # Groq on-demand TPM counts requested completion capacity. 1200
-            # stays below the observed 6000 TPM ceiling while avoiding truncation.
-            max_output_tokens=min(
-                settings.groq_max_output_tokens,
-                max_output_tokens,
-                1200 if task == "generation" else max_output_tokens,
-            ),
-            structured_output=getattr(settings, f"groq_{task}_structured_output"),
-        ),
-        "gemini": GeminiProvider(settings.gemini_api_key, model_by_provider["gemini"]),
-        "gemini_primary": GeminiProvider(
-            settings.gemini_primary_api_key,
-            model_by_provider["gemini_primary"],
-            provider_name="gemini_primary",
-            thinking_level=settings.gemini_thinking_level,
-            min_output_tokens=settings.gemini_min_output_tokens,
-        ),
-        "gemini_fallback": GeminiProvider(
-            settings.gemini_fallback_api_key,
-            model_by_provider["gemini_fallback"],
-            provider_name="gemini_fallback",
-            thinking_level=settings.gemini_thinking_level,
-            min_output_tokens=settings.gemini_min_output_tokens,
-        ),
-        "openai": OpenAIProvider(settings.openai_api_key, model_by_provider["openai"]),
     }
-    order = [settings.llm_primary_provider.lower(), *settings.llm_fallback_providers]
-    providers = [provider_map[name] for name in order if name in provider_map]
+    providers = [provider_map["cerebras"], provider_map["cerebras_fallback"]]
     return LLMClient(
         providers,
         timeout=settings.llm_request_timeout_seconds,
@@ -489,9 +444,6 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
         provider_concurrency={
             "cerebras": settings.cerebras_max_concurrent_requests,
             "cerebras_fallback": settings.cerebras_max_concurrent_requests,
-            "groq": settings.groq_concurrency,
-            "gemini": settings.gemini_concurrency,
-            "openai": settings.openai_concurrency,
         },
         provider_min_request_interval={
             "cerebras": settings.cerebras_min_request_interval_seconds,
