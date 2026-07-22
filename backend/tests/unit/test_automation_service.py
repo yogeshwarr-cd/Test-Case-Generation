@@ -7,7 +7,7 @@ from app.schemas.automation_schema import (
     ExecuteScriptsRequest,
     GenerateScriptsRequest,
 )
-from app.services.automation_service import AutomationService, _python_source
+from app.services.automation_service import AutomationService, _best_page_url, _python_source
 
 
 def test_generated_source_is_playwright_page_object_and_contains_traceable_id():
@@ -24,8 +24,25 @@ def test_generated_source_is_playwright_page_object_and_contains_traceable_id():
     assert "class PageObjectUserLogin" in source
     assert "get_by_role" in source
     assert "get_by_label" in source
+    assert "get_by_placeholder" in source
+    assert "select_option" in source
+    assert ".check()" in source
     assert "assert_expected" in source
     assert "TC-1" in source
+
+
+def test_registration_case_selects_discovered_signup_page():
+    elements = [
+        {"page_url": "https://example.com/", "role": "link", "name": "Home"},
+        {"page_url": "https://example.com/signup", "label": "Email", "placeholder": "you@example.com"},
+        {"page_url": "https://example.com/signup", "role": "button", "name": "Sign Up"},
+    ]
+    test_case = {
+        "title": "Register a new account",
+        "description": "Sign up with email",
+        "steps": [{"action": "Click the Sign Up button"}],
+    }
+    assert _best_page_url(test_case, "https://example.com/", elements) == "https://example.com/signup"
 
 
 @pytest.mark.asyncio

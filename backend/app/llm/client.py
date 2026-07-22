@@ -271,6 +271,17 @@ class LLMClient:
                             provider.name, provider.model, request_id,
                             failure_type, len(response.content), missing_fields, validation_summary,
                         )
+                        salvaged = _salvage_valid_collection(
+                            response.content, response_model, validation_error
+                        )
+                        if missing_fields and salvaged is not None:
+                            result, removed_fields = salvaged
+                            self._record_metadata(result, response.provider, response.model)
+                            logger.warning(
+                                "LLM malformed batch items removed without full regeneration provider=%s model=%s request_id=%s removed_fields=%s",
+                                response.provider, response.model, request_id, removed_fields,
+                            )
+                            return result
                         if missing_fields and not mandatory_regeneration_attempted:
                             mandatory_regeneration_attempted = True
                             regeneration_prompt = (

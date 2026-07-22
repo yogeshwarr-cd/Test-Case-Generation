@@ -147,8 +147,8 @@ async def test_failed_regeneration_keeps_only_schema_valid_batch_items(caplog):
         request_id="partially-valid-batch",
     )
     assert [item.title for item in result.test_cases] == ["Login"]
-    assert provider.calls == 2
-    assert "LLM malformed batch items removed" in caplog.text
+    assert provider.calls == 1
+    assert "without full regeneration" in caplog.text
 
 
 def test_gemini_provider_supports_distinct_provider_names():

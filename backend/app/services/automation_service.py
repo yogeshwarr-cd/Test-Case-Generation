@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 from pprint import pformat
 from typing import Any, Awaitable, Callable, TypeVar
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -70,6 +71,33 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]+", "-", value).strip("-")[:80] or "test"
 
 
+def _meaningful_words(value: str) -> set[str]:
+    ignored = {"a", "an", "and", "the", "to", "with", "using", "verify", "test", "user"}
+    return {
+        word.lower() for word in re.findall(r"[A-Za-z0-9]+", value)
+        if len(word) > 1 and word.lower() not in ignored
+    }
+
+
+def _best_page_url(test_case: dict[str, Any], base_url: str, elements: list[dict[str, Any]]) -> str:
+    intent = _meaningful_words(" ".join([
+        str(test_case.get("title", "")),
+        str(test_case.get("description", "")),
+        " ".join(str(step.get("action", "")) for step in test_case.get("steps", [])),
+    ]))
+    pages = {str(item.get("page_url")) for item in elements if item.get("page_url")}
+    if not pages:
+        return base_url
+    def score(page_url: str) -> int:
+        page_words = _meaningful_words(urlsplit(page_url).path)
+        page_elements = " ".join(
+            " ".join(str(item.get(key) or "") for key in ("name", "label", "placeholder", "visible_text"))
+            for item in elements if item.get("page_url") == page_url
+        )
+        return len(intent & (_meaningful_words(page_elements) | page_words))
+    return max(pages, key=lambda page: (score(page), -len(page))) if pages else base_url
+
+
 def _python_source(
     test_case: dict[str, Any],
     application_url: str,
@@ -92,7 +120,9 @@ class {class_name}:
         self.page = page
 
     def stable_locator(self, instruction: str):
-        words = [word for word in re.findall(r"[A-Za-z0-9]+", instruction) if len(word) > 2]
+        target = re.sub(r"['\"][^'\"]+['\"]", "", instruction)
+        ignored = {{"click", "press", "select", "choose", "check", "enter", "type", "fill", "button", "link", "field", "dropdown", "into", "from", "with"}}
+        words = [word for word in re.findall(r"[A-Za-z0-9]+", target) if len(word) > 1 and word.lower() not in ignored]
         name = " ".join(words[-4:])
         instruction_words = {{word.lower() for word in words}}
         for element in DISCOVERED_ELEMENTS:
@@ -107,6 +137,7 @@ class {class_name}:
         candidates = [
             self.page.get_by_role("button", name=re.compile(name, re.I)),
             self.page.get_by_label(re.compile(name, re.I)),
+            self.page.get_by_placeholder(re.compile(name, re.I)),
             self.page.get_by_test_id(name),
             self.page.get_by_text(re.compile(name, re.I)),
         ]
@@ -117,13 +148,28 @@ class {class_name}:
 
     def perform(self, instruction: str):
         lowered = instruction.lower()
+        values = re.findall(r"['\"]([^'\"]+)['\"]", instruction)
+        value = values[-1] if values else None
         if any(token in lowered for token in ("navigate", "open", "visit", "go to")):
             self.page.goto(BASE_URL, wait_until="domcontentloaded")
-        elif any(token in lowered for token in ("click", "press", "select", "choose")):
+        elif any(token in lowered for token in ("select", "choose")):
+            if value is None:
+                raise AssertionError(f"Selection has no explicit UI value: {{instruction}}")
+            locator = self.stable_locator(instruction)
+            if locator.evaluate("el => el.tagName.toLowerCase()") == "select":
+                locator.select_option(label=value)
+            else:
+                locator.click()
+                self.page.get_by_role("option", name=re.compile(re.escape(value), re.I)).click()
+        elif any(token in lowered for token in ("check", "uncheck")):
+            locator = self.stable_locator(instruction)
+            locator.uncheck() if "uncheck" in lowered else locator.check()
+        elif any(token in lowered for token in ("click", "press")):
             self.stable_locator(instruction).click()
         elif any(token in lowered for token in ("enter", "type", "fill")):
-            values = re.findall(r"['\"]([^'\"]+)['\"]", instruction)
-            self.stable_locator(instruction).fill(values[-1] if values else "test")
+            if value is None:
+                raise AssertionError(f"Input has no explicit UI value: {{instruction}}")
+            self.stable_locator(instruction).fill(value)
         else:
             expect(self.page.locator("body")).to_be_visible()
 
@@ -181,20 +227,45 @@ class AutomationService:
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True)
                 page = await browser.new_page()
-                await page.goto(
-                    url,
-                    wait_until="domcontentloaded",
-                    timeout=int(settings.automation_navigation_timeout_seconds * 1000),
-                )
-                title = await page.title()
-                raw = await page.locator("button,input,select,textarea,a,[role],[data-testid]").evaluate_all(
-                    """els => els.slice(0, 250).map(el => ({
-                      role: el.getAttribute('role'), name: el.getAttribute('aria-label') || el.innerText?.trim(),
-                      label: el.labels?.[0]?.innerText?.trim() || null,
-                      test_id: el.getAttribute('data-testid'), tag: el.tagName.toLowerCase(),
-                      input_type: el.getAttribute('type')
-                    }))"""
-                )
+                origin = urlsplit(url)
+                pending = [url]
+                visited: set[str] = set()
+                raw: list[dict[str, Any]] = []
+                title = None
+                while pending and len(visited) < 20:
+                    page_url = pending.pop(0)
+                    if page_url in visited:
+                        continue
+                    await page.goto(page_url, wait_until="domcontentloaded", timeout=int(settings.automation_navigation_timeout_seconds * 1000))
+                    visited.add(page.url)
+                    title = title or await page.title()
+                    discovered = await page.locator("button,input,select,textarea,a,[role],[data-testid]").evaluate_all(
+                        """els => els.slice(0, 300).filter(el => {
+                          const style = getComputedStyle(el); const box = el.getBoundingClientRect();
+                          return style.visibility !== 'hidden' && style.display !== 'none' && box.width > 0 && box.height > 0;
+                        }).map(el => ({
+                          role: el.getAttribute('role') || (el.tagName.toLowerCase() === 'input'
+                            ? ({checkbox:'checkbox',radio:'radio',number:'spinbutton',submit:'button',button:'button'}[el.type] || 'textbox')
+                            : ({button:'button',a:'link',select:'combobox',textarea:'textbox'}[el.tagName.toLowerCase()] ?? null)),
+                          name: el.getAttribute('aria-label') || el.getAttribute('name') || el.innerText?.trim() || null,
+                          label: el.labels?.[0]?.innerText?.trim() || el.getAttribute('aria-labelledby') || null,
+                          placeholder: el.getAttribute('placeholder'), test_id: el.getAttribute('data-testid'),
+                          visible_text: el.innerText?.trim() || null, href: el.href || null,
+                          tag: el.tagName.toLowerCase(), input_type: el.getAttribute('type'),
+                          checked: typeof el.checked === 'boolean' ? el.checked : null,
+                          options: el.tagName.toLowerCase() === 'select' ? [...el.options].map(o => ({label:o.text.trim(), value:o.value})) : []
+                        }))"""
+                    )
+                    for item in discovered:
+                        item["page_url"] = page.url
+                    raw.extend(discovered)
+                    for item in discovered:
+                        href = item.get("href")
+                        parsed = urlsplit(href) if href else None
+                        if parsed and parsed.scheme in {"http", "https"} and parsed.netloc == origin.netloc:
+                            clean_href = href.split("#", 1)[0]
+                            if clean_href not in visited and clean_href not in pending:
+                                pending.append(clean_href)
                 await browser.close()
             return title, [DiscoveredElement.model_validate(item) for item in raw]
         except Exception as exc:
@@ -216,6 +287,7 @@ class AutomationService:
         script_cache_key = cache.fingerprint(
             "scripts",
             {
+                "generator_version": 2,
                 "application_url": url,
                 "scenarios": [
                     {key:value for key,value in item.items() if key != "project_id"}
@@ -263,7 +335,7 @@ class AutomationService:
             path = directory / f"{script_id}.py"
             source = _python_source(
                 test_case,
-                url,
+                _best_page_url(test_case, url, [element.model_dump(mode="json") for element in elements]),
                 [element.model_dump(mode="json") for element in elements],
             )
             path.write_text(source, encoding="utf-8")
@@ -366,46 +438,132 @@ class AutomationService:
 
     @staticmethod
     def _locator_phrase(action: str) -> str:
-        ignored = {"click", "press", "select", "choose", "the", "button", "link", "on"}
-        words = [word for word in re.findall(r"[A-Za-z0-9]+", action) if word.lower() not in ignored]
+        ignored = {"click", "press", "select", "choose", "check", "uncheck", "enter", "type", "fill", "the", "button", "link", "field", "dropdown", "checkbox", "radio", "on", "in", "into", "from", "with", "value"}
+        target = re.sub(r"['\"][^'\"]+['\"]", "", action)
+        words = [word for word in re.findall(r"[A-Za-z0-9]+", target) if word.lower() not in ignored]
         return " ".join(words[-5:]) or action
+
+    @staticmethod
+    async def _element_description(locator: Any) -> str:
+        try:
+            return await locator.evaluate("""el => {
+              const tag=el.tagName.toLowerCase(); const label=el.labels?.[0]?.innerText?.trim();
+              return [tag, el.getAttribute('role'), label, el.getAttribute('aria-label'),
+                el.getAttribute('placeholder'), el.getAttribute('data-testid'), el.innerText?.trim()]
+                .filter(Boolean).join(' | ')
+            }""")
+        except Exception:
+            return "UI element could not be inspected"
+
+    async def _resolve_locator(self, page: Any, phrase: str, roles: tuple[str, ...] = ()) -> tuple[Any, str]:
+        pattern = re.compile(re.escape(phrase), re.I)
+        candidates = []
+        for role in roles:
+            candidates.append(page.get_by_role(role, name=pattern))
+        candidates.extend([
+            page.get_by_label(pattern),
+            page.get_by_placeholder(pattern),
+            page.get_by_test_id(phrase),
+            page.get_by_text(pattern, exact=False),
+        ])
+        for candidate in candidates:
+            if await candidate.count():
+                locator = candidate.first
+                if await locator.is_visible():
+                    return locator, await self._element_description(locator)
+        raise LookupError(f"No visible role, label, placeholder, test-id, or text locator matched '{phrase}'")
 
     async def _perform(self, page: Any, action: str) -> str | None:
         lowered = action.lower()
-        if any(token in lowered for token in ("navigate", "open", "visit", "go to")):
-            return None
         phrase = self._locator_phrase(action)
-        if any(token in lowered for token in ("click", "press", "select", "choose")):
-            candidates = [
-                page.get_by_role("button", name=re.compile(phrase, re.I)),
-                page.get_by_label(re.compile(phrase, re.I)),
-                page.get_by_text(re.compile(phrase, re.I)),
-                page.locator(f'[data-testid="{phrase}"]'),
-            ]
-            for locator in candidates:
-                if await locator.count():
-                    await locator.first.click(timeout=int(settings.automation_action_timeout_seconds * 1000))
-                    return phrase
-            raise LookupError(f"No stable locator found for '{phrase}'")
+        if any(token in lowered for token in ("navigate", "open", "visit", "go to")):
+            try:
+                locator, description = await self._resolve_locator(page, phrase, ("link",))
+                await locator.click(timeout=int(settings.automation_action_timeout_seconds * 1000))
+                await page.wait_for_load_state("domcontentloaded")
+                return description
+            except LookupError:
+                return f"page | {page.url}"
+        values = re.findall(r"['\"]([^'\"]+)['\"]", action)
+        desired = values[-1] if values else None
+        if any(token in lowered for token in ("select", "choose")):
+            locator, description = await self._resolve_locator(page, phrase, ("combobox", "radio"))
+            tag = await locator.evaluate("el => el.tagName.toLowerCase()")
+            if tag == "select":
+                options = await locator.locator("option").all()
+                option_data = [
+                    ((await option.inner_text()).strip(), await option.get_attribute("value") or "")
+                    for option in options
+                ]
+                if desired:
+                    match = next(((label, value) for label, value in option_data if desired.casefold() in {label.casefold(), value.casefold()}), None)
+                    if not match:
+                        desired_words = _meaningful_words(desired)
+                        scored = [
+                            (len(desired_words & _meaningful_words(" ".join(item))), item)
+                            for item in option_data
+                        ]
+                        best_score, match = max(scored, default=(0, None), key=lambda item: item[0])
+                        if best_score == 0:
+                            match = None
+                    if match:
+                        await locator.select_option(value=match[1] or None, label=None if match[1] else match[0])
+                    else:
+                        raise LookupError(f"No option matching '{desired}' in {description}")
+                else:
+                    raise LookupError(f"Selection action has no value for {description}")
+            else:
+                await locator.click()
+                option, option_description = await self._resolve_locator(page, desired or phrase, ("option", "radio"))
+                await option.click()
+                description = option_description
+            return description
+        if any(token in lowered for token in ("check", "uncheck", "radio")):
+            locator, description = await self._resolve_locator(page, phrase, ("checkbox", "radio"))
+            tag = await locator.evaluate("el => el.tagName.toLowerCase()")
+            if tag == "input" and "uncheck" in lowered:
+                await locator.uncheck()
+            elif tag == "input":
+                await locator.check()
+            else:
+                checked = await locator.get_attribute("aria-checked")
+                wants_checked = "uncheck" not in lowered
+                if checked is None or (checked == "true") != wants_checked:
+                    await locator.click()
+            return description
+        if any(token in lowered for token in ("click", "press")):
+            locator, description = await self._resolve_locator(page, phrase, ("button", "link"))
+            await locator.click(timeout=int(settings.automation_action_timeout_seconds * 1000))
+            return description
         if any(token in lowered for token in ("enter", "type", "fill")):
-            values = re.findall(r"['\"]([^'\"]+)['\"]", action)
-            value = values[-1] if values else "test"
-            locator = page.get_by_label(re.compile(phrase, re.I))
-            if not await locator.count():
-                locator = page.locator("input:visible, textarea:visible").first
-            await locator.fill(value, timeout=int(settings.automation_action_timeout_seconds * 1000))
-            return phrase
+            if desired is None:
+                raise LookupError(f"Input action has no explicit value: '{action}'")
+            locator, description = await self._resolve_locator(page, phrase, ("textbox", "spinbutton"))
+            await locator.fill(desired, timeout=int(settings.automation_action_timeout_seconds * 1000))
+            return description
         return None
 
     async def _retry_recovered(self, page: Any, locator_value: str, action: str) -> None:
         locator = page.locator(locator_value).first
         lowered = action.lower()
+        values = re.findall(r"['\"]([^'\"]+)['\"]", action)
+        value = values[-1] if values else None
         if any(token in lowered for token in ("enter", "type", "fill")):
-            values = re.findall(r"['\"]([^'\"]+)['\"]", action)
             await locator.fill(
-                values[-1] if values else "test",
+                value or "",
                 timeout=int(settings.automation_action_timeout_seconds * 1000),
             )
+        elif any(token in lowered for token in ("select", "choose")) and value:
+            if await locator.evaluate("el => el.tagName.toLowerCase()") == "select":
+                await locator.select_option(label=value)
+            else:
+                await locator.click()
+                await page.get_by_role("option", name=re.compile(re.escape(value), re.I)).click()
+        elif any(token in lowered for token in ("check", "uncheck")):
+            if "uncheck" in lowered:
+                await locator.uncheck()
+            else:
+                await locator.check()
         else:
             await locator.click(timeout=int(settings.automation_action_timeout_seconds * 1000))
 
@@ -491,18 +649,29 @@ class AutomationService:
                 element = None
                 skyvern_attempted = False
                 skyvern_succeeded = False
+                phase = "Script Generation"
                 try:
-                    await page.goto(
+                    test_case = cases[script.test_case_id]
+                    target_url = _best_page_url(
+                        test_case,
                         response.application_url,
+                        [item.model_dump(mode="json") for item in response.discovered_elements],
+                    )
+                    phase = "Navigation"
+                    await page.goto(
+                        target_url,
                         wait_until="domcontentloaded",
                         timeout=int(settings.automation_navigation_timeout_seconds * 1000),
                     )
                     per_test_calls = 0
-                    for step in cases[script.test_case_id].get("steps", []):
+                    for step in test_case.get("steps", []):
                         failed_step = step.get("step_number")
                         expected = step.get("expected_result")
+                        action = step.get("action", "")
+                        element = f"Requested target: {self._locator_phrase(action)}"
+                        phase = "Locator"
                         try:
-                            element = await self._perform(page, step.get("action", ""))
+                            element = await self._perform(page, action)
                         except (LookupError, PlaywrightTimeoutError) as action_error:
                             if (
                                 self.skyvern.enabled
@@ -513,7 +682,7 @@ class AutomationService:
                                 run_skyvern_calls += 1
                                 recovery = await self.skyvern.recover(
                                     url=page.url,
-                                    action=step.get("action", ""),
+                                    action=action,
                                     expected_result=expected or "",
                                 )
                                 skyvern_attempted = recovery.attempted
@@ -526,6 +695,7 @@ class AutomationService:
                                 if skyvern_succeeded:
                                     continue
                             raise action_error
+                        phase = "Application"
                         await self._assert_expected(page, expected or "")
                     results.append(
                         ScriptExecutionResult(
@@ -550,6 +720,7 @@ class AutomationService:
                         expected_result=expected,
                         actual_result=str(exc),
                         failure_reason=type(exc).__name__,
+                        failure_category=phase,
                         page_url=page.url,
                         ui_element=element,
                         screenshot=str(screenshot) if screenshot else None,

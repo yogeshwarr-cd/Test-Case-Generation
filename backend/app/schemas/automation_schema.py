@@ -18,6 +18,12 @@ class DiscoveredElement(BaseModel):
     test_id: str | None = None
     tag: str
     input_type: str | None = None
+    placeholder: str | None = None
+    visible_text: str | None = None
+    href: str | None = None
+    page_url: str | None = None
+    options: list[dict[str, str]] = Field(default_factory=list)
+    checked: bool | None = None
 
 
 class GeneratedScript(BaseModel):
@@ -54,6 +60,7 @@ class FailureAnalysis(BaseModel):
     expected_result: str | None = None
     actual_result: str | None = None
     failure_reason: str
+    failure_category: Literal["Script Generation", "Locator", "Navigation", "Application"] = "Application"
     page_url: str | None = None
     ui_element: str | None = None
     screenshot: str | None = None

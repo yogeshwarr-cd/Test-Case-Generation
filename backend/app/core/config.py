@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     llm_regeneration_max_output_tokens: int = 3000
     llm_structured_output_repair_enabled: bool = False
     llm_scenario_batch_size: int = 5
-    llm_testcase_batch_size: int = 5
+    llm_testcase_batch_size: int = 4
     cerebras_max_concurrent_requests: int = 1
     cerebras_provider_retry_count: int = 0
     cerebras_initial_backoff_seconds: float = 2.0

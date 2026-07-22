@@ -181,6 +181,7 @@ export interface FailureAnalysis {
   expected_result?: string;
   actual_result?: string;
   failure_reason: string;
+  failure_category: 'Script Generation' | 'Locator' | 'Navigation' | 'Application';
   page_url?: string;
   ui_element?: string;
   screenshot?: string;
