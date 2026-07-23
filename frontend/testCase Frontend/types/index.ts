@@ -181,10 +181,29 @@ export interface FailureAnalysis {
   expected_result?: string;
   actual_result?: string;
   failure_reason: string;
-  failure_category: 'Script Generation' | 'Locator' | 'Navigation' | 'Application';
+  /**
+   * Precise categories emitted by the backend (v2+).
+   * Legacy short labels kept for backwards compat with stored reports.
+   */
+  failure_category:
+    | 'Locator Failure'
+    | 'Navigation Failure'
+    | 'Application Feature Missing'
+    | 'Page Load Timeout'
+    | 'Assertion Failure'
+    | 'Environment Issue'
+    // legacy
+    | 'Script Generation'
+    | 'Locator'
+    | 'Navigation'
+    | 'Application';
   page_url?: string;
   ui_element?: string;
   screenshot?: string;
+  /** Path to saved DOM snapshot HTML (on failure) */
+  dom_snapshot?: string;
+  /** Path to saved Playwright trace .zip (on failure) */
+  trace_path?: string;
   console_logs: string[];
   network_errors: string[];
   stack_trace?: string;

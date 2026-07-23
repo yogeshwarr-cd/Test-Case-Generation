@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8001
     debug: bool = True
-    app_mock_mode: bool = True
+    app_mock_mode: bool = False  # TODO: re-enable mock mode when needed
     database_url: str = (
         "postgresql://neondb_owner:npg_PXIsV9S7dJWB@ep-billowing-grass-atkw4nta-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
     )

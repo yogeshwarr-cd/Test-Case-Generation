@@ -64,8 +64,14 @@ def test_quoted_button_name_generates_valid_playwright_locators():
 
     _validate_generated_source(source)
     compile(source, "<generated-test>", "exec")
-    assert 'button[name=/Click the \\"Continue shopping\\"' not in source
-    assert "re.compile(name, re.I)" in source
+    # Hallucinated CSS selectors must never appear
+    assert 'button[name=/Click the \\\"Continue shopping\\\"' not in source
+    # New stable_locator resolves directly from the discovered catalogue:
+    # when a discovered element matches (Pass 1), it uses get_by_role with
+    # exact=True instead of the old re.compile fallback.
+    assert "get_by_role" in source
+    # The discovered-element name must appear in the source (as a literal string)
+    assert "Continue shopping" in source
     assert AutomationService._locator_phrase(
         'Click the "Continue shopping" button/link.'
     ) == "Continue shopping"

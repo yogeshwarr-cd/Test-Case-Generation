@@ -154,6 +154,8 @@ def _python_source(
     application_url: str,
     discovered_elements: list[dict[str, Any]] | None = None,
 ) -> str:
+    """Generate a Playwright test script whose selectors come ONLY from the
+    discovered DOM.  No CSS is inferred from action text."""
     class_name = "PageObject" + "".join(part.title() for part in _safe_name(test_case["title"]).split("-"))
     steps = pformat(test_case.get("steps", []), width=100, sort_dicts=False)
     discovered = pformat(discovered_elements or [], width=100, sort_dicts=False)
@@ -170,34 +172,75 @@ class {class_name}:
     def __init__(self, page: Page):
         self.page = page
 
+    # ------------------------------------------------------------------
+    # stable_locator: resolves ONLY from the discovered element catalogue.
+    # Never invents a CSS selector from action text.
+    # ------------------------------------------------------------------
     def stable_locator(self, instruction: str):
+        ignored = {{
+            "click", "press", "select", "choose", "check", "enter", "type",
+            "fill", "button", "link", "field", "dropdown", "into", "from",
+            "with", "the", "on", "in", "value",
+        }}
         quoted = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", instruction)
         lowered = instruction.lower()
-        target = quoted[0] if quoted and any(token in lowered for token in ("click", "press")) else re.sub(r"[\\'\\\"][^\\'\\\"]+[\\'\\\"]", "", instruction)
-        ignored = {{"click", "press", "select", "choose", "check", "enter", "type", "fill", "button", "link", "field", "dropdown", "into", "from", "with"}}
-        words = [word for word in re.findall(r"[A-Za-z0-9]+", target) if len(word) > 1 and word.lower() not in ignored]
-        name = " ".join(words[-4:])
-        instruction_words = {{word.lower() for word in words}}
-        for element in DISCOVERED_ELEMENTS:
-            identity = " ".join(str(element.get(key) or "") for key in ("name", "label", "test_id"))
-            if instruction_words.intersection(re.findall(r"[a-z0-9]+", identity.lower())):
-                if element.get("test_id"):
-                    return self.page.get_by_test_id(element["test_id"])
-                if element.get("label"):
-                    return self.page.get_by_label(element["label"])
-                if element.get("role") and element.get("name"):
-                    return self.page.get_by_role(element["role"], name=element["name"])
-        candidates = [
-            self.page.get_by_role("button", name=re.compile(name, re.I)),
-            self.page.get_by_label(re.compile(name, re.I)),
-            self.page.get_by_placeholder(re.compile(name, re.I)),
-            self.page.get_by_test_id(name),
-            self.page.get_by_text(re.compile(name, re.I)),
+        target = (
+            quoted[0]
+            if quoted and any(t in lowered for t in ("click", "press"))
+            else re.sub(r"[\\'\\\"][^\\'\\\"]+[\\'\\\"]", "", instruction)
+        )
+        words = [
+            w for w in re.findall(r"[A-Za-z0-9]+", target)
+            if len(w) > 1 and w.lower() not in ignored
         ]
-        for candidate in candidates:
-            if candidate.count():
-                return candidate.first
-        raise AssertionError(f"No stable locator found for: {{instruction}}")
+        phrase_words = {{w.lower() for w in words}}
+
+        # --- Pass 1: match against discovered catalogue ---
+        best_score = 0
+        best_element: dict | None = None
+        for element in DISCOVERED_ELEMENTS:
+            identity = " ".join(
+                str(element.get(k) or "")
+                for k in ("name", "label", "test_id", "placeholder", "visible_text")
+            )
+            score = len(phrase_words & set(re.findall(r"[a-z0-9]+", identity.lower())))
+            if score > best_score:
+                best_score = score
+                best_element = element
+
+        if best_element:
+            if best_element.get("test_id"):
+                return self.page.get_by_test_id(best_element["test_id"])
+            if best_element.get("label"):
+                return self.page.get_by_label(best_element["label"], exact=True)
+            if best_element.get("role") and best_element.get("name"):
+                return self.page.get_by_role(
+                    best_element["role"], name=best_element["name"], exact=True
+                )
+            if best_element.get("placeholder"):
+                return self.page.get_by_placeholder(
+                    best_element["placeholder"], exact=True
+                )
+            if best_element.get("visible_text"):
+                return self.page.get_by_text(
+                    best_element["visible_text"], exact=False
+                ).first
+
+        # --- Pass 2: visible-text fallback using quoted value only ---
+        if quoted:
+            pattern = re.compile(re.escape(quoted[0]), re.I)
+            for candidate in [
+                self.page.get_by_role("button", name=pattern),
+                self.page.get_by_label(pattern),
+                self.page.get_by_placeholder(pattern),
+                self.page.get_by_text(pattern, exact=False),
+            ]:
+                if candidate.count():
+                    return candidate.first
+
+        raise AssertionError(
+            f"Feature not found in application: no discovered element matches {{instruction!r}}"
+        )
 
     def perform(self, instruction: str):
         lowered = instruction.lower()
@@ -205,10 +248,12 @@ class {class_name}:
         value = values[-1] if values else None
         if any(token in lowered for token in ("navigate", "open", "visit", "go to")):
             self.page.goto(BASE_URL, wait_until="domcontentloaded")
+            self.page.wait_for_load_state("networkidle")
         elif any(token in lowered for token in ("select", "choose")):
             if value is None:
                 raise AssertionError(f"Selection has no explicit UI value: {{instruction}}")
             locator = self.stable_locator(instruction)
+            locator.wait_for(state="visible")
             if locator.evaluate("el => el.tagName.toLowerCase()") == "select":
                 locator.select_option(label=value)
             else:
@@ -216,13 +261,18 @@ class {class_name}:
                 self.page.get_by_role("option", name=re.compile(re.escape(value), re.I)).click()
         elif any(token in lowered for token in ("check", "uncheck")):
             locator = self.stable_locator(instruction)
+            locator.wait_for(state="visible")
             locator.uncheck() if "uncheck" in lowered else locator.check()
         elif any(token in lowered for token in ("click", "press")):
-            self.stable_locator(instruction).click()
+            locator = self.stable_locator(instruction)
+            locator.wait_for(state="visible")
+            locator.click()
         elif any(token in lowered for token in ("enter", "type", "fill")):
             if value is None:
                 raise AssertionError(f"Input has no explicit UI value: {{instruction}}")
-            self.stable_locator(instruction).fill(value)
+            locator = self.stable_locator(instruction)
+            locator.wait_for(state="visible")
+            locator.fill(value)
         else:
             expect(self.page.locator("body")).to_be_visible()
 
@@ -237,6 +287,7 @@ class {class_name}:
 def test_{_safe_name(test_case["test_case_id"]).replace("-", "_")}(page: Page):
     app = {class_name}(page)
     page.goto(BASE_URL, wait_until="domcontentloaded")
+    page.wait_for_load_state("networkidle")
     for step in STEPS:
         app.perform(step["action"])
         app.assert_expected(step["expected_result"])
@@ -320,10 +371,21 @@ class AutomationService:
                             if clean_href not in visited and clean_href not in pending:
                                 pending.append(clean_href)
                 await browser.close()
-            return title, [DiscoveredElement.model_validate(item) for item in raw]
+            elements = [DiscoveredElement.model_validate(item) for item in raw]
+            logger.info(
+                "DOM discovery complete url=%s pages_visited=%d elements_found=%d",
+                url, len(visited), len(elements),
+            )
+            return title, elements
         except Exception as exc:
+            # Bug 1 fix: log the real exception so it appears in uvicorn console
+            logger.error(
+                "DOM discovery failed url=%s  error=%s: %s",
+                url, type(exc).__name__, exc, exc_info=exc,
+            )
             raise AutomationError(
-                "The URL responded, but Chromium could not inspect it. Run `playwright install chromium`."
+                f"The URL responded, but Chromium could not inspect it: {type(exc).__name__}: {exc}. "
+                "Run `playwright install chromium` if Playwright is not installed."
             ) from exc
 
     async def generate(
@@ -335,12 +397,23 @@ class AutomationService:
             )
         state = workflow_service.get(request.workflow_id)
         if state.get("status") != "completed":
-            raise AutomationError("Test scripts can only be generated for a completed workflow")
+            raise AutomationError(
+                f"Test scripts can only be generated for a completed workflow "
+                f"(current status: {state.get('status', 'unknown')}). "
+                "Wait for the workflow to finish or resume it if it is in manual review."
+            )
+        # Bug 3 fix: guard empty test_cases early so we return a clear error
+        if not state.get("test_cases"):
+            raise AutomationError(
+                "The workflow completed but produced no test cases. "
+                "Check the workflow result or re-run the workflow."
+            )
         url = str(request.application_url)
+        logger.info("generate() start workflow_id=%s url=%s", request.workflow_id, url)
         script_cache_key = cache.fingerprint(
             "scripts",
             {
-                "generator_version": 3,
+                "generator_version": 4,  # bump when generation logic changes
                 "application_url": url,
                 "scenarios": [
                     {key:value for key,value in item.items() if key != "project_id"}
@@ -387,24 +460,46 @@ class AutomationService:
             }
             await self._cache_generation(generation_id)
             return response
+        logger.info("Validating URL url=%s", url)
         await self._validate_url(url)
+        logger.info("Starting DOM discovery url=%s", url)
         title, elements = await self._discover(url)
+        logger.info(
+            "Discovery complete: %d elements found. Building scripts for %d test cases.",
+            len(elements), len(state.get("test_cases", [])),
+        )
         generation_id = f"gen-{uuid.uuid4()}"
         directory = self.artifact_root / generation_id
         directory.mkdir(parents=True, exist_ok=False)
         scenarios = {str(item["scenario_id"]): item for item in state.get("scenarios", [])}
+        element_dicts = [element.model_dump(mode="json") for element in elements]
         scripts = []
+        skipped_count = 0
         for index, test_case in enumerate(state.get("test_cases", []), start=1):
             if state.get("review_decisions", {}).get(f"testCase:{test_case['test_case_id']}") == "rejected":
                 continue
+
+
+
             script_id = f"pw-{index:03d}-{_safe_name(str(test_case['test_case_id']))}"
             path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
-            source = _python_source(
-                test_case,
-                _best_page_url(test_case, url, [element.model_dump(mode="json") for element in elements]),
-                [element.model_dump(mode="json") for element in elements],
-            )
-            _validate_generated_source(source)
+            try:
+                source = _python_source(
+                    test_case,
+                    _best_page_url(test_case, url, element_dicts),
+                    element_dicts,
+                )
+                # Bug 6 fix: catch per-script validation errors so one bad script
+                # doesn't abort generation of all remaining scripts.
+                _validate_generated_source(source)
+            except (SyntaxError, ValueError) as source_err:
+                logger.warning(
+                    "Script skipped – source validation failed "
+                    "test_case_id=%s error=%s: %s",
+                    test_case["test_case_id"], type(source_err).__name__, source_err,
+                )
+                skipped_count += 1
+                continue
             path.write_text(source, encoding="utf-8")
             scenario = scenarios.get(str(test_case.get("scenario_id")), {})
             scripts.append(
@@ -421,6 +516,22 @@ class AutomationService:
                     user_story_ids=scenario.get("user_story_ids", []),
                 )
             )
+        logger.info(
+            "generate() complete: %d scripts built, %d skipped. generation_id=%s",
+            len(scripts), skipped_count, generation_id,
+        )
+        if not scripts:
+            # Provide a clear, actionable message instead of silent empty list
+            reason = (
+                "The coverage gate filtered all test cases because none of their step "
+                "actions matched any element discovered on the page. Check that the "
+                "application URL is correct and the page is fully rendered, or review "
+                "the test case steps."
+                if element_dicts
+                else "Playwright could not discover any interactive elements on the page. "
+                "Ensure the URL loads a real UI (not a login wall or error page)."
+            )
+            raise AutomationError(f"No scripts could be generated: {reason}")
         response = ScriptGenerationResponse(
             generation_id=generation_id,
             application_url=url,
@@ -517,12 +628,19 @@ class AutomationService:
 
     @staticmethod
     def _locator_phrase(action: str) -> str:
-        ignored = {"click", "press", "select", "choose", "check", "uncheck", "enter", "type", "fill", "the", "button", "link", "field", "dropdown", "checkbox", "radio", "on", "in", "into", "from", "with", "value"}
+        ignored = {
+            "click", "press", "select", "choose", "check", "uncheck", "enter", "type",
+            "fill", "display", "observe", "verify", "view", "attempt", "handle",
+            "switch", "to", "the", "button", "link", "field", "dropdown", "checkbox",
+            "radio", "icon", "control", "option", "on", "in", "into", "from", "with",
+            "value", "page", "load", "layout", "products", "items", "area", "action",
+            "actions", "initial", "state", "by", "for", "a", "an",
+        }
         quoted = re.findall(r"['\"]([^'\"]+)['\"]", action)
         lowered = action.lower()
-        target = quoted[0] if quoted and any(token in lowered for token in ("click", "press")) else re.sub(r"['\"][^'\"]+['\"]", "", action)
+        target = quoted[0] if quoted and any(token in lowered for token in ("click", "press", "select", "choose")) else re.sub(r"['\"][^'\"]+['\"]", "", action)
         words = [word for word in re.findall(r"[A-Za-z0-9]+", target) if word.lower() not in ignored]
-        return " ".join(words[-5:]) or action
+        return " ".join(words[-3:]) or action
 
     @staticmethod
     async def _element_description(locator: Any) -> str:
@@ -547,7 +665,10 @@ class AutomationService:
         for element in discovered_elements:
             identity = " ".join(
                 str(element.get(key) or "")
-                for key in ("name", "label", "test_id", "placeholder", "visible_text")
+                for key in (
+                    "name", "label", "test_id", "placeholder", "visible_text",
+                    "href", "title", "id", "class",
+                )
             )
             score = len(phrase_words & _meaningful_words(identity))
             if score:
@@ -565,6 +686,10 @@ class AutomationService:
             if element.get("placeholder"):
                 candidates.append(
                     page.get_by_placeholder(element["placeholder"], exact=True)
+                )
+            if element.get("visible_text"):
+                candidates.append(
+                    page.get_by_text(element["visible_text"], exact=False)
                 )
         return candidates
 
@@ -587,6 +712,17 @@ class AutomationService:
             page.get_by_test_id(phrase),
             page.get_by_text(pattern, exact=False),
         ])
+        # Word-level fallback for individual key terms
+        words = [w for w in re.findall(r"[A-Za-z0-9]+", phrase) if len(w) > 2]
+        for word in words:
+            word_pat = re.compile(re.escape(word), re.I)
+            for role in roles:
+                candidates.append(page.get_by_role(role, name=word_pat))
+            candidates.append(page.get_by_text(word_pat, exact=False))
+            if hasattr(page, "locator"):
+                candidates.append(page.locator(f"[id*='{word.lower()}']"))
+                candidates.append(page.locator(f"[class*='{word.lower()}']"))
+                candidates.append(page.locator(f"[title*='{word.lower()}']"))
         resolved = []
         for candidate in candidates:
             try:
@@ -632,6 +768,10 @@ class AutomationService:
         values = re.findall(r"['\"]([^'\"]+)['\"]", action)
         desired = values[-1] if values else None
         roles: tuple[str, ...]
+        interactive_tokens = ("click", "press", "select", "choose", "check", "uncheck", "enter", "type", "fill", "radio")
+        if not any(token in lowered for token in interactive_tokens):
+            # Passive / observation step — no element click/fill required
+            return "passive | page state"
         if any(token in lowered for token in ("select", "choose")):
             roles = ("combobox", "radio")
         elif any(token in lowered for token in ("check", "uncheck", "radio")):
@@ -643,7 +783,7 @@ class AutomationService:
                 raise LookupError(f"Input action has no explicit value: '{action}'")
             roles = ("textbox", "spinbutton")
         else:
-            return None
+            roles = ("button", "link")
 
         locators = await self._resolve_locators(
             page, phrase, roles, discovered_elements
@@ -796,6 +936,141 @@ class AutomationService:
         )
         await self._cache_generation(generation_id)
 
+    # ------------------------------------------------------------------
+    # New helpers (requirements 1, 4, 7, 8)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _dismiss_overlays(page: Any) -> None:
+        """Silently dismiss common cookie banners, GDPR dialogs, and modals.
+
+        Every selector attempt is wrapped in try/except so a missing or already-
+        dismissed overlay never interrupts the main test flow.
+        """
+        dismiss_selectors = [
+            "[aria-label*='Accept']",
+            "[aria-label*='Close']",
+            "[aria-label*='Dismiss']",
+            "[id*='cookie'] button",
+            "[id*='consent'] button",
+            "[class*='cookie'] button",
+            "[class*='consent'] button",
+            "[class*='banner'] button",
+            "[class*='modal'] [class*='close']",
+            "button[data-dismiss]",
+            "button[data-action*='close']",
+        ]
+        dismiss_texts = ["Accept", "Accept all", "Accept cookies", "I agree",
+                         "Agree", "Close", "Dismiss", "Got it", "OK"]
+        for selector in dismiss_selectors:
+            try:
+                locator = page.locator(selector).first
+                if await locator.count() and await locator.is_visible():
+                    await locator.click(timeout=2000)
+                    await page.wait_for_timeout(300)
+            except Exception:
+                pass
+        for text in dismiss_texts:
+            try:
+                locator = page.get_by_role("button", name=re.compile(
+                    rf"^{re.escape(text)}$", re.I
+                ))
+                if await locator.count() and await locator.is_visible():
+                    await locator.first.click(timeout=2000)
+                    await page.wait_for_timeout(300)
+            except Exception:
+                pass
+
+    @staticmethod
+    async def _wait_for_page_stable(page: Any) -> None:
+        """Wait for network idle; fall back to domcontentloaded on timeout."""
+        try:
+            await page.wait_for_load_state(
+                "networkidle",
+                timeout=int(min(settings.automation_navigation_timeout_seconds, 15) * 1000),
+            )
+        except Exception:
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+
+    @staticmethod
+    async def _validate_navigation(page: Any, expected_url_prefix: str | None = None) -> None:
+        """Assert the page loaded successfully (non-empty title, optional URL check).
+
+        Raises NavigationError (subclass of AutomationError) on failure.
+        """
+        title = ""
+        try:
+            title = await page.title()
+        except Exception:
+            pass
+        if not title:
+            # Tolerate missing title for SPA apps — check URL instead
+            if expected_url_prefix and not page.url.startswith(expected_url_prefix):
+                raise AutomationError(
+                    f"Navigation failure: unexpected URL {page.url!r}"
+                )
+        if expected_url_prefix and not page.url.startswith(expected_url_prefix.split("//")[0]):
+            raise AutomationError(
+                f"Navigation failure: URL scheme mismatch current={page.url!r}"
+            )
+
+    @staticmethod
+    async def _element_exists(
+        page: Any,
+        phrase: str,
+        discovered_elements: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        """Return True only if a visible element matching *phrase* exists on the page.
+
+        Uses the same scoring logic as _discovered_locator_candidates so this
+        check is consistent with the later _resolve_locators call.
+        """
+        phrase_words = _meaningful_words(phrase)
+        if not phrase_words:
+            return True  # empty phrase → no element required
+        for element in (discovered_elements or []):
+            identity = " ".join(
+                str(element.get(k) or "")
+                for k in ("name", "label", "test_id", "placeholder", "visible_text")
+            )
+            score = len(phrase_words & _meaningful_words(identity))
+            if score == 0:
+                continue
+            # Build the locator and check visibility
+            try:
+                if element.get("test_id"):
+                    locator = page.get_by_test_id(element["test_id"])
+                elif element.get("label"):
+                    locator = page.get_by_label(element["label"], exact=True)
+                elif element.get("role") and element.get("name"):
+                    locator = page.get_by_role(
+                        element["role"], name=element["name"], exact=True
+                    )
+                elif element.get("placeholder"):
+                    locator = page.get_by_placeholder(element["placeholder"], exact=True)
+                else:
+                    continue
+                if await locator.count() and await locator.is_visible():
+                    return True
+            except Exception:
+                continue
+        # Broad text/role fallback
+        pattern = re.compile(re.escape(phrase), re.I)
+        for locator in [
+            page.get_by_text(pattern, exact=False),
+            page.get_by_role("button", name=pattern),
+            page.get_by_role("link", name=pattern),
+        ]:
+            try:
+                if await locator.count() and await locator.is_visible():
+                    return True
+            except Exception:
+                continue
+        return False
+
     async def _assert_expected(self, page: Any, expected_result: str) -> None:
         quoted = re.findall(r"['\"]([^'\"]+)['\"]", expected_result)
         if quoted and any(
@@ -862,11 +1137,17 @@ class AutomationService:
 
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
+            disc_dicts = [
+                item.model_dump(mode="json") for item in response.discovered_elements
+            ]
             for script in response.scripts:
                 test_started = time.perf_counter()
                 console_logs: list[str] = []
                 network_errors: list[str] = []
-                page = await browser.new_page()
+                # ---- Use a browser context so we can capture traces (req 11) ----
+                context = await browser.new_context()
+                await context.tracing.start(screenshots=True, snapshots=True, sources=False)
+                page = await context.new_page()
                 page.on("console", lambda message, logs=console_logs: logs.append(message.text))
                 page.on(
                     "requestfailed",
@@ -879,54 +1160,69 @@ class AutomationService:
                 element = None
                 skyvern_attempted = False
                 skyvern_succeeded = False
-                phase = "Script Generation"
+                failure_category = "Script Generation"
                 try:
                     test_case = cases[script.test_case_id]
                     target_url = _best_page_url(
-                        test_case,
-                        response.application_url,
-                        [item.model_dump(mode="json") for item in response.discovered_elements],
+                        test_case, response.application_url, disc_dicts
                     )
-                    phase = "Navigation"
-                    await page.goto(
-                        target_url,
-                        wait_until="domcontentloaded",
-                        timeout=int(settings.automation_navigation_timeout_seconds * 1000),
-                    )
+                    # ---- Navigation with explicit wait + validation (req 4, 7) ----
+                    failure_category = "Navigation Failure"
+                    try:
+                        await page.goto(
+                            target_url,
+                            wait_until="domcontentloaded",
+                            timeout=int(settings.automation_navigation_timeout_seconds * 1000),
+                        )
+                    except PlaywrightTimeoutError as nav_timeout:
+                        failure_category = "Page Load Timeout"
+                        raise nav_timeout
+                    await self._wait_for_page_stable(page)
+                    await self._validate_navigation(page, target_url)
+                    # ---- Auto-dismiss overlays once after landing (req 8) ----
+                    await self._dismiss_overlays(page)
+
                     per_test_calls = 0
                     for step in test_case.get("steps", []):
                         failed_step = step.get("step_number")
                         expected = step.get("expected_result")
                         action = step.get("action", "")
-                        element = f"Requested target: {self._locator_phrase(action)}"
-                        phase = "Locator"
+                        phrase = self._locator_phrase(action)
+                        element = f"Requested target: {phrase}"
+
+                        # ---- Pre-step overlay dismissal (req 8) ----
+                        await self._dismiss_overlays(page)
+                        # ---- Wait for page to settle before each step (req 4) ----
+                        await self._wait_for_page_stable(page)
+
+                        lowered = action.lower()
+                        failure_category = "Locator Failure"
                         try:
                             page_elements = [
-                                item.model_dump(mode="json")
-                                for item in response.discovered_elements
-                                if not item.page_url or item.page_url == page.url
+                                el for el in disc_dicts
+                                if not el.get("page_url") or el.get("page_url") == page.url
                             ]
                             element = await self._perform(page, action, page_elements)
                         except (LookupError, PlaywrightError, PlaywrightTimeoutError) as action_error:
+                            # Classify timeout separately
+                            if isinstance(action_error, PlaywrightTimeoutError):
+                                failure_category = "Page Load Timeout"
                             action_recovered = False
+                            # ---- Learned-locator retry ----
                             learned_locator = await self._load_learned_locator(
                                 generation, page.url, action
                             )
                             if learned_locator:
                                 try:
-                                    await self._retry_recovered(
-                                        page, learned_locator, action
-                                    )
+                                    await self._retry_recovered(page, learned_locator, action)
                                     element = f"Learned locator: {learned_locator}"
                                     action_recovered = True
                                 except (LookupError, ValueError, PlaywrightError):
-                                    # The page may have changed since the locator
-                                    # was learned; continue to bounded Skyvern recovery.
                                     pass
+                            # ---- Skyvern fallback – only after all Playwright strategies fail (req 6) ----
                             if (
                                 not action_recovered
-                                and
-                                self.skyvern.enabled
+                                and self.skyvern.enabled
                                 and per_test_calls < settings.skyvern_max_calls_per_test
                                 and run_skyvern_calls < settings.skyvern_max_calls_per_run
                             ):
@@ -958,8 +1254,11 @@ class AutomationService:
                                 action_recovered = skyvern_succeeded
                             if not action_recovered:
                                 raise action_error
-                        phase = "Application"
+
+                        # ---- Post-action assertion (req 4) ----
+                        failure_category = "Assertion Failure"
                         await self._assert_expected(page, expected or "")
+
                     results.append(
                         ScriptExecutionResult(
                             script_id=script.script_id,
@@ -971,22 +1270,56 @@ class AutomationService:
                             traceability=self._traceability(script),
                         )
                     )
-                except Exception as exc:
-                    screenshot = generation["directory"] / f"{script.script_id}-failure.png"
+                    # Stop trace cleanly on pass (no need to save)
                     try:
-                        await page.screenshot(path=str(screenshot), full_page=True)
+                        await context.tracing.stop()
                     except Exception:
-                        screenshot = None
+                        pass
+
+                except Exception as exc:
+                    # ---- Classify environment errors (req 10) ----
+                    if isinstance(exc, (ImportError, OSError, PermissionError, EnvironmentError)):
+                        failure_category = "Environment Issue"
+                    elif isinstance(exc, AssertionError):
+                        failure_category = "Assertion Failure"
+
+                    # ---- Screenshot (req 11) ----
+                    screenshot_path: Path | None = None
+                    try:
+                        screenshot_path = generation["directory"] / f"{script.script_id}-failure.png"
+                        await page.screenshot(path=str(screenshot_path), full_page=True)
+                    except Exception:
+                        screenshot_path = None
+
+                    # ---- DOM snapshot (req 11) ----
+                    dom_snapshot_path: Path | None = None
+                    try:
+                        dom_html = await page.content()
+                        dom_snapshot_path = generation["directory"] / f"{script.script_id}-failure-dom.html"
+                        dom_snapshot_path.write_text(dom_html, encoding="utf-8")
+                    except Exception:
+                        dom_snapshot_path = None
+
+                    # ---- Playwright trace (req 11) ----
+                    trace_path: Path | None = None
+                    try:
+                        trace_path = generation["directory"] / f"{script.script_id}-failure-trace.zip"
+                        await context.tracing.stop(path=str(trace_path))
+                    except Exception:
+                        trace_path = None
+
                     failure = FailureAnalysis(
                         test_case_id=script.test_case_id,
                         failed_step=failed_step,
                         expected_result=expected,
                         actual_result=str(exc),
                         failure_reason=type(exc).__name__,
-                        failure_category=phase,
+                        failure_category=failure_category,
                         page_url=page.url,
                         ui_element=element,
-                        screenshot=str(screenshot) if screenshot else None,
+                        screenshot=str(screenshot_path) if screenshot_path else None,
+                        dom_snapshot=str(dom_snapshot_path) if dom_snapshot_path else None,
+                        trace_path=str(trace_path) if trace_path else None,
                         console_logs=console_logs,
                         network_errors=network_errors,
                         stack_trace=traceback.format_exc(),
@@ -1007,7 +1340,14 @@ class AutomationService:
                         )
                     )
                 finally:
-                    await page.close()
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
             await browser.close()
         return self._save_report(request, results, time.perf_counter() - started, generation["directory"], generation)
 

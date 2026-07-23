@@ -159,10 +159,20 @@ function friendlyFailureMessage(errorMessage?: string, failure?: FailureAnalysis
   }
 
   switch (failure?.failure_category) {
+    case 'Locator Failure':
     case 'Locator':
       return 'The test could not find or interact with the expected page element.';
+    case 'Navigation Failure':
     case 'Navigation':
       return 'The test could not open or navigate to the expected page.';
+    case 'Application Feature Missing':
+      return 'Feature not found in application: the required UI element or control is missing.';
+    case 'Page Load Timeout':
+      return 'The test timed out while waiting for page navigation, network idle, or element visibility.';
+    case 'Assertion Failure':
+      return 'The application result did not match what this test expected.';
+    case 'Environment Issue':
+      return 'An environment or execution system error occurred while running the test.';
     case 'Application':
       return 'The application did not respond as expected during this test.';
     case 'Script Generation':

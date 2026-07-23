@@ -60,10 +60,27 @@ class FailureAnalysis(BaseModel):
     expected_result: str | None = None
     actual_result: str | None = None
     failure_reason: str
-    failure_category: Literal["Script Generation", "Locator", "Navigation", "Application"] = "Application"
+    # Precise failure categories (legacy short labels kept for backwards compat
+    # so that existing stored reports and mock-mode paths still deserialise).
+    failure_category: Literal[
+        # Precise categories (requirements 10)
+        "Locator Failure",
+        "Navigation Failure",
+        "Application Feature Missing",
+        "Page Load Timeout",
+        "Assertion Failure",
+        "Environment Issue",
+        # Legacy labels
+        "Script Generation",
+        "Locator",
+        "Navigation",
+        "Application",
+    ] = "Application"
     page_url: str | None = None
     ui_element: str | None = None
     screenshot: str | None = None
+    dom_snapshot: str | None = None   # path to saved DOM HTML snapshot
+    trace_path: str | None = None     # path to saved Playwright trace zip
     console_logs: list[str] = Field(default_factory=list)
     network_errors: list[str] = Field(default_factory=list)
     stack_trace: str | None = None
