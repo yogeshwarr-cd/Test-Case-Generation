@@ -86,6 +86,93 @@ class FailureAnalysis(BaseModel):
     stack_trace: str | None = None
     skyvern_attempted: bool = False
     skyvern_succeeded: bool = False
+    intelligence: FailureIntelligence | None = None
+
+
+class RequirementMapping(BaseModel):
+    epic: list[dict[str, str]] = Field(default_factory=list)
+    feature: list[dict[str, str]] = Field(default_factory=list)
+    user_story: list[dict[str, str]] = Field(default_factory=list)
+    acceptance_criteria: list[dict[str, str]] = Field(default_factory=list)
+    scenario: list[dict[str, str]] = Field(default_factory=list)
+    test_case: list[dict[str, str]] = Field(default_factory=list)
+    requirement_ids: list[str] = Field(default_factory=list)
+
+
+class FailureEvidence(BaseModel):
+    screenshot: str | None = None
+    dom_snapshot: str | None = None
+    playwright_trace: str | None = None
+    failed_locator: str | None = None
+    page_url: str | None = None
+    console_findings: list[str] = Field(default_factory=list)
+    network_findings: list[str] = Field(default_factory=list)
+    evidence_summary: list[str] = Field(default_factory=list)
+
+
+class DeveloperImplementationPlan(BaseModel):
+    ticket_title: str
+    feature_affected: str
+    user_story_reference: list[str] = Field(default_factory=list)
+    test_scenario_reference: str
+    test_case_reference: str
+    problem_summary: str
+    missing_functionality: str = ""
+    root_cause_analysis: str
+    expected_behavior: str
+    actual_behavior: str
+    ui_changes_required: list[str] = Field(default_factory=list)
+    backend_api_changes_required: list[str] = Field(default_factory=list)
+    database_changes: list[str] = Field(default_factory=list)
+    validation_rules: list[str] = Field(default_factory=list)
+    acceptance_criteria_to_satisfy: list[str] = Field(default_factory=list)
+    suggested_implementation_steps: list[str] = Field(default_factory=list)
+    priority: Literal["Critical", "High", "Medium", "Low"]
+    estimated_development_effort: str
+    jira_description: str
+
+
+class AutomationRecommendation(BaseModel):
+    script_changes: list[str] = Field(default_factory=list)
+    locator_strategy: list[str] = Field(default_factory=list)
+    wait_strategy: list[str] = Field(default_factory=list)
+    assertion_strategy: list[str] = Field(default_factory=list)
+    navigation_strategy: list[str] = Field(default_factory=list)
+
+
+class RetestStrategy(BaseModel):
+    reuse_generation_id: bool = True
+    original_script_id: str
+    steps: list[str] = Field(default_factory=list)
+    verification_scope: list[str] = Field(default_factory=list)
+    acceptance_criteria_checklist: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FailureIntelligence(BaseModel):
+    root_cause_category: Literal[
+        "Missing application functionality",
+        "Incorrect business logic",
+        "UI implementation issue",
+        "Locator or automation issue",
+        "Requirement mismatch",
+        "Navigation problem",
+        "Validation issue",
+        "API/Backend failure",
+        "Environment or configuration issue",
+    ]
+    confidence: float = Field(ge=0, le=1)
+    is_application_issue: bool
+    deviation_step: dict[str, Any] = Field(default_factory=dict)
+    requirement_mapping: RequirementMapping
+    root_cause_analysis: str
+    expected_behavior: str
+    actual_behavior: str
+    evidence: FailureEvidence
+    developer_implementation_plan: DeveloperImplementationPlan | None = None
+    automation_recommendation: AutomationRecommendation | None = None
+    acceptance_criteria_checklist: list[dict[str, Any]] = Field(default_factory=list)
+    recommended_fix: list[str] = Field(default_factory=list)
+    retest_strategy: RetestStrategy
 
 
 class ScriptExecutionResult(BaseModel):
@@ -114,37 +201,11 @@ class ExecutionReport(BaseModel):
     results: list[ScriptExecutionResult]
     rejected_results: list[dict[str, Any]] = Field(default_factory=list)
     overall_summary: dict[str, Any] = Field(default_factory=dict)
-
-
-class CompareExecutionRequest(BaseModel):
-    workflow_id: UUID
-
-
-class TraceabilityItem(BaseModel):
-    artifact_type: Literal["scenario", "test_case"]
-    artifact_id: str
-    title: str
-    status: Literal["covered", "partial", "missing"]
-    coverage_percentage: float
-    matched_script_ids: list[str] = Field(default_factory=list)
-    matched_evidence: list[str] = Field(default_factory=list)
-    gaps: list[str] = Field(default_factory=list)
-
-
-class TraceabilityReport(BaseModel):
-    comparison_id: str
-    execution_id: str
-    generation_id: str
-    workflow_id: UUID
-    total_scenarios: int
-    total_test_cases: int
-    covered: int
-    partial: int
-    missing: int
-    overall_coverage_percentage: float
-    items: list[TraceabilityItem] = Field(default_factory=list)
-    uncovered_ui_scripts: list[dict[str, Any]] = Field(default_factory=list)
-    summary: str
+    requirement_coverage: dict[str, Any] = Field(default_factory=dict)
+    failed_requirement_mapping: list[dict[str, Any]] = Field(default_factory=list)
+    developer_ready_tickets: list[DeveloperImplementationPlan] = Field(default_factory=list)
+    developer_execution_reports: list[dict[str, Any]] = Field(default_factory=list)
+    retest_verification: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AutomationHealth(BaseModel):

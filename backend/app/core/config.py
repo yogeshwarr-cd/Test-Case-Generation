@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     automation_artifacts_path: str = "./artifacts/automation"
     automation_navigation_timeout_seconds: float = 30.0
     automation_action_timeout_seconds: float = 10.0
+    automation_navigation_settle_timeout_seconds: float = 3.0
+    automation_wait_for_network_idle: bool = False
     skyvern_fallback_enabled: bool = False
     skyvern_integration_mode: str = "self_hosted"
     skyvern_base_url: str = "http://localhost:8000"

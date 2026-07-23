@@ -209,6 +209,108 @@ export interface FailureAnalysis {
   stack_trace?: string;
   skyvern_attempted: boolean;
   skyvern_succeeded: boolean;
+  intelligence?: FailureIntelligence;
+}
+
+export interface RequirementMapping {
+  epic: Array<{ id: string; title: string }>;
+  feature: Array<{ id: string; title: string }>;
+  user_story: Array<{ id: string; title: string }>;
+  acceptance_criteria: Array<{ id: string; title: string }>;
+  scenario: Array<{ id: string; title: string }>;
+  test_case: Array<{ id: string; title: string }>;
+  requirement_ids: string[];
+}
+
+export interface DeveloperImplementationPlan {
+  ticket_title: string;
+  feature_affected: string;
+  user_story_reference: string[];
+  test_scenario_reference: string;
+  test_case_reference: string;
+  problem_summary: string;
+  missing_functionality: string;
+  root_cause_analysis: string;
+  expected_behavior: string;
+  actual_behavior: string;
+  ui_changes_required: string[];
+  backend_api_changes_required: string[];
+  database_changes: string[];
+  validation_rules: string[];
+  acceptance_criteria_to_satisfy: string[];
+  suggested_implementation_steps: string[];
+  priority: 'Critical' | 'High' | 'Medium' | 'Low';
+  estimated_development_effort: string;
+  jira_description: string;
+}
+
+export interface FailureIntelligence {
+  root_cause_category:
+    | 'Missing application functionality'
+    | 'Incorrect business logic'
+    | 'UI implementation issue'
+    | 'Locator or automation issue'
+    | 'Requirement mismatch'
+    | 'Navigation problem'
+    | 'Validation issue'
+    | 'API/Backend failure'
+    | 'Environment or configuration issue';
+  confidence: number;
+  is_application_issue: boolean;
+  deviation_step: Record<string, unknown>;
+  requirement_mapping: RequirementMapping;
+  root_cause_analysis: string;
+  expected_behavior: string;
+  actual_behavior: string;
+  evidence: {
+    screenshot?: string;
+    dom_snapshot?: string;
+    playwright_trace?: string;
+    failed_locator?: string;
+    page_url?: string;
+    console_findings: string[];
+    network_findings: string[];
+    evidence_summary: string[];
+  };
+  developer_implementation_plan?: DeveloperImplementationPlan;
+  automation_recommendation?: {
+    script_changes: string[];
+    locator_strategy: string[];
+    wait_strategy: string[];
+    assertion_strategy: string[];
+    navigation_strategy: string[];
+  };
+  acceptance_criteria_checklist: Array<{ id: string; criterion: string; satisfied: boolean; verification: string }>;
+  recommended_fix: string[];
+  retest_strategy: {
+    reuse_generation_id: boolean;
+    original_script_id: string;
+    steps: string[];
+    verification_scope: string[];
+    acceptance_criteria_checklist: Array<Record<string, unknown>>;
+  };
+}
+
+export interface DeveloperExecutionReport {
+  issue_title: string;
+  affected_feature_user_story: {
+    feature: string;
+    user_stories: string[];
+  };
+  problem_description: string;
+  expected_vs_actual_application_behavior: {
+    expected: string;
+    actual: string;
+  };
+  missing_functionality: string;
+  developer_implementation_requirements: {
+    ui: string[];
+    backend_api: string[];
+    validation: string[];
+    database: string[];
+  };
+  acceptance_criteria: Array<{ id: string; title: string }>;
+  priority: 'Critical' | 'High' | 'Medium' | 'Low';
 }
 
 export interface ExecutionReport {
@@ -250,34 +352,18 @@ export interface ExecutionReport {
     skipped: number;
     rejected: number;
     pass_rate: number;
+    application_failures?: number;
+    automation_failures?: number;
+    verified_fixes?: number;
   };
-}
-
-export interface TraceabilityReport {
-  comparison_id: string;
-  execution_id: string;
-  generation_id: string;
-  workflow_id: string;
-  total_scenarios: number;
-  total_test_cases: number;
-  covered: number;
-  partial: number;
-  missing: number;
-  overall_coverage_percentage: number;
-  summary: string;
-  items: Array<{
-    artifact_type: 'scenario' | 'test_case';
-    artifact_id: string;
-    title: string;
-    status: 'covered' | 'partial' | 'missing';
-    coverage_percentage: number;
-    matched_script_ids: string[];
-    matched_evidence: string[];
-    gaps: string[];
-  }>;
-  uncovered_ui_scripts: Array<{
-    script_id: string;
-    page_url: string;
-    reason: string;
-  }>;
+  requirement_coverage: {
+    total_mapped_requirements: number;
+    executed_requirement_references: string[];
+    failed_requirement_references: string[];
+    covered_percentage: number;
+  };
+  failed_requirement_mapping: Array<Record<string, unknown>>;
+  developer_ready_tickets: DeveloperImplementationPlan[];
+  developer_execution_reports: DeveloperExecutionReport[];
+  retest_verification: Array<{ script_id: string; previous_status: string; current_status: string; verified: boolean; message: string }>;
 }

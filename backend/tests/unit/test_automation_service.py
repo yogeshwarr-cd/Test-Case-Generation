@@ -5,7 +5,9 @@ import pytest
 from app.schemas.automation_schema import (
     DiscoveredElement,
     ExecuteScriptsRequest,
+    FailureAnalysis,
     GenerateScriptsRequest,
+    ScriptExecutionResult,
 )
 from app.services.automation_service import (
     SCRIPT_ARTIFACT_SUFFIX,
@@ -207,6 +209,50 @@ def test_registration_case_selects_discovered_signup_page():
 
 
 @pytest.mark.asyncio
+async def test_page_settle_does_not_wait_for_network_idle_by_default(monkeypatch):
+    calls = []
+
+    class Page:
+        async def wait_for_load_state(self, state, timeout):
+            calls.append((state, timeout))
+
+    monkeypatch.setattr(
+        "app.services.automation_service.settings.automation_wait_for_network_idle",
+        False,
+    )
+    monkeypatch.setattr(
+        "app.services.automation_service.settings.automation_navigation_settle_timeout_seconds",
+        3,
+    )
+
+    await AutomationService._wait_for_page_stable(Page())
+
+    assert calls == [("domcontentloaded", 3000)]
+
+
+@pytest.mark.asyncio
+async def test_network_idle_wait_is_short_and_explicitly_configurable(monkeypatch):
+    calls = []
+
+    class Page:
+        async def wait_for_load_state(self, state, timeout):
+            calls.append((state, timeout))
+
+    monkeypatch.setattr(
+        "app.services.automation_service.settings.automation_wait_for_network_idle",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.automation_service.settings.automation_navigation_settle_timeout_seconds",
+        2,
+    )
+
+    await AutomationService._wait_for_page_stable(Page())
+
+    assert calls == [("domcontentloaded", 2000), ("networkidle", 2000)]
+
+
+@pytest.mark.asyncio
 async def test_generation_reads_completed_workflow_without_mutating_it(monkeypatch, tmp_path):
     workflow_id = uuid.uuid4()
     state = {
@@ -238,10 +284,8 @@ async def test_generation_reads_completed_workflow_without_mutating_it(monkeypat
         GenerateScriptsRequest(workflow_id=workflow_id, application_url="https://example.com")
     )
     assert response.reachable is True
-    assert response.scripts[0].requirement_ids == []
-    assert response.scripts[0].user_story_ids == []
-    assert response.scripts[0].scenario_id == "ui-discovery"
-    assert "TC-1" not in response.scripts[0].source
+    assert response.scripts[0].requirement_ids == ["REQ-1"]
+    assert response.scripts[0].user_story_ids == ["US-1"]
     assert repr(state) == original
     assert (tmp_path / response.generation_id / f"{response.scripts[0].script_id}{SCRIPT_ARTIFACT_SUFFIX}").is_file()
     assert not list((tmp_path / response.generation_id).glob("*.py"))
@@ -281,6 +325,113 @@ async def test_manual_mode_skips_execution_and_produces_report(monkeypatch, tmp_
     )
     assert report.total_scripts == 1
     assert report.skipped_scripts == 1
-    assert report.results[0].traceability["test_case_id"] == "ui-page-001"
+    assert report.results[0].traceability["test_case_id"] == "TC-1"
     reloaded_report = AutomationService().report(report.execution_id)
     assert reloaded_report.execution_id == report.execution_id
+
+
+def test_failed_execution_generates_developer_ticket_and_retest_verification(
+    monkeypatch, tmp_path
+):
+    workflow_id = uuid.uuid4()
+    service = AutomationService()
+    monkeypatch.setattr(
+        "app.services.automation_service.settings.automation_artifacts_path",
+        str(tmp_path),
+    )
+    generation_id = "gen-intelligence"
+    generation_directory = tmp_path / generation_id
+    generation_directory.mkdir()
+    workflow = {
+        "workflow_id": workflow_id,
+        "input": {
+            "epics": ["EP-1 Commerce"],
+            "features": ["FEAT-1 Product search"],
+            "user_stories": ["US-1 Search products"],
+            "acceptance_criteria": ["AC-1 US-1 matching products are displayed"],
+        },
+        "scenarios": [
+            {
+                "scenario_id": "SC-1",
+                "title": "Search products",
+                "feature_ids": ["FEAT-1"],
+                "user_story_ids": ["US-1"],
+                "acceptance_criteria_ids": ["AC-1"],
+            }
+        ],
+        "test_cases": [
+            {
+                "test_case_id": "TC-1",
+                "scenario_id": "SC-1",
+                "title": "Search returns matching products",
+                "priority": "high",
+                "requirement_ids": ["REQ-1"],
+                "acceptance_criteria_ids": ["AC-1"],
+                "steps": [
+                    {
+                        "step_number": 1,
+                        "action": "Search for Lenovo",
+                        "expected_result": "Matching products are displayed",
+                    }
+                ],
+            }
+        ],
+    }
+    failed_result = ScriptExecutionResult(
+        script_id="pw-001",
+        script_name="Search returns matching products",
+        test_case_id="TC-1",
+        scenario_id="SC-1",
+        status="failed",
+        duration_seconds=1,
+        error_message="Expected matching products",
+        failure=FailureAnalysis(
+            test_case_id="TC-1",
+            failed_step=1,
+            expected_result="Matching products are displayed",
+            actual_result="No products were displayed",
+            failure_reason="AssertionError",
+            failure_category="Assertion Failure",
+        ),
+        traceability={
+            "requirements": ["REQ-1"],
+            "user_stories": ["US-1"],
+        },
+    )
+    report = service._save_report(
+        ExecuteScriptsRequest(generation_id=generation_id, mode="automated"),
+        [failed_result],
+        1,
+        generation_directory,
+        {"workflow": workflow},
+    )
+
+    intelligence = report.results[0].failure.intelligence
+    assert intelligence is not None
+    assert intelligence.root_cause_category == "Incorrect business logic"
+    assert intelligence.requirement_mapping.user_story[0]["id"] == "US-1"
+    assert intelligence.developer_implementation_plan is not None
+    assert "Matching products are displayed" in (
+        intelligence.developer_implementation_plan.missing_functionality
+    )
+    assert report.developer_ready_tickets[0].test_case_reference == "TC-1"
+    assert report.failed_requirement_mapping[0]["scenario_id"] == "SC-1"
+
+    passed_result = ScriptExecutionResult(
+        script_id="pw-001",
+        script_name="Search returns matching products",
+        test_case_id="TC-1",
+        scenario_id="SC-1",
+        status="passed",
+        duration_seconds=1,
+    )
+    retest = service._save_report(
+        ExecuteScriptsRequest(generation_id=generation_id, mode="automated"),
+        [passed_result],
+        1,
+        generation_directory,
+        {"workflow": workflow},
+    )
+    assert retest.retest_verification[0]["verified"] is True
+    assert retest.developer_execution_reports[0]["missing_functionality"] == "None identified."
+    assert retest.developer_execution_reports[0]["priority"] == "Low"
