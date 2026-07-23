@@ -91,9 +91,12 @@ class ExecutionReport(BaseModel):
     passed_scripts: int
     failed_scripts: int
     skipped_scripts: int
+    rejected_scripts: int = 0
     execution_time_seconds: float
     success_percentage: float
     results: list[ScriptExecutionResult]
+    rejected_results: list[dict[str, Any]] = Field(default_factory=list)
+    overall_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class AutomationHealth(BaseModel):

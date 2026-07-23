@@ -298,6 +298,7 @@ class AutomationService:
                     {key:value for key,value in item.items() if key != "project_id"}
                     for item in state.get("test_cases", [])
                 ],
+                "review_decisions": state.get("review_decisions", {}),
             },
         )
         cached = await cache.get_json(script_cache_key)
@@ -336,6 +337,8 @@ class AutomationService:
         scenarios = {str(item["scenario_id"]): item for item in state.get("scenarios", [])}
         scripts = []
         for index, test_case in enumerate(state.get("test_cases", []), start=1):
+            if state.get("review_decisions", {}).get(f"testCase:{test_case['test_case_id']}") == "rejected":
+                continue
             script_id = f"pw-{index:03d}-{_safe_name(str(test_case['test_case_id']))}"
             path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
             source = _python_source(
@@ -618,7 +621,7 @@ class AutomationService:
                 )
                 for script in response.scripts
             ]
-            return self._save_report(request, results, 0, generation["directory"])
+            return self._save_report(request, results, 0, generation["directory"], generation)
 
         if settings.app_mock_mode:
             results = [
@@ -633,7 +636,7 @@ class AutomationService:
                 )
                 for script in response.scripts
             ]
-            return self._save_report(request, results, 0.01 * len(results), generation["directory"])
+            return self._save_report(request, results, 0.01 * len(results), generation["directory"], generation)
 
         started = time.perf_counter()
         results: list[ScriptExecutionResult] = []
@@ -759,7 +762,7 @@ class AutomationService:
                 finally:
                     await page.close()
             await browser.close()
-        return self._save_report(request, results, time.perf_counter() - started, generation["directory"])
+        return self._save_report(request, results, time.perf_counter() - started, generation["directory"], generation)
 
     @staticmethod
     def _traceability(script: GeneratedScript) -> dict[str, Any]:
@@ -777,11 +780,33 @@ class AutomationService:
         results: list[ScriptExecutionResult],
         duration: float,
         directory: Path,
+        generation: dict[str, Any],
     ) -> ExecutionReport:
         execution_id = f"exec-{uuid.uuid4()}"
         passed = sum(result.status == "passed" for result in results)
         failed = sum(result.status == "failed" for result in results)
         skipped = sum(result.status == "skipped" for result in results)
+        workflow = generation.get("workflow", {})
+        decisions = workflow.get("review_decisions", {})
+        rejected_ids = {
+            key.split(":", 1)[1] for key, decision in decisions.items()
+            if key.startswith("testCase:") and decision == "rejected"
+        }
+        rejected_results = [
+            {
+                "test_case_id": str(item.get("test_case_id")),
+                "test_case_name": str(item.get("title") or item.get("test_case_id")),
+                "status": "rejected/unsupported",
+                "reason": "Rejected during test-case review",
+                "duration_seconds": 0,
+                "screenshot": None,
+                "logs": [],
+            }
+            for item in workflow.get("test_cases", [])
+            if str(item.get("test_case_id")) in rejected_ids
+        ]
+        rejected = len(rejected_results)
+        overall_total = len(results) + rejected
         report = ExecutionReport(
             execution_id=execution_id,
             generation_id=request.generation_id,
@@ -790,9 +815,20 @@ class AutomationService:
             passed_scripts=passed,
             failed_scripts=failed,
             skipped_scripts=skipped,
+            rejected_scripts=rejected,
             execution_time_seconds=round(duration, 3),
             success_percentage=round((passed / len(results) * 100) if results else 0, 2),
             results=results,
+            rejected_results=rejected_results,
+            overall_summary={
+                "total_tests": overall_total,
+                "executed_tests": len(results),
+                "passed": passed,
+                "failed": failed,
+                "skipped": skipped,
+                "rejected": rejected,
+                "pass_rate": round((passed / overall_total * 100) if overall_total else 0, 2),
+            },
         )
         self._reports[execution_id] = report
         path = directory / f"{execution_id}.json"

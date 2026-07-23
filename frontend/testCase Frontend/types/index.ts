@@ -200,6 +200,7 @@ export interface ExecutionReport {
   passed_scripts: number;
   failed_scripts: number;
   skipped_scripts: number;
+  rejected_scripts: number;
   execution_time_seconds: number;
   success_percentage: number;
   results: Array<{
@@ -213,4 +214,22 @@ export interface ExecutionReport {
     failure?: FailureAnalysis;
     traceability: Record<string, unknown>;
   }>;
+  rejected_results: Array<{
+    test_case_id: string;
+    test_case_name: string;
+    status: 'rejected/unsupported';
+    reason: string;
+    duration_seconds: number;
+    screenshot?: string;
+    logs: string[];
+  }>;
+  overall_summary: {
+    total_tests: number;
+    executed_tests: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+    rejected: number;
+    pass_rate: number;
+  };
 }
