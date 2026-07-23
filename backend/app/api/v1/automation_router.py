@@ -1,7 +1,11 @@
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
-from app.schemas.automation_schema import ExecuteScriptsRequest, GenerateScriptsRequest
+from app.schemas.automation_schema import (
+    CompareExecutionRequest,
+    ExecuteScriptsRequest,
+    GenerateScriptsRequest,
+)
 from app.services.automation_service import automation_service
 
 router = APIRouter(prefix="/automation", tags=["Test automation"])
@@ -12,7 +16,7 @@ async def health():
     return await automation_service.health()
 
 
-@router.post("/scripts/generate", summary="Generate Playwright scripts from validated test cases")
+@router.post("/scripts/generate", summary="Crawl the application and generate UI-derived Playwright scripts")
 async def generate_scripts(request: GenerateScriptsRequest):
     return await automation_service.generate(request)
 
@@ -31,3 +35,11 @@ async def execute_scripts(request: ExecuteScriptsRequest):
 @router.get("/executions/{execution_id}", summary="Get execution dashboard data")
 async def execution_report(execution_id: str):
     return automation_service.report(execution_id)
+
+
+@router.post(
+    "/executions/{execution_id}/compare",
+    summary="Compare executed UI-derived scripts with generated scenarios and test cases",
+)
+async def compare_execution(execution_id: str, request: CompareExecutionRequest):
+    return await automation_service.compare(execution_id, request.workflow_id)

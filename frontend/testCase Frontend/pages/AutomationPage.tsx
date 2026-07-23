@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Download, LoaderCircle, Play, XCircle } from 'lucide-react';
+import { CheckCircle2, Download, GitCompareArrows, LoaderCircle, Play, XCircle } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
-import type { ExecutionReport, FailureAnalysis, ScriptGeneration } from '../types';
+import type { ExecutionReport, FailureAnalysis, ScriptGeneration, TraceabilityReport } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
 export function AutomationPage() {
@@ -13,6 +13,7 @@ export function AutomationPage() {
   const [applicationUrl, setApplicationUrl] = useState('');
   const [generation, setGeneration] = useState<ScriptGeneration | null>(null);
   const [report, setReport] = useState<ExecutionReport | null>(null);
+  const [comparison, setComparison] = useState<TraceabilityReport | null>(null);
   const [mode, setMode] = useState<'automated' | 'manual'>('automated');
   const [selectedScript, setSelectedScript] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -23,7 +24,7 @@ export function AutomationPage() {
 
   const generate = async () => {
     if (!workflowId || !applicationUrl.trim()) return;
-    setBusy(true); setError(''); setReport(null); setShowTestReport(false);
+    setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false);
     try {
       setGeneration(await testCaseApi.generateScripts(workflowId, applicationUrl.trim()));
       setSelectedScript(0);
@@ -33,7 +34,7 @@ export function AutomationPage() {
 
   const execute = async () => {
     if (!generation) return;
-    setBusy(true); setError(''); setShowTestReport(false);
+    setBusy(true); setError(''); setComparison(null); setShowTestReport(false);
     try { setReport(await testCaseApi.executeScripts(generation.generation_id, mode)); }
     catch (requestError) {
       if (requestError instanceof Error && requestError.message.includes('(404)') && workflowId && applicationUrl.trim()) {
@@ -48,6 +49,14 @@ export function AutomationPage() {
     finally { setBusy(false); }
   };
 
+  const compare = async () => {
+    if (!report || !workflowId) return;
+    setBusy(true); setError('');
+    try { setComparison(await testCaseApi.compareExecution(report.execution_id, workflowId)); }
+    catch (requestError) { setError(friendlyError(requestError)); }
+    finally { setBusy(false); }
+  };
+
   if (!workflowId) return <StatePanel type="error" title="No completed workflow selected" message="Return to results and choose Proceed to Test Scripts." />;
 
   const script = generation?.scripts[selectedScript];
@@ -56,7 +65,7 @@ export function AutomationPage() {
       <div>
         <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Playwright automation</p>
         <h1 className="mt-2 text-2xl font-bold">Generate and execute test scripts</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Playwright remains the primary engine. Optional Skyvern recovery is limited to failed locator actions.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Scripts are generated independently from the crawled application UI. Requirements are used only after execution for traceability analysis.</p>
       </div>
 
       {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600">{error}</div>}
@@ -96,9 +105,18 @@ export function AutomationPage() {
         </>
       )}
 
-      {report && <><ExecutionDashboard report={report} /><div className="flex justify-end"><button onClick={() => setShowTestReport(true)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><Download className="h-4 w-4" /> Generate Test Report</button></div>{showTestReport && <DetailedTestReport report={report} />}</>}
+      {report && <><ExecutionDashboard report={report} /><div className="flex flex-wrap justify-end gap-3">{mode === 'automated' && <button disabled={busy} onClick={compare} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <GitCompareArrows className="h-4 w-4" />} Compare with Test Cases &amp; Scenarios</button>}<button onClick={() => setShowTestReport(true)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><Download className="h-4 w-4" /> Generate Test Report</button></div>{comparison && <TraceabilityDashboard report={comparison} />}{showTestReport && <DetailedTestReport report={report} />}</>}
     </div>
   );
+}
+
+function TraceabilityDashboard({ report }: { report: TraceabilityReport }) {
+  return <section className="space-y-4 rounded-2xl border border-border bg-card p-5">
+    <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Post-execution traceability</p><h2 className="mt-1 text-xl font-bold">Test case and scenario comparison</h2><p className="mt-1 text-sm text-muted-foreground">{report.summary}</p></div>
+    <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6"><Metric label="Scenarios" value={report.total_scenarios} /><Metric label="Test cases" value={report.total_test_cases} /><Metric label="Covered" value={report.covered} /><Metric label="Partial" value={report.partial} /><Metric label="Missing" value={report.missing} /><Metric label="Coverage" value={`${report.overall_coverage_percentage}%`} /></div>
+    <div className="space-y-3">{report.items.map((item) => <article key={`${item.artifact_type}-${item.artifact_id}`} className="rounded-xl border border-border p-4"><div className="flex flex-wrap justify-between gap-2"><div><span className="text-xs font-bold uppercase text-muted-foreground">{item.artifact_type.replace('_', ' ')}</span><h3 className="font-semibold">{item.title}</h3></div><span className={`text-sm font-bold ${item.status === 'covered' ? 'text-green-600' : item.status === 'partial' ? 'text-amber-600' : 'text-red-600'}`}>{item.status} · {item.coverage_percentage}%</span></div>{item.matched_script_ids.length > 0 && <p className="mt-2 text-sm">Matched scripts: {item.matched_script_ids.join(', ')}</p>}{item.gaps.length > 0 && <p className="mt-2 text-sm text-muted-foreground">Gaps: {item.gaps.join(', ')}</p>}</article>)}</div>
+    {report.uncovered_ui_scripts.length > 0 && <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4"><h3 className="font-semibold">Executed UI without requirement coverage</h3>{report.uncovered_ui_scripts.map((item) => <p key={item.script_id} className="mt-2 text-sm">{item.script_id} · {item.page_url}</p>)}</div>}
+  </section>;
 }
 
 function ExecutionDashboard({ report }: { report: ExecutionReport }) {

@@ -252,3 +252,32 @@ export interface ExecutionReport {
     pass_rate: number;
   };
 }
+
+export interface TraceabilityReport {
+  comparison_id: string;
+  execution_id: string;
+  generation_id: string;
+  workflow_id: string;
+  total_scenarios: number;
+  total_test_cases: number;
+  covered: number;
+  partial: number;
+  missing: number;
+  overall_coverage_percentage: number;
+  summary: string;
+  items: Array<{
+    artifact_type: 'scenario' | 'test_case';
+    artifact_id: string;
+    title: string;
+    status: 'covered' | 'partial' | 'missing';
+    coverage_percentage: number;
+    matched_script_ids: string[];
+    matched_evidence: string[];
+    gaps: string[];
+  }>;
+  uncovered_ui_scripts: Array<{
+    script_id: string;
+    page_url: string;
+    reason: string;
+  }>;
+}

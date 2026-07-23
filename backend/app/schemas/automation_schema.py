@@ -116,6 +116,37 @@ class ExecutionReport(BaseModel):
     overall_summary: dict[str, Any] = Field(default_factory=dict)
 
 
+class CompareExecutionRequest(BaseModel):
+    workflow_id: UUID
+
+
+class TraceabilityItem(BaseModel):
+    artifact_type: Literal["scenario", "test_case"]
+    artifact_id: str
+    title: str
+    status: Literal["covered", "partial", "missing"]
+    coverage_percentage: float
+    matched_script_ids: list[str] = Field(default_factory=list)
+    matched_evidence: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+
+
+class TraceabilityReport(BaseModel):
+    comparison_id: str
+    execution_id: str
+    generation_id: str
+    workflow_id: UUID
+    total_scenarios: int
+    total_test_cases: int
+    covered: int
+    partial: int
+    missing: int
+    overall_coverage_percentage: float
+    items: list[TraceabilityItem] = Field(default_factory=list)
+    uncovered_ui_scripts: list[dict[str, Any]] = Field(default_factory=list)
+    summary: str
+
+
 class AutomationHealth(BaseModel):
     status: Literal["healthy", "degraded", "disabled"]
     playwright_available: bool

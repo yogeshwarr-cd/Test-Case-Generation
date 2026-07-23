@@ -28,6 +28,8 @@ from app.schemas.automation_schema import (
     GeneratedScript,
     ScriptExecutionResult,
     ScriptGenerationResponse,
+    TraceabilityItem,
+    TraceabilityReport,
 )
 from app.services.skyvern_service import SkyvernAdapter
 from app.services.cache_service import cache
@@ -294,10 +296,63 @@ def test_{_safe_name(test_case["test_case_id"]).replace("-", "_")}(page: Page):
 '''
 
 
+def _ui_python_source(
+    script_id: str,
+    base_url: str,
+    page_url: str,
+    elements: list[dict[str, Any]],
+) -> str:
+    """Render a deterministic script using only the crawled UI catalogue."""
+    compact = [
+        {
+            key: item.get(key)
+            for key in (
+                "role", "name", "label", "test_id", "tag", "input_type",
+                "placeholder", "visible_text",
+            )
+            if item.get(key) not in (None, "")
+        }
+        for item in elements[:100]
+    ]
+    return f'''"""UI-derived Playwright script. No requirement artifacts were used."""
+import re
+from playwright.sync_api import Page, expect
+
+BASE_URL = {base_url!r}
+PAGE_URL = {page_url!r}
+UI_ELEMENTS = {pformat(compact, width=100, sort_dicts=False)}
+
+
+def locator_for(page: Page, element: dict):
+    if element.get("test_id"):
+        return page.get_by_test_id(element["test_id"]).first
+    if element.get("label"):
+        return page.get_by_label(element["label"], exact=True).first
+    if element.get("role") and element.get("name"):
+        return page.get_by_role(element["role"], name=element["name"], exact=True).first
+    if element.get("placeholder"):
+        return page.get_by_placeholder(element["placeholder"], exact=True).first
+    text = element.get("visible_text") or element.get("name")
+    if text:
+        return page.get_by_text(re.compile(re.escape(str(text)[:120]), re.I), exact=False).first
+    return page.locator(element.get("tag") or "body").first
+
+
+def test_{_safe_name(script_id).replace("-", "_")}(page: Page):
+    page.goto(PAGE_URL, wait_until="domcontentloaded")
+    expect(page.locator("body")).to_be_visible()
+    for element in UI_ELEMENTS:
+        locator = locator_for(page, element)
+        if locator.count():
+            expect(locator).to_be_visible()
+'''
+
+
 class AutomationService:
     def __init__(self) -> None:
         self._generations: dict[str, dict[str, Any]] = {}
         self._reports: dict[str, ExecutionReport] = {}
+        self._comparisons: dict[str, TraceabilityReport] = {}
         self.skyvern = SkyvernAdapter()
 
     @property
@@ -343,7 +398,10 @@ class AutomationService:
                     await page.goto(page_url, wait_until="domcontentloaded", timeout=int(settings.automation_navigation_timeout_seconds * 1000))
                     visited.add(page.url)
                     title = title or await page.title()
-                    discovered = await page.locator("button,input,select,textarea,a,[role],[data-testid]").evaluate_all(
+                    discovered = await page.locator(
+                        "button,input,select,textarea,a,label,form,table,menu,"
+                        "[role],[data-testid],[contenteditable='true'],[tabindex]"
+                    ).evaluate_all(
                         """els => els.slice(0, 300).filter(el => {
                           const style = getComputedStyle(el); const box = el.getBoundingClientRect();
                           return style.visibility !== 'hidden' && style.display !== 'none' && box.width > 0 && box.height > 0;
@@ -402,28 +460,14 @@ class AutomationService:
                 f"(current status: {state.get('status', 'unknown')}). "
                 "Wait for the workflow to finish or resume it if it is in manual review."
             )
-        # Bug 3 fix: guard empty test_cases early so we return a clear error
-        if not state.get("test_cases"):
-            raise AutomationError(
-                "The workflow completed but produced no test cases. "
-                "Check the workflow result or re-run the workflow."
-            )
         url = str(request.application_url)
         logger.info("generate() start workflow_id=%s url=%s", request.workflow_id, url)
         script_cache_key = cache.fingerprint(
             "scripts",
             {
-                "generator_version": 4,  # bump when generation logic changes
+                "generator_version": 5,
+                "generation_mode": "ui_discovery",
                 "application_url": url,
-                "scenarios": [
-                    {key:value for key,value in item.items() if key != "project_id"}
-                    for item in state.get("scenarios", [])
-                ],
-                "test_cases": [
-                    {key:value for key,value in item.items() if key != "project_id"}
-                    for item in state.get("test_cases", [])
-                ],
-                "review_decisions": state.get("review_decisions", {}),
             },
         )
         cached = await cache.get_json(script_cache_key)
@@ -457,6 +501,7 @@ class AutomationService:
                 "workflow": state,
                 "directory": directory,
                 "learned_locators": {},
+                "ui_specs": cached.get("ui_specs", []),
             }
             await self._cache_generation(generation_id)
             return response
@@ -465,73 +510,60 @@ class AutomationService:
         logger.info("Starting DOM discovery url=%s", url)
         title, elements = await self._discover(url)
         logger.info(
-            "Discovery complete: %d elements found. Building scripts for %d test cases.",
-            len(elements), len(state.get("test_cases", [])),
+            "Discovery complete: %d elements found. Building UI-derived scripts.",
+            len(elements),
         )
         generation_id = f"gen-{uuid.uuid4()}"
         directory = self.artifact_root / generation_id
         directory.mkdir(parents=True, exist_ok=False)
-        scenarios = {str(item["scenario_id"]): item for item in state.get("scenarios", [])}
         element_dicts = [element.model_dump(mode="json") for element in elements]
-        scripts = []
-        skipped_count = 0
-        for index, test_case in enumerate(state.get("test_cases", []), start=1):
-            if state.get("review_decisions", {}).get(f"testCase:{test_case['test_case_id']}") == "rejected":
-                continue
-
-
-
-            script_id = f"pw-{index:03d}-{_safe_name(str(test_case['test_case_id']))}"
+        pages: dict[str, list[dict[str, Any]]] = {}
+        for element in element_dicts:
+            pages.setdefault(str(element.get("page_url") or url), []).append(element)
+        if not pages:
+            pages[url] = []
+        scripts: list[GeneratedScript] = []
+        ui_specs: list[dict[str, Any]] = []
+        for index, (page_url, page_elements) in enumerate(sorted(pages.items()), start=1):
+            script_id = f"ui-page-{index:03d}"
             path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
             try:
-                source = _python_source(
-                    test_case,
-                    _best_page_url(test_case, url, element_dicts),
-                    element_dicts,
-                )
+                source = _ui_python_source(script_id, url, page_url, page_elements)
                 # Bug 6 fix: catch per-script validation errors so one bad script
                 # doesn't abort generation of all remaining scripts.
                 _validate_generated_source(source)
             except (SyntaxError, ValueError) as source_err:
                 logger.warning(
                     "Script skipped – source validation failed "
-                    "test_case_id=%s error=%s: %s",
-                    test_case["test_case_id"], type(source_err).__name__, source_err,
+                    "script_id=%s error=%s: %s",
+                    script_id, type(source_err).__name__, source_err,
                 )
-                skipped_count += 1
                 continue
             path.write_text(source, encoding="utf-8")
-            scenario = scenarios.get(str(test_case.get("scenario_id")), {})
+            page_name = urlsplit(page_url).path.strip("/") or "Home"
             scripts.append(
                 GeneratedScript(
                     script_id=script_id,
                     workflow_id=request.workflow_id,
-                    test_case_id=str(test_case["test_case_id"]),
-                    scenario_id=str(test_case["scenario_id"]),
-                    name=test_case["title"],
+                    test_case_id=script_id,
+                    scenario_id="ui-discovery",
+                    name=f"UI coverage: {page_name}",
                     application_url=url,
                     source=source,
                     download_path=f"/api/v1/automation/scripts/{generation_id}/{script_id}/download",
-                    requirement_ids=test_case.get("requirement_ids", []),
-                    user_story_ids=scenario.get("user_story_ids", []),
+                    requirement_ids=[],
+                    user_story_ids=[],
                 )
             )
+            ui_specs.append(
+                {"script_id": script_id, "page_url": page_url, "elements": page_elements}
+            )
         logger.info(
-            "generate() complete: %d scripts built, %d skipped. generation_id=%s",
-            len(scripts), skipped_count, generation_id,
+            "generate() complete: %d UI scripts built. generation_id=%s",
+            len(scripts), generation_id,
         )
         if not scripts:
-            # Provide a clear, actionable message instead of silent empty list
-            reason = (
-                "The coverage gate filtered all test cases because none of their step "
-                "actions matched any element discovered on the page. Check that the "
-                "application URL is correct and the page is fully rendered, or review "
-                "the test case steps."
-                if element_dicts
-                else "Playwright could not discover any interactive elements on the page. "
-                "Ensure the URL loads a real UI (not a login wall or error page)."
-            )
-            raise AutomationError(f"No scripts could be generated: {reason}")
+            raise AutomationError("No valid UI-derived scripts could be generated.")
         response = ScriptGenerationResponse(
             generation_id=generation_id,
             application_url=url,
@@ -545,6 +577,7 @@ class AutomationService:
             "workflow": state,
             "directory": directory,
             "learned_locators": {},
+            "ui_specs": ui_specs,
         }
         await self._cache_generation(generation_id)
         await cache.set_json(
@@ -553,6 +586,7 @@ class AutomationService:
                 "page_title": title,
                 "discovered_elements": [item.model_dump(mode="json") for item in elements],
                 "scripts": [item.model_dump(mode="json") for item in scripts],
+                "ui_specs": ui_specs,
             },
             settings.redis_script_ttl_seconds,
         )
@@ -565,6 +599,7 @@ class AutomationService:
             "workflow": generation["workflow"],
             "directory": str(generation["directory"]),
             "learned_locators": generation.get("learned_locators", {}),
+            "ui_specs": generation.get("ui_specs", []),
         }
         (generation["directory"] / "generation.json").write_text(
             json.dumps(manifest, default=str, indent=2), encoding="utf-8"
@@ -589,6 +624,7 @@ class AutomationService:
                         "workflow": stored["workflow"],
                         "directory": manifest_path.parent,
                         "learned_locators": stored.get("learned_locators", {}),
+                        "ui_specs": stored.get("ui_specs", []),
                     }
                     self._generations[generation_id] = generation
                     return generation
@@ -604,6 +640,7 @@ class AutomationService:
                 "workflow": cached["workflow"],
                 "directory": Path(cached["directory"]),
                 "learned_locators": cached.get("learned_locators", {}),
+                "ui_specs": cached.get("ui_specs", []),
             }
             self._generations[generation_id] = generation
             return generation
@@ -1082,6 +1119,106 @@ class AutomationService:
         else:
             await page.locator("body").wait_for(state="visible")
 
+    async def _execute_ui_specs(
+        self, request: ExecuteScriptsRequest, generation: dict[str, Any]
+    ) -> ExecutionReport:
+        from playwright.async_api import async_playwright
+
+        started = time.perf_counter()
+        response: ScriptGenerationResponse = generation["response"]
+        scripts = {script.script_id: script for script in response.scripts}
+        results: list[ScriptExecutionResult] = []
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            for spec in generation.get("ui_specs", []):
+                script = scripts.get(str(spec["script_id"]))
+                if not script:
+                    continue
+                test_started = time.perf_counter()
+                context = await browser.new_context()
+                page = await context.new_page()
+                console_logs: list[str] = []
+                network_errors: list[str] = []
+                page.on("console", lambda message, logs=console_logs: logs.append(message.text))
+                page.on(
+                    "requestfailed",
+                    lambda failed_request, errors=network_errors: errors.append(
+                        f"{failed_request.method} {failed_request.url}"
+                    ),
+                )
+                try:
+                    await page.goto(
+                        spec["page_url"],
+                        wait_until="domcontentloaded",
+                        timeout=int(settings.automation_navigation_timeout_seconds * 1000),
+                    )
+                    await page.locator("body").wait_for(state="visible")
+                    visible = 0
+                    for element in spec.get("elements", [])[:100]:
+                        identity = " ".join(
+                            str(element.get(key) or "")
+                            for key in ("test_id", "label", "name", "placeholder", "visible_text")
+                        ).strip()
+                        if not identity:
+                            continue
+                        candidates = self._discovered_locator_candidates(
+                            page, identity, [element]
+                        )
+                        for candidate in candidates:
+                            try:
+                                if await candidate.count() and await candidate.first.is_visible():
+                                    visible += 1
+                                    break
+                            except Exception:
+                                continue
+                    results.append(
+                        ScriptExecutionResult(
+                            script_id=script.script_id,
+                            script_name=script.name,
+                            test_case_id=script.test_case_id,
+                            scenario_id=script.scenario_id,
+                            status="passed",
+                            duration_seconds=round(time.perf_counter() - test_started, 3),
+                            traceability={
+                                "generation_basis": "application_ui",
+                                "page_url": spec["page_url"],
+                                "discovered_elements": len(spec.get("elements", [])),
+                                "visible_elements": visible,
+                            },
+                        )
+                    )
+                except Exception as exc:
+                    results.append(
+                        ScriptExecutionResult(
+                            script_id=script.script_id,
+                            script_name=script.name,
+                            test_case_id=script.test_case_id,
+                            scenario_id=script.scenario_id,
+                            status="failed",
+                            duration_seconds=round(time.perf_counter() - test_started, 3),
+                            error_message=str(exc),
+                            failure=FailureAnalysis(
+                                test_case_id=script.test_case_id,
+                                failure_reason=str(exc),
+                                failure_category="Navigation Failure",
+                                page_url=str(spec.get("page_url")),
+                                console_logs=console_logs,
+                                network_errors=network_errors,
+                            ),
+                            traceability={"generation_basis": "application_ui"},
+                        )
+                    )
+                finally:
+                    await context.close()
+            await browser.close()
+        return self._save_report(
+            request,
+            results,
+            time.perf_counter() - started,
+            generation["directory"],
+            generation,
+        )
+
     async def execute(
         self, request: ExecuteScriptsRequest, *, _dedicated_loop: bool = False
     ) -> ExecutionReport:
@@ -1125,6 +1262,9 @@ class AutomationService:
                 for script in response.scripts
             ]
             return self._save_report(request, results, 0.01 * len(results), generation["directory"], generation)
+
+        if generation.get("ui_specs"):
+            return await self._execute_ui_specs(request, generation)
 
         started = time.perf_counter()
         results: list[ScriptExecutionResult] = []
@@ -1195,7 +1335,6 @@ class AutomationService:
                         # ---- Wait for page to settle before each step (req 4) ----
                         await self._wait_for_page_stable(page)
 
-                        lowered = action.lower()
                         failure_category = "Locator Failure"
                         try:
                             page_elements = [
@@ -1440,6 +1579,139 @@ class AutomationService:
                 except ValueError:
                     logger.warning("Automation report file is invalid execution_id=%s", execution_id)
         raise AutomationNotFound("Execution report was not found")
+
+    async def compare(self, execution_id: str, workflow_id: Any) -> TraceabilityReport:
+        execution = self.report(execution_id)
+        generation = await self.generation(execution.generation_id)
+        workflow = generation.get("workflow", {})
+        if str(workflow.get("workflow_id")) != str(workflow_id):
+            raise AutomationError("The execution and workflow do not belong together.")
+
+        executed_ids = {
+            result.script_id for result in execution.results
+            if result.status in {"passed", "failed"}
+        }
+        specs = [
+            spec for spec in generation.get("ui_specs", [])
+            if str(spec.get("script_id")) in executed_ids
+        ]
+        script_tokens: dict[str, set[str]] = {}
+        script_evidence: dict[str, str] = {}
+        for spec in specs:
+            evidence = " ".join(
+                [
+                    str(spec.get("page_url") or ""),
+                    *[
+                        " ".join(
+                            str(element.get(key) or "")
+                            for key in (
+                                "role", "name", "label", "placeholder", "test_id",
+                                "visible_text", "href", "tag", "input_type",
+                            )
+                        )
+                        for element in spec.get("elements", [])
+                    ],
+                ]
+            )
+            script_id = str(spec["script_id"])
+            script_tokens[script_id] = _meaningful_words(evidence)
+            script_evidence[script_id] = str(spec.get("page_url") or "")
+
+        artifacts: list[tuple[str, str, str, str]] = []
+        for scenario in workflow.get("scenarios", []):
+            artifacts.append(
+                (
+                    "scenario",
+                    str(scenario.get("scenario_id")),
+                    str(scenario.get("title") or scenario.get("scenario_id")),
+                    json.dumps(scenario, default=str),
+                )
+            )
+        for test_case in workflow.get("test_cases", []):
+            artifacts.append(
+                (
+                    "test_case",
+                    str(test_case.get("test_case_id")),
+                    str(test_case.get("title") or test_case.get("test_case_id")),
+                    json.dumps(test_case, default=str),
+                )
+            )
+
+        items: list[TraceabilityItem] = []
+        matched_ui_ids: set[str] = set()
+        for artifact_type, artifact_id, title, text in artifacts:
+            artifact_tokens = _meaningful_words(text)
+            ranked = sorted(
+                (
+                    (len(artifact_tokens & tokens), script_id)
+                    for script_id, tokens in script_tokens.items()
+                ),
+                reverse=True,
+            )
+            matches = [(score, script_id) for score, script_id in ranked if score]
+            found = set().union(
+                *(artifact_tokens & script_tokens[script_id] for _, script_id in matches)
+            ) if matches else set()
+            denominator = max(1, min(len(artifact_tokens), 12))
+            coverage = round(min(100.0, len(found) / denominator * 100), 2)
+            status = "covered" if coverage >= 60 else "partial" if coverage >= 25 else "missing"
+            matched_ids = [script_id for _, script_id in matches[:5]]
+            matched_ui_ids.update(matched_ids)
+            items.append(
+                TraceabilityItem(
+                    artifact_type=artifact_type,
+                    artifact_id=artifact_id,
+                    title=title,
+                    status=status,
+                    coverage_percentage=coverage,
+                    matched_script_ids=matched_ids,
+                    matched_evidence=[
+                        f"{script_id}: {script_evidence[script_id]}"
+                        for script_id in matched_ids
+                    ],
+                    gaps=sorted(artifact_tokens - found)[:12],
+                )
+            )
+
+        covered = sum(item.status == "covered" for item in items)
+        partial = sum(item.status == "partial" for item in items)
+        missing = sum(item.status == "missing" for item in items)
+        overall = round(
+            sum(item.coverage_percentage for item in items) / len(items), 2
+        ) if items else 0
+        comparison = TraceabilityReport(
+            comparison_id=f"cmp-{uuid.uuid4()}",
+            execution_id=execution_id,
+            generation_id=execution.generation_id,
+            workflow_id=workflow_id,
+            total_scenarios=len(workflow.get("scenarios", [])),
+            total_test_cases=len(workflow.get("test_cases", [])),
+            covered=covered,
+            partial=partial,
+            missing=missing,
+            overall_coverage_percentage=overall,
+            items=items,
+            uncovered_ui_scripts=[
+                {
+                    "script_id": str(spec["script_id"]),
+                    "page_url": str(spec.get("page_url") or ""),
+                    "reason": "Executed UI coverage has no matching requirement artifact.",
+                }
+                for spec in specs
+                if str(spec["script_id"]) not in matched_ui_ids
+            ],
+            summary=(
+                f"{covered} covered, {partial} partially covered, and {missing} missing "
+                f"across {len(items)} requirement artifacts."
+            ),
+        )
+        self._comparisons[comparison.comparison_id] = comparison
+        reports_directory = self.artifact_root / "reports"
+        reports_directory.mkdir(parents=True, exist_ok=True)
+        (reports_directory / f"{comparison.comparison_id}.json").write_text(
+            json.dumps(comparison.model_dump(mode="json"), indent=2), encoding="utf-8"
+        )
+        return comparison
 
     async def health(self, *, _dedicated_loop: bool = False) -> AutomationHealth:
         if settings.app_mock_mode:
