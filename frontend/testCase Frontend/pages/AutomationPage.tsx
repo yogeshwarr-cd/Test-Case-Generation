@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Download, GitCompareArrows, LoaderCircle, Play, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, GitCompareArrows, LoaderCircle, Play, XCircle } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
@@ -81,7 +81,8 @@ export function AutomationPage() {
         <>
           <section className="rounded-2xl border border-green-500/30 bg-green-500/5 p-5">
             <div className="flex items-center gap-2 font-semibold text-green-600"><CheckCircle2 className="h-5 w-5" /> Application reachable</div>
-            <p className="mt-2 text-sm text-muted-foreground">{generation.page_title || generation.application_url} · {generation.discovered_elements.length} interactive elements discovered · {generation.scripts.length} scripts generated</p>
+            <p className="mt-2 text-sm text-muted-foreground">{generation.page_title || generation.application_url} · {generation.pages_discovered || 1} pages discovered · {generation.discovered_elements.length} interactive elements discovered · {generation.scripts.length} scripts generated</p>
+            {generation.crawl_status === 'partial' && <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="font-semibold">Partial application crawl</p><p>{generation.inaccessible_pages.length} pages could not be inspected. Results cover only discovered functionality.</p></div></div>}
           </section>
 
           <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
@@ -122,12 +123,12 @@ function TraceabilityDashboard({ report }: { report: TraceabilityReport }) {
 function ExecutionDashboard({ report }: { report: ExecutionReport }) {
   return <section className="space-y-5">
     <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Execution dashboard</p><h2 className="mt-2 text-xl font-bold">Run results</h2></div>
-    <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-      <Metric label="Total" value={report.total_scripts} /><Metric label="Passed" value={report.passed_scripts} /><Metric label="Failed" value={report.failed_scripts} /><Metric label="Skipped" value={report.skipped_scripts} /><Metric label="Seconds" value={report.execution_time_seconds} /><Metric label="Success" value={`${report.success_percentage}%`} />
+    <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-8">
+      <Metric label="Total" value={report.total_scripts} /><Metric label="Passed" value={report.passed_scripts} /><Metric label="Failed" value={report.failed_scripts} /><Metric label="Blocked" value={report.blocked_scripts || 0} /><Metric label="Automation errors" value={report.automation_error_scripts || 0} /><Metric label="Skipped" value={report.skipped_scripts} /><Metric label="Seconds" value={report.execution_time_seconds} /><Metric label="Success" value={`${report.success_percentage}%`} />
     </div>
     <div className="space-y-3">{report.results.map((result) => <article key={result.script_id} className="rounded-xl border border-border bg-card p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex gap-3">{result.status === 'passed' ? <CheckCircle2 className="h-5 w-5 text-green-500" /> : result.status === 'failed' ? <XCircle className="h-5 w-5 text-red-500" /> : <Play className="h-5 w-5 text-amber-500" />}<div><h3 className="font-semibold">{result.script_name}</h3><p className="text-xs text-muted-foreground">{result.test_case_id} → {result.scenario_id} → {result.script_id}</p></div></div><span className="text-sm font-semibold capitalize">{result.status} · {result.duration_seconds}s</span></div>
-      {result.status === 'failed' && <p className="mt-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-600">{friendlyFailureMessage(result.error_message, result.failure)}</p>}
+      <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex gap-3">{result.status === 'passed' ? <CheckCircle2 className="h-5 w-5 text-green-500" /> : result.status === 'failed' ? <XCircle className="h-5 w-5 text-red-500" /> : result.status === 'blocked' || result.status === 'automation_error' ? <AlertTriangle className="h-5 w-5 text-amber-500" /> : <Play className="h-5 w-5 text-amber-500" />}<div><h3 className="font-semibold">{result.script_name}</h3><p className="text-xs text-muted-foreground">{result.test_case_id} → {result.scenario_id} → {result.script_id}</p></div></div><span className="text-sm font-semibold capitalize">{result.status.replace('_', ' ')} · {result.duration_seconds}s</span></div>
+      {result.status !== 'passed' && result.status !== 'skipped' && <p className="mt-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-600">{friendlyFailureMessage(result.error_message, result.failure)}</p>}
       {result.failure && <details className="mt-3 rounded-lg border border-border"><summary className="cursor-pointer p-3 text-sm font-semibold">Failure analysis · {result.failure.failure_category}</summary><div className="grid gap-3 border-t border-border p-3 text-sm sm:grid-cols-2"><Info label="Category" value={result.failure.failure_category} /><Info label="Failed step" value={String(result.failure.failed_step ?? 'Unknown')} /><Info label="Reason" value={result.failure.failure_reason} /><Info label="Expected" value={result.failure.expected_result} /><Info label="Actual" value={result.failure.actual_result} /><Info label="Page URL" value={result.failure.page_url} /><Info label="Failed UI element" value={result.failure.ui_element} /><Info label="Skyvern attempted" value={result.failure.skyvern_attempted ? 'Yes' : 'No'} /><Info label="Skyvern succeeded" value={result.failure.skyvern_succeeded ? 'Yes' : 'No'} /><Info label="Console logs" value={result.failure.console_logs.join('\n')} /><Info label="Network errors" value={result.failure.network_errors.join('\n')} /></div></details>}
     </article>)}</div>
   </section>;

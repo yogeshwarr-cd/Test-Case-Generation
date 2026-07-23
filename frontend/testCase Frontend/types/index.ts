@@ -173,6 +173,11 @@ export interface ScriptGeneration {
   page_title?: string;
   discovered_elements: Array<{ role?: string; name?: string; label?: string; test_id?: string; tag: string }>;
   scripts: GeneratedScript[];
+  access_status: 'ready' | 'authentication_required' | 'bot_challenge_blocked' | 'captcha_blocked' | 'access_denied' | 'application_unavailable';
+  crawl_status: 'completed' | 'partial' | 'blocked';
+  pages_discovered: number;
+  inaccessible_pages: Array<{ url: string; reason: string }>;
+  crawl_warnings: string[];
 }
 
 export interface FailureAnalysis {
@@ -192,6 +197,9 @@ export interface FailureAnalysis {
     | 'Page Load Timeout'
     | 'Assertion Failure'
     | 'Environment Issue'
+    | 'Environment Blocked'
+    | 'Authentication Required'
+    | 'Automation Error'
     // legacy
     | 'Script Generation'
     | 'Locator'
@@ -220,6 +228,8 @@ export interface ExecutionReport {
   failed_scripts: number;
   skipped_scripts: number;
   rejected_scripts: number;
+  blocked_scripts: number;
+  automation_error_scripts: number;
   execution_time_seconds: number;
   success_percentage: number;
   results: Array<{
@@ -227,7 +237,7 @@ export interface ExecutionReport {
     script_name: string;
     test_case_id: string;
     scenario_id: string;
-    status: 'passed' | 'failed' | 'skipped';
+    status: 'passed' | 'failed' | 'blocked' | 'automation_error' | 'skipped';
     duration_seconds: number;
     error_message?: string;
     failure?: FailureAnalysis;
@@ -249,6 +259,8 @@ export interface ExecutionReport {
     failed: number;
     skipped: number;
     rejected: number;
+    blocked?: number;
+    automation_errors?: number;
     pass_rate: number;
   };
 }

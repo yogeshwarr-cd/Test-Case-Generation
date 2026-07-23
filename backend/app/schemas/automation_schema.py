@@ -47,6 +47,14 @@ class ScriptGenerationResponse(BaseModel):
     page_title: str | None = None
     discovered_elements: list[DiscoveredElement] = Field(default_factory=list)
     scripts: list[GeneratedScript]
+    access_status: Literal[
+        "ready", "authentication_required", "bot_challenge_blocked",
+        "captcha_blocked", "access_denied", "application_unavailable",
+    ] = "ready"
+    crawl_status: Literal["completed", "partial", "blocked"] = "completed"
+    pages_discovered: int = 0
+    inaccessible_pages: list[dict[str, Any]] = Field(default_factory=list)
+    crawl_warnings: list[str] = Field(default_factory=list)
 
 
 class ExecuteScriptsRequest(BaseModel):
@@ -70,6 +78,9 @@ class FailureAnalysis(BaseModel):
         "Page Load Timeout",
         "Assertion Failure",
         "Environment Issue",
+        "Environment Blocked",
+        "Authentication Required",
+        "Automation Error",
         # Legacy labels
         "Script Generation",
         "Locator",
@@ -93,7 +104,7 @@ class ScriptExecutionResult(BaseModel):
     script_name: str
     test_case_id: str
     scenario_id: str
-    status: Literal["passed", "failed", "skipped"]
+    status: Literal["passed", "failed", "blocked", "automation_error", "skipped"]
     duration_seconds: float
     error_message: str | None = None
     failure: FailureAnalysis | None = None
@@ -109,6 +120,8 @@ class ExecutionReport(BaseModel):
     failed_scripts: int
     skipped_scripts: int
     rejected_scripts: int = 0
+    blocked_scripts: int = 0
+    automation_error_scripts: int = 0
     execution_time_seconds: float
     success_percentage: float
     results: list[ScriptExecutionResult]

@@ -71,6 +71,12 @@ class AutomationNotFound(AppError):
     error_code = "AUTOMATION_NOT_FOUND"
 
 
+class AutomationAccessBlocked(RuntimeError):
+    def __init__(self, access_status: str, reason: str) -> None:
+        super().__init__(reason)
+        self.access_status = access_status
+
+
 def _safe_name(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]+", "-", value).strip("-")[:80] or "test"
 
@@ -374,12 +380,45 @@ class AutomationService:
         except httpx.HTTPError as exc:
             raise AutomationError("Application URL is not reachable") from exc
 
-    async def _discover(self, url: str) -> tuple[str | None, list[DiscoveredElement]]:
+    @staticmethod
+    async def _access_gate(page: Any) -> tuple[str, str | None]:
+        title = (await page.title()).casefold()
+        current_url = page.url.casefold()
+        try:
+            body = (await page.locator("body").inner_text(timeout=3000)).casefold()[:12000]
+        except Exception:
+            body = ""
+        content = f"{title}\n{current_url}\n{body}"
+        if any(marker in content for marker in (
+            "performing security verification", "verify you are human",
+            "checking your browser", "just a moment", "__cf_chl",
+            "ray id:", "performance and security by cloudflare",
+        )):
+            return "bot_challenge_blocked", "Bot/security verification page detected"
+        if any(marker in content for marker in ("g-recaptcha", "hcaptcha", "cf-turnstile", "captcha")):
+            return "captcha_blocked", "CAPTCHA challenge detected"
+        if any(marker in content for marker in (
+            "access denied", "request blocked", "forbidden",
+            "you don't have permission to access",
+        )):
+            return "access_denied", "Access-denied page detected"
+        if await page.locator('input[type="password"]').count() and any(
+            marker in content for marker in ("sign in", "log in", "login", "authentication")
+        ):
+            return "authentication_required", "Authentication page detected"
+        return "ready", None
+
+    async def _discover(
+        self, url: str
+    ) -> tuple[str | None, list[DiscoveredElement], dict[str, Any]]:
         if settings.app_mock_mode:
             return "Mock Application", [
                 DiscoveredElement(tag="button", role="button", name="Mock submit"),
                 DiscoveredElement(tag="input", label="Mock input", input_type="text"),
-            ]
+            ], {
+                "access_status": "ready", "crawl_status": "completed",
+                "pages_discovered": 1, "inaccessible_pages": [], "crawl_warnings": [],
+            }
         try:
             from playwright.async_api import async_playwright
 
@@ -390,12 +429,27 @@ class AutomationService:
                 pending = [url]
                 visited: set[str] = set()
                 raw: list[dict[str, Any]] = []
+                inaccessible: list[dict[str, str]] = []
                 title = None
-                while pending and len(visited) < 20:
+                while pending and len(visited) < 50:
                     page_url = pending.pop(0)
                     if page_url in visited:
                         continue
-                    await page.goto(page_url, wait_until="domcontentloaded", timeout=int(settings.automation_navigation_timeout_seconds * 1000))
+                    try:
+                        await page.goto(page_url, wait_until="domcontentloaded", timeout=int(settings.automation_navigation_timeout_seconds * 1000))
+                    except Exception as exc:
+                        inaccessible.append({"url": page_url, "reason": f"Navigation failed: {type(exc).__name__}"})
+                        continue
+                    access_status, blocked_reason = await self._access_gate(page)
+                    if access_status != "ready":
+                        if not visited:
+                            raise AutomationError(
+                                f"{blocked_reason}. The actual application could not be crawled "
+                                f"(access status: {access_status}). Configure an authorized test "
+                                "session, allowlisted automation runner, or staging security rule."
+                            )
+                        inaccessible.append({"url": page_url, "reason": blocked_reason or access_status})
+                        continue
                     visited.add(page.url)
                     title = title or await page.title()
                     discovered = await page.locator(
@@ -434,7 +488,17 @@ class AutomationService:
                 "DOM discovery complete url=%s pages_visited=%d elements_found=%d",
                 url, len(visited), len(elements),
             )
-            return title, elements
+            return title, elements, {
+                "access_status": "ready",
+                "crawl_status": "partial" if inaccessible or pending else "completed",
+                "pages_discovered": len(visited),
+                "inaccessible_pages": inaccessible,
+                "crawl_warnings": (
+                    ["Crawl stopped at the 50-page safety limit."] if pending else []
+                ),
+            }
+        except AutomationError:
+            raise
         except Exception as exc:
             # Bug 1 fix: log the real exception so it appears in uvicorn console
             logger.error(
@@ -495,6 +559,11 @@ class AutomationService:
                 page_title=cached.get("page_title"),
                 discovered_elements=[DiscoveredElement.model_validate(item) for item in cached.get("discovered_elements", [])],
                 scripts=scripts,
+                access_status=cached.get("access_status", "ready"),
+                crawl_status=cached.get("crawl_status", "completed"),
+                pages_discovered=cached.get("pages_discovered", 0),
+                inaccessible_pages=cached.get("inaccessible_pages", []),
+                crawl_warnings=cached.get("crawl_warnings", []),
             )
             self._generations[generation_id] = {
                 "response": response,
@@ -508,7 +577,16 @@ class AutomationService:
         logger.info("Validating URL url=%s", url)
         await self._validate_url(url)
         logger.info("Starting DOM discovery url=%s", url)
-        title, elements = await self._discover(url)
+        discovery = await self._discover(url)
+        if len(discovery) == 2:
+            title, elements = discovery
+            crawl_summary = {
+                "access_status": "ready", "crawl_status": "completed",
+                "pages_discovered": len({item.page_url or url for item in elements}),
+                "inaccessible_pages": [], "crawl_warnings": [],
+            }
+        else:
+            title, elements, crawl_summary = discovery
         logger.info(
             "Discovery complete: %d elements found. Building UI-derived scripts.",
             len(elements),
@@ -571,6 +649,7 @@ class AutomationService:
             page_title=title,
             discovered_elements=elements,
             scripts=scripts,
+            **crawl_summary,
         )
         self._generations[generation_id] = {
             "response": response,
@@ -587,6 +666,7 @@ class AutomationService:
                 "discovered_elements": [item.model_dump(mode="json") for item in elements],
                 "scripts": [item.model_dump(mode="json") for item in scripts],
                 "ui_specs": ui_specs,
+                **crawl_summary,
             },
             settings.redis_script_ttl_seconds,
         )
@@ -1152,6 +1232,11 @@ class AutomationService:
                         wait_until="domcontentloaded",
                         timeout=int(settings.automation_navigation_timeout_seconds * 1000),
                     )
+                    access_status, blocked_reason = await self._access_gate(page)
+                    if access_status != "ready":
+                        raise AutomationAccessBlocked(
+                            access_status, blocked_reason or access_status
+                        )
                     await page.locator("body").wait_for(state="visible")
                     visible = 0
                     for element in spec.get("elements", [])[:100]:
@@ -1188,19 +1273,26 @@ class AutomationService:
                         )
                     )
                 except Exception as exc:
+                    blocked = isinstance(exc, AutomationAccessBlocked)
                     results.append(
                         ScriptExecutionResult(
                             script_id=script.script_id,
                             script_name=script.name,
                             test_case_id=script.test_case_id,
                             scenario_id=script.scenario_id,
-                            status="failed",
+                            status="blocked" if blocked else "automation_error",
                             duration_seconds=round(time.perf_counter() - test_started, 3),
                             error_message=str(exc),
                             failure=FailureAnalysis(
                                 test_case_id=script.test_case_id,
                                 failure_reason=str(exc),
-                                failure_category="Navigation Failure",
+                                failure_category=(
+                                    "Authentication Required"
+                                    if blocked and exc.access_status == "authentication_required"
+                                    else "Environment Blocked"
+                                    if blocked
+                                    else "Automation Error"
+                                ),
                                 page_url=str(spec.get("page_url")),
                                 console_logs=console_logs,
                                 network_errors=network_errors,
@@ -1512,6 +1604,8 @@ class AutomationService:
         passed = sum(result.status == "passed" for result in results)
         failed = sum(result.status == "failed" for result in results)
         skipped = sum(result.status == "skipped" for result in results)
+        blocked = sum(result.status == "blocked" for result in results)
+        automation_errors = sum(result.status == "automation_error" for result in results)
         workflow = generation.get("workflow", {})
         decisions = workflow.get("review_decisions", {})
         rejected_ids = {
@@ -1542,6 +1636,8 @@ class AutomationService:
             failed_scripts=failed,
             skipped_scripts=skipped,
             rejected_scripts=rejected,
+            blocked_scripts=blocked,
+            automation_error_scripts=automation_errors,
             execution_time_seconds=round(duration, 3),
             success_percentage=round((passed / len(results) * 100) if results else 0, 2),
             results=results,
@@ -1552,6 +1648,8 @@ class AutomationService:
                 "passed": passed,
                 "failed": failed,
                 "skipped": skipped,
+                "blocked": blocked,
+                "automation_errors": automation_errors,
                 "rejected": rejected,
                 "pass_rate": round((passed / overall_total * 100) if overall_total else 0, 2),
             },
