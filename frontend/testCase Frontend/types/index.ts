@@ -217,6 +217,9 @@ export interface FailureAnalysis {
   stack_trace?: string;
   skyvern_attempted: boolean;
   skyvern_succeeded: boolean;
+  recovery_attempts?: number;
+  repaired_locator?: string;
+  recommended_action?: string;
 }
 
 export interface ExecutionReport {

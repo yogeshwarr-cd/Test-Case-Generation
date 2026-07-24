@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Download, GitCompareArrows, LoaderCircle, Play, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, FileCode2, FileText, GitCompareArrows, LoaderCircle, Play, Search, XCircle } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
@@ -19,6 +19,8 @@ export function AutomationPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [showTestReport, setShowTestReport] = useState(false);
+  const [activeView, setActiveView] = useState<'scripts' | 'execution' | 'failures' | 'traceability'>('scripts');
+  const [scriptSearch, setScriptSearch] = useState('');
 
   useEffect(() => hydrate(), [hydrate]);
 
@@ -28,6 +30,7 @@ export function AutomationPage() {
     try {
       setGeneration(await testCaseApi.generateScripts(workflowId, applicationUrl.trim()));
       setSelectedScript(0);
+      setActiveView('scripts');
     } catch (requestError) { setError(friendlyError(requestError)); }
     finally { setBusy(false); }
   };
@@ -86,8 +89,10 @@ export function AutomationPage() {
           </section>
 
           <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
-            <aside className="space-y-2 rounded-2xl border border-border bg-card p-3">
-              {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-lg p-3 text-left text-sm ${selectedScript === index ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs opacity-70">{item.test_case_id}</span></button>)}
+            <aside className="space-y-3 rounded-2xl border border-border bg-card p-3">
+              <div className="relative"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><input aria-label="Search generated scripts" value={scriptSearch} onChange={(event) => setScriptSearch(event.target.value)} placeholder="Search scripts" className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm" /></div>
+              {generation.scripts.filter((item) => `${item.name} ${item.test_case_id} ${item.scenario_id}`.toLowerCase().includes(scriptSearch.toLowerCase())).map((item) => { const index = generation.scripts.findIndex((candidate) => candidate.script_id === item.script_id); return <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-lg p-3 text-left text-sm ${selectedScript === index ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs opacity-70">{item.test_case_id} · {item.scenario_id}</span></button>; })}
+              {!generation.scripts.length && <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">No generated scripts are available.</p>}
             </aside>
             {script && <section className="min-w-0 rounded-2xl border border-border bg-card">
               <div className="flex items-center justify-between gap-3 border-b border-border p-4"><div><h2 className="font-semibold">{script.name}</h2><p className="text-xs text-muted-foreground">{script.test_case_id} → {script.script_id}</p></div><button onClick={() => downloadFile(`${script.script_id}.py`, script.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-semibold hover:bg-muted"><Download className="h-4 w-4" /> Download</button></div>
@@ -95,18 +100,21 @@ export function AutomationPage() {
             </section>}
           </div>
 
-          <section className="rounded-2xl border border-border bg-card p-5">
+          <nav aria-label="Automation views" className="flex flex-wrap gap-2 rounded-2xl border border-border bg-card p-3">
+            {([['scripts', 'Generated scripts', FileCode2], ['execution', 'Execution', Play], ['failures', 'Failure analysis', AlertTriangle], ['traceability', 'Traceability', GitCompareArrows] ] as const).map(([key, label, Icon]) => <button key={key} onClick={() => setActiveView(key)} className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${activeView === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Icon className="h-4 w-4" />{label}</button>)}
+          </nav>
+          {activeView === 'scripts' && <section className="rounded-2xl border border-border bg-card p-5">
             <h2 className="font-semibold">Execution mode</h2>
             <div className="mt-3 flex flex-wrap gap-3">
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-4 py-3"><input type="radio" checked={mode === 'automated'} onChange={() => setMode('automated')} /> Automated execution (default)</label>
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-4 py-3"><input type="radio" checked={mode === 'manual'} onChange={() => setMode('manual')} /> Manual execution</label>
               <button disabled={busy} onClick={execute} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {mode === 'automated' ? 'Execute with Playwright' : 'Prepare manual package'}</button>
             </div>
-          </section>
+          </section>}
         </>
       )}
 
-      {report && <><ExecutionDashboard report={report} /><div className="flex flex-wrap justify-end gap-3">{mode === 'automated' && <button disabled={busy} onClick={compare} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <GitCompareArrows className="h-4 w-4" />} Compare with Test Cases &amp; Scenarios</button>}<button onClick={() => setShowTestReport(true)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><Download className="h-4 w-4" /> Generate Test Report</button></div>{comparison && <TraceabilityDashboard report={comparison} />}{showTestReport && <DetailedTestReport report={report} />}</>}
+      {report && <><div className={activeView === 'execution' ? 'block' : 'hidden'}><ExecutionDashboard report={report} /></div><div className={activeView === 'failures' ? 'block' : 'hidden'}><FailureDashboard report={report} /></div><div className={activeView === 'traceability' ? 'block' : 'hidden'}>{comparison ? <TraceabilityDashboard report={comparison} /> : <StatePanel type="empty" title="Traceability is ready after execution" message="Use Compare with Test Cases & Scenarios to map execution results to requirements." />}</div><div className="flex flex-wrap justify-end gap-3">{mode === 'automated' && <button disabled={busy} onClick={compare} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <GitCompareArrows className="h-4 w-4" />} Compare with Test Cases &amp; Scenarios</button>}<button onClick={() => setShowTestReport(true)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><FileText className="h-4 w-4" /> Generate Test Report</button></div>{showTestReport && <DetailedTestReport report={report} />}</>}
     </div>
   );
 }
@@ -129,9 +137,15 @@ function ExecutionDashboard({ report }: { report: ExecutionReport }) {
     <div className="space-y-3">{report.results.map((result) => <article key={result.script_id} className="rounded-xl border border-border bg-card p-5">
       <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex gap-3">{result.status === 'passed' ? <CheckCircle2 className="h-5 w-5 text-green-500" /> : result.status === 'failed' ? <XCircle className="h-5 w-5 text-red-500" /> : result.status === 'blocked' || result.status === 'automation_error' ? <AlertTriangle className="h-5 w-5 text-amber-500" /> : <Play className="h-5 w-5 text-amber-500" />}<div><h3 className="font-semibold">{result.script_name}</h3><p className="text-xs text-muted-foreground">{result.test_case_id} → {result.scenario_id} → {result.script_id}</p></div></div><span className="text-sm font-semibold capitalize">{result.status.replace('_', ' ')} · {result.duration_seconds}s</span></div>
       {result.status !== 'passed' && result.status !== 'skipped' && <p className="mt-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-600">{friendlyFailureMessage(result.error_message, result.failure)}</p>}
-      {result.failure && <details className="mt-3 rounded-lg border border-border"><summary className="cursor-pointer p-3 text-sm font-semibold">Failure analysis · {result.failure.failure_category}</summary><div className="grid gap-3 border-t border-border p-3 text-sm sm:grid-cols-2"><Info label="Category" value={result.failure.failure_category} /><Info label="Failed step" value={String(result.failure.failed_step ?? 'Unknown')} /><Info label="Reason" value={result.failure.failure_reason} /><Info label="Expected" value={result.failure.expected_result} /><Info label="Actual" value={result.failure.actual_result} /><Info label="Page URL" value={result.failure.page_url} /><Info label="Failed UI element" value={result.failure.ui_element} /><Info label="Skyvern attempted" value={result.failure.skyvern_attempted ? 'Yes' : 'No'} /><Info label="Skyvern succeeded" value={result.failure.skyvern_succeeded ? 'Yes' : 'No'} /><Info label="Console logs" value={result.failure.console_logs.join('\n')} /><Info label="Network errors" value={result.failure.network_errors.join('\n')} /></div></details>}
+      {result.failure && <details className="mt-3 rounded-lg border border-border"><summary className="cursor-pointer p-3 text-sm font-semibold">Failure analysis · {result.failure.failure_category}</summary><div className="grid gap-3 border-t border-border p-3 text-sm sm:grid-cols-2"><Info label="Category" value={result.failure.failure_category} /><Info label="Failed step" value={String(result.failure.failed_step ?? 'Unknown')} /><Info label="Reason" value={result.failure.failure_reason} /><Info label="Expected" value={result.failure.expected_result} /><Info label="Actual" value={result.failure.actual_result} /><Info label="Page URL" value={result.failure.page_url} /><Info label="Failed UI element" value={result.failure.ui_element} /><Info label="Recovered locator" value={result.failure.repaired_locator} /><Info label="Recovery attempts" value={String(result.failure.recovery_attempts ?? 0)} /><Info label="Recommendation" value={result.failure.recommended_action} /><Info label="Skyvern attempted" value={result.failure.skyvern_attempted ? 'Yes' : 'No'} /><Info label="Skyvern succeeded" value={result.failure.skyvern_succeeded ? 'Yes' : 'No'} /><Info label="Console logs" value={result.failure.console_logs.join('\n')} /><Info label="Network errors" value={result.failure.network_errors.join('\n')} /><Info label="Screenshot" value={result.failure.screenshot} /><Info label="DOM snapshot" value={result.failure.dom_snapshot} /><Info label="Trace" value={result.failure.trace_path} /></div></details>}
     </article>)}</div>
   </section>;
+}
+
+function FailureDashboard({ report }: { report: ExecutionReport }) {
+  const failures = report.results.filter((result) => result.failure);
+  if (!failures.length) return <StatePanel type="empty" title="No execution failures" message="All executed scripts completed without failure diagnostics." />;
+  return <section className="space-y-4 rounded-2xl border border-border bg-card p-5"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Failure analysis</p><h2 className="mt-1 text-xl font-bold">Diagnostics and recovery evidence</h2><p className="mt-1 text-sm text-muted-foreground">Review the failed step, evidence, recovery attempts, and recommended action for each failure.</p></div><div className="space-y-3">{failures.map((result) => { const failure = result.failure!; return <article key={result.script_id} className="rounded-xl border border-red-500/20 bg-red-500/5 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">{result.script_name}</h3><p className="text-xs text-muted-foreground">{result.test_case_id} · {failure.failure_category} · step {failure.failed_step ?? '—'}</p></div><span className="rounded-full bg-red-500/10 px-3 py-1 text-xs font-bold text-red-600">{failure.recovery_attempts ?? 0} recovery attempts</span></div><p className="mt-3 text-sm">{failure.failure_reason}</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><Info label="Expected" value={failure.expected_result} /><Info label="Actual" value={failure.actual_result} /><Info label="Locator" value={failure.ui_element} /><Info label="Recovered locator" value={failure.repaired_locator} /><Info label="Recommendation" value={failure.recommended_action} /><Info label="URL" value={failure.page_url} /></div><div className="mt-3 flex flex-wrap gap-2 text-xs">{failure.screenshot && <a className="rounded-lg border border-border px-3 py-2 font-semibold hover:bg-muted" href={failure.screenshot} target="_blank" rel="noreferrer">Screenshot</a>}{failure.dom_snapshot && <a className="rounded-lg border border-border px-3 py-2 font-semibold hover:bg-muted" href={failure.dom_snapshot} target="_blank" rel="noreferrer">DOM snapshot</a>}{failure.trace_path && <a className="rounded-lg border border-border px-3 py-2 font-semibold hover:bg-muted" href={failure.trace_path} target="_blank" rel="noreferrer">Trace</a>}</div></article>; })}</div></section>;
 }
 
 function DetailedTestReport({ report }: { report: ExecutionReport }) {
