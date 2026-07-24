@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import hashlib
 import json
 import logging
 import re
@@ -104,6 +105,93 @@ def _best_page_url(test_case: dict[str, Any], base_url: str, elements: list[dict
         )
         return len(intent & (_meaningful_words(page_elements) | page_words))
     return max(pages, key=lambda page: (score(page), -len(page))) if pages else base_url
+
+
+def _stable_version(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, default=str, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _application_map(
+    base_url: str, title: str | None, elements: list[dict[str, Any]]
+) -> dict[str, Any]:
+    pages: dict[str, dict[str, Any]] = {}
+    relationships: list[dict[str, str]] = []
+    origin = urlsplit(base_url)
+    for element in elements:
+        page_url = str(element.get("page_url") or base_url)
+        page = pages.setdefault(
+            page_url, {"url": page_url, "title": title if page_url == base_url else None, "elements": []}
+        )
+        page["elements"].append(element)
+        href = element.get("href")
+        if href:
+            parsed = urlsplit(str(href))
+            if parsed.netloc == origin.netloc:
+                relationships.append(
+                    {
+                        "from": page_url,
+                        "to": str(href).split("#", 1)[0],
+                        "via": str(
+                            element.get("name")
+                            or element.get("visible_text")
+                            or element.get("role")
+                            or element.get("tag")
+                        ),
+                    }
+                )
+    return {
+        "start_url": base_url,
+        "pages": list(pages.values()),
+        "relationships": relationships,
+        "page_count": len(pages),
+        "element_count": len(elements),
+        "discovery_engine": "Skyvern + Playwright" if settings.skyvern_fallback_enabled else "Playwright",
+        "capture_engine": "Playwright",
+    }
+
+
+def _test_case_supported(
+    test_case: dict[str, Any], elements: list[dict[str, Any]]
+) -> bool:
+    identities = [
+        _meaningful_words(
+            " ".join(
+                str(element.get(key) or "")
+                for key in ("name", "label", "test_id", "placeholder", "visible_text")
+            )
+        )
+        for element in elements
+    ]
+    for step in test_case.get("steps", []):
+        action = str(step.get("action") or "")
+        lowered = action.lower()
+        if any(token in lowered for token in ("navigate", "open", "visit", "go to")):
+            continue
+        actionable = any(
+            token in lowered
+            for token in (
+                "click",
+                "press",
+                "select",
+                "choose",
+                "check",
+                "uncheck",
+                "enter",
+                "type",
+                "fill",
+                "search",
+                "submit",
+            )
+        )
+        # Observation/assertion steps do not require a control locator; Playwright
+        # validates their expected result after the preceding interaction.
+        if not actionable:
+            continue
+        action_words = _meaningful_words(action)
+        if action_words and not any(action_words & identity for identity in identities):
+            return False
+    return True
 
 
 def _validate_css_selector(selector: str) -> str:
@@ -232,18 +320,6 @@ class {class_name}:
                     best_element["visible_text"], exact=False
                 ).first
 
-        # --- Pass 2: visible-text fallback using quoted value only ---
-        if quoted:
-            pattern = re.compile(re.escape(quoted[0]), re.I)
-            for candidate in [
-                self.page.get_by_role("button", name=pattern),
-                self.page.get_by_label(pattern),
-                self.page.get_by_placeholder(pattern),
-                self.page.get_by_text(pattern, exact=False),
-            ]:
-                if candidate.count():
-                    return candidate.first
-
         raise AssertionError(
             f"Feature not found in application: no discovered element matches {{instruction!r}}"
         )
@@ -312,6 +388,42 @@ class AutomationService:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
+    def _mark_prior_script_lifecycle(
+        self,
+        workflow_id: Any,
+        requirement_version: str,
+        application_map_version: str | None,
+        current_test_case_ids: set[str],
+    ) -> None:
+        """Version prior file-backed generations without changing database tables."""
+        for manifest_path in self.artifact_root.glob("gen-*/generation.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if str(manifest.get("workflow", {}).get("workflow_id")) != str(workflow_id):
+                    continue
+                response = manifest.get("response", {})
+                prior_requirement = response.get("requirement_version")
+                prior_map = response.get("application_map_version")
+                changed = False
+                for script in response.get("scripts", []):
+                    if str(script.get("test_case_id")) not in current_test_case_ids:
+                        status = "Obsolete"
+                    elif prior_requirement and prior_requirement != requirement_version:
+                        status = "Regeneration Required"
+                    elif prior_map and application_map_version and prior_map != application_map_version:
+                        status = "Needs Review"
+                    else:
+                        status = "Valid"
+                    if script.get("lifecycle_status") != status:
+                        script["lifecycle_status"] = status
+                        changed = True
+                if changed:
+                    manifest_path.write_text(
+                        json.dumps(manifest, default=str, indent=2), encoding="utf-8"
+                    )
+            except (OSError, ValueError, TypeError):
+                logger.warning("Could not update script lifecycle manifest path=%s", manifest_path)
+
     async def _validate_url(self, url: str) -> None:
         if settings.app_mock_mode:
             return
@@ -338,12 +450,23 @@ class AutomationService:
                 browser = await playwright.chromium.launch(headless=True)
                 page = await browser.new_page()
                 origin = urlsplit(url)
-                pending = [url]
+                skyvern_urls = await self.skyvern.discover_urls(
+                    url=url,
+                    page_limit=settings.automation_crawl_page_limit,
+                    depth_limit=settings.automation_crawl_depth_limit,
+                )
+                verified_candidates = [
+                    candidate
+                    for candidate in skyvern_urls
+                    if urlsplit(candidate).scheme in {"http", "https"}
+                    and urlsplit(candidate).netloc == origin.netloc
+                ]
+                pending = [(url, 0), *[(candidate, 1) for candidate in verified_candidates]]
                 visited: set[str] = set()
                 raw: list[dict[str, Any]] = []
                 title = None
-                while pending and len(visited) < 20:
-                    page_url = pending.pop(0)
+                while pending and len(visited) < settings.automation_crawl_page_limit:
+                    page_url, depth = pending.pop(0)
                     if page_url in visited:
                         continue
                     await page.goto(page_url, wait_until="domcontentloaded", timeout=int(settings.automation_navigation_timeout_seconds * 1000))
@@ -374,8 +497,13 @@ class AutomationService:
                         parsed = urlsplit(href) if href else None
                         if parsed and parsed.scheme in {"http", "https"} and parsed.netloc == origin.netloc:
                             clean_href = href.split("#", 1)[0]
-                            if clean_href not in visited and clean_href not in pending:
-                                pending.append(clean_href)
+                            queued_urls = {queued_url for queued_url, _ in pending}
+                            if (
+                                depth < settings.automation_crawl_depth_limit
+                                and clean_href not in visited
+                                and clean_href not in queued_urls
+                            ):
+                                pending.append((clean_href, depth + 1))
                 await browser.close()
             elements = [DiscoveredElement.model_validate(item) for item in raw]
             logger.info(
@@ -415,11 +543,17 @@ class AutomationService:
                 "Check the workflow result or re-run the workflow."
             )
         url = str(request.application_url)
+        requirement_payload = {
+            "input": state.get("input") or state.get("context"),
+            "scenarios": state.get("scenarios", []),
+            "test_cases": state.get("test_cases", []),
+        }
+        requirement_version = _stable_version(requirement_payload)
         logger.info("generate() start workflow_id=%s url=%s", request.workflow_id, url)
         script_cache_key = cache.fingerprint(
             "scripts",
             {
-                "generator_version": 4,  # bump when generation logic changes
+                "generator_version": 5,  # bump when generation logic changes
                 "application_url": url,
                 "scenarios": [
                     {key:value for key,value in item.items() if key != "project_id"}
@@ -456,7 +590,16 @@ class AutomationService:
                 reachable=True,
                 page_title=cached.get("page_title"),
                 discovered_elements=[DiscoveredElement.model_validate(item) for item in cached.get("discovered_elements", [])],
+                application_map=cached.get("application_map", {}),
+                application_map_version=cached.get("application_map_version"),
+                requirement_version=cached.get("requirement_version") or requirement_version,
                 scripts=scripts,
+            )
+            self._mark_prior_script_lifecycle(
+                request.workflow_id,
+                requirement_version,
+                response.application_map_version,
+                {str(item.get("test_case_id")) for item in state.get("test_cases", [])},
             )
             self._generations[generation_id] = {
                 "response": response,
@@ -479,11 +622,27 @@ class AutomationService:
         directory.mkdir(parents=True, exist_ok=False)
         scenarios = {str(item["scenario_id"]): item for item in state.get("scenarios", [])}
         element_dicts = [element.model_dump(mode="json") for element in elements]
+        application_map = _application_map(url, title, element_dicts)
+        application_map_version = _stable_version(application_map)
+        self._mark_prior_script_lifecycle(
+            request.workflow_id,
+            requirement_version,
+            application_map_version,
+            {str(item.get("test_case_id")) for item in state.get("test_cases", [])},
+        )
         scripts = []
         skipped_count = 0
         for index, test_case in enumerate(state.get("test_cases", []), start=1):
             if state.get("review_decisions", {}).get(f"testCase:{test_case['test_case_id']}") == "rejected":
                 continue
+            dom_supported = _test_case_supported(test_case, element_dicts)
+            if not dom_supported:
+                logger.info(
+                    "Script marked Needs Review because one or more actions are not "
+                    "backed by verified DOM elements "
+                    "test_case_id=%s",
+                    test_case["test_case_id"],
+                )
 
 
 
@@ -520,6 +679,9 @@ class AutomationService:
                     download_path=f"/api/v1/automation/scripts/{generation_id}/{script_id}/download",
                     requirement_ids=test_case.get("requirement_ids", []),
                     user_story_ids=scenario.get("user_story_ids", []),
+                    application_map_version=application_map_version,
+                    requirement_version=requirement_version,
+                    lifecycle_status="Valid" if dom_supported else "Needs Review",
                 )
             )
         logger.info(
@@ -544,6 +706,9 @@ class AutomationService:
             reachable=True,
             page_title=title,
             discovered_elements=elements,
+            application_map=application_map,
+            application_map_version=application_map_version,
+            requirement_version=requirement_version,
             scripts=scripts,
         )
         self._generations[generation_id] = {
@@ -558,6 +723,9 @@ class AutomationService:
             {
                 "page_title": title,
                 "discovered_elements": [item.model_dump(mode="json") for item in elements],
+                "application_map": application_map,
+                "application_map_version": application_map_version,
+                "requirement_version": requirement_version,
                 "scripts": [item.model_dump(mode="json") for item in scripts],
             },
             settings.redis_script_ttl_seconds,
@@ -1103,6 +1271,56 @@ class AutomationService:
         else:
             await page.locator("body").wait_for(state="visible")
 
+    async def _quality_checks(
+        self,
+        page: Any,
+        directory: Path,
+        script_id: str,
+        network_errors: list[str],
+    ) -> dict[str, Any]:
+        """Lightweight checks that reuse the live Playwright page and existing artifacts."""
+        accessibility = await page.locator(
+            "input:not([aria-label]):not([aria-labelledby]),"
+            "button:not([aria-label]),img:not([alt])"
+        ).evaluate_all(
+            """els => els.slice(0, 50).filter(el => {
+              if (el.tagName.toLowerCase() === 'input' && el.labels?.length) return false;
+              if (el.tagName.toLowerCase() === 'button' && el.innerText?.trim()) return false;
+              return true;
+            }).map(el => ({tag: el.tagName.toLowerCase(), id: el.id || null}))"""
+        )
+        visual_path = directory / f"{script_id}-visual-current.png"
+        await page.screenshot(path=str(visual_path), full_page=True)
+        visual_hash = hashlib.sha256(visual_path.read_bytes()).hexdigest()
+        baseline_path = directory / f"{script_id}-visual-baseline.sha256"
+        previous_hash = (
+            baseline_path.read_text(encoding="utf-8").strip()
+            if baseline_path.is_file()
+            else None
+        )
+        if previous_hash is None:
+            baseline_path.write_text(visual_hash, encoding="utf-8")
+        return {
+            "accessibility": {
+                "checked": True,
+                "potential_violations": accessibility,
+            },
+            "visual_regression": {
+                "checked": True,
+                "baseline_created": previous_hash is None,
+                "changed": bool(previous_hash and previous_hash != visual_hash),
+                "current_screenshot": str(visual_path),
+            },
+            "api_contract": {
+                "checked": True,
+                "failed_responses": list(network_errors),
+                "note": "Observed HTTP failures are captured; schema validation requires an application contract.",
+            },
+            "backend_observability": {
+                "console_and_failed_request_capture": True,
+            },
+        }
+
     async def execute(
         self, request: ExecuteScriptsRequest, *, _dedicated_loop: bool = False
     ) -> ExecutionReport:
@@ -1285,6 +1503,11 @@ class AutomationService:
                         failure_category = "Assertion Failure"
                         await self._assert_expected(page, expected or "")
 
+                    quality_checks = await self._quality_checks(
+                        page, generation["directory"], script.script_id, network_errors
+                    )
+                    traceability = self._traceability(script)
+                    traceability["quality_checks"] = quality_checks
                     results.append(
                         ScriptExecutionResult(
                             script_id=script.script_id,
@@ -1293,7 +1516,7 @@ class AutomationService:
                             scenario_id=script.scenario_id,
                             status="passed",
                             duration_seconds=round(time.perf_counter() - test_started, 3),
-                            traceability=self._traceability(script),
+                            traceability=traceability,
                         )
                     )
                     # Stop trace cleanly on pass (no need to save)
@@ -1538,12 +1761,44 @@ class AutomationService:
             pass
         return ""
 
+    def _has_prior_failure(self, generation_id: str, script_id: str) -> bool:
+        if any(
+            report.generation_id == generation_id
+            and any(
+                result.script_id == script_id and result.status == "failed"
+                for result in report.results
+            )
+            for report in self._reports.values()
+        ):
+            return True
+        reports_directory = self.artifact_root / "reports"
+        if not reports_directory.is_dir():
+            return False
+        for report_path in sorted(
+            reports_directory.glob("exec-*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )[:200]:
+            try:
+                stored = json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if str(stored.get("generation_id")) != generation_id:
+                continue
+            if any(
+                str(item.get("script_id")) == script_id
+                and item.get("status") == "failed"
+                for item in stored.get("results", [])
+            ):
+                return True
+        return False
+
     def _classify_failure(
         self,
         failure: FailureAnalysis,
         mapping: RequirementMapping,
         test_case: dict[str, Any] | None,
-    ) -> tuple[str, float, bool, str]:
+    ) -> tuple[str, str, float, bool, str]:
         dom = self._safe_evidence_text(failure.dom_snapshot).lower()
         actual = (failure.actual_result or failure.failure_reason or "").lower()
         console = " ".join(failure.console_logs).lower()
@@ -1551,6 +1806,7 @@ class AutomationService:
         target_words = _meaningful_words(target)
         if not test_case or not mapping.scenario:
             return (
+                "REQUIREMENT_MISMATCH",
                 "Requirement mismatch",
                 0.95,
                 False,
@@ -1558,6 +1814,7 @@ class AutomationService:
             )
         if any(token in dom for token in ("just a moment", "cf-chl-", "captcha")):
             return (
+                "ENVIRONMENT_FAILURE",
                 "Environment or configuration issue",
                 0.96,
                 False,
@@ -1572,6 +1829,7 @@ class AutomationService:
             token in console for token in ("500 ", "502 ", "503 ", "networkerror", "failed to fetch")
         ):
             return (
+                "APPLICATION_DEFECT",
                 "API/Backend failure",
                 0.88,
                 True,
@@ -1579,6 +1837,7 @@ class AutomationService:
             )
         if failure.failure_category in {"Environment Issue", "Page Load Timeout"}:
             return (
+                "ENVIRONMENT_FAILURE",
                 "Environment or configuration issue",
                 0.84,
                 False,
@@ -1586,6 +1845,7 @@ class AutomationService:
             )
         if failure.failure_category in {"Navigation Failure", "Navigation"}:
             return (
+                "APPLICATION_DEFECT",
                 "Navigation problem",
                 0.86,
                 True,
@@ -1593,6 +1853,7 @@ class AutomationService:
             )
         if failure.failure_category == "Application Feature Missing":
             return (
+                "MISSING_FEATURE",
                 "Missing application functionality",
                 0.94,
                 True,
@@ -1602,20 +1863,31 @@ class AutomationService:
             dom_words = _meaningful_words(dom)
             if target_words and not (target_words & dom_words):
                 return (
+                    "MISSING_FEATURE",
                     "Missing application functionality",
                     0.72,
                     True,
                     "The expected UI target is not represented in the captured DOM.",
                 )
             return (
+                "AUTOMATION_DEFECT",
                 "Locator or automation issue",
                 0.82,
                 False,
                 "The target appears to exist, but the generated locator or interaction strategy failed.",
             )
         expected = (failure.expected_result or "").lower()
+        if any(token in actual for token in ("test data", "fixture", "seed data", "record not found")):
+            return (
+                "TEST_DATA_FAILURE",
+                "Environment or configuration issue",
+                0.84,
+                False,
+                "The failure indicates that required test data or fixtures are unavailable.",
+            )
         if any(token in expected for token in ("validation", "required", "invalid", "error message")):
             return (
+                "APPLICATION_DEFECT",
                 "Validation issue",
                 0.82,
                 True,
@@ -1623,19 +1895,22 @@ class AutomationService:
             )
         if failure.failure_category in {"Assertion Failure", "Application"}:
             return (
+                "APPLICATION_DEFECT",
                 "Incorrect business logic",
-                0.78,
+                0.85,
                 True,
                 "The action completed, but the resulting application state contradicted the expected behavior.",
             )
         if "hidden" in actual or "not visible" in actual or "intercept" in actual:
             return (
+                "APPLICATION_DEFECT",
                 "UI implementation issue",
                 0.76,
                 True,
                 "The UI element exists but its visibility, layering, or interactive state prevented use.",
             )
         return (
+            "AUTOMATION_DEFECT",
             "Locator or automation issue",
             0.65,
             False,
@@ -1651,7 +1926,7 @@ class AutomationService:
         failure = result.failure
         assert failure is not None
         mapping, scenario, test_case = self._map_failure_requirements(workflow, result)
-        category, confidence, application_issue, cause = self._classify_failure(
+        classification, category, confidence, application_issue, cause = self._classify_failure(
             failure, mapping, test_case
         )
         steps = (test_case or {}).get("steps", [])
@@ -1695,6 +1970,32 @@ class AutomationService:
         )
         expected = failure.expected_result or str(failed_step.get("expected_result") or "Expected behavior was not recorded.")
         actual = failure.actual_result or failure.failure_reason
+        previous_failure = self._has_prior_failure(generation_id, result.script_id)
+        gate_checks = {
+            "requirement_mapping_confirmed": bool(
+                mapping.scenario and mapping.test_case and mapping.user_story
+            ),
+            "expected_and_actual_available": bool(expected.strip() and actual.strip()),
+            "application_page_loaded": bool(
+                failure.page_url
+                and failure.failure_category not in {"Page Load Timeout", "Environment Issue"}
+            ),
+            "failure_reproducible": (
+                previous_failure or not settings.automation_require_reproducible_failure
+            ),
+            "automation_and_environment_ruled_out": classification
+            in {"APPLICATION_DEFECT", "MISSING_FEATURE"},
+            "confidence_threshold_met": confidence
+            >= settings.automation_defect_confidence_threshold,
+        }
+        gate_passed = all(gate_checks.values())
+        if application_issue and not gate_passed:
+            classification = "INCONCLUSIVE"
+            application_issue = False
+            cause = (
+                f"{cause} Developer issue creation was withheld because the evidence "
+                "confidence gate did not pass."
+            )
         story_refs = [item["id"] for item in mapping.user_story]
         scenario_ref = mapping.scenario[0]["id"] if mapping.scenario else result.scenario_id
         test_case_ref = mapping.test_case[0]["id"] if mapping.test_case else result.test_case_id
@@ -1710,7 +2011,7 @@ class AutomationService:
         implementation_plan = None
         automation_recommendation = None
         recommended_fix: list[str]
-        if application_issue:
+        if application_issue and gate_passed:
             ui_changes = []
             api_changes = []
             database_changes = ["No database change identified from current evidence."]
@@ -1822,8 +2123,14 @@ class AutomationService:
             acceptance_criteria_checklist=criteria,
         )
         return FailureIntelligence(
+            classification=classification,
             root_cause_category=category,
             confidence=confidence,
+            confidence_gate={
+                "threshold": settings.automation_defect_confidence_threshold,
+                "passed": gate_passed,
+                "checks": gate_checks,
+            },
             is_application_issue=application_issue,
             deviation_step={
                 "step_number": failure.failed_step,
@@ -1867,6 +2174,7 @@ class AutomationService:
                 "test_case_id": result.test_case_id,
                 "scenario_id": result.scenario_id,
                 "root_cause_category": result.failure.intelligence.root_cause_category,
+                "classification": result.failure.intelligence.classification,
                 "requirement_mapping": result.failure.intelligence.requirement_mapping.model_dump(
                     mode="json"
                 ),
@@ -1882,7 +2190,59 @@ class AutomationService:
             and result.failure.intelligence.developer_implementation_plan
         ]
         developer_execution_reports: list[dict[str, Any]] = []
+        qa_diagnostic_reports: list[dict[str, Any]] = []
+        traceability_chains: list[dict[str, Any]] = []
         for result in results:
+            mapping, _mapped_scenario, _mapped_test_case = self._map_failure_requirements(
+                workflow, result
+            )
+            defect_reference = None
+            if result.failure and result.failure.intelligence:
+                defect_reference = (
+                    result.failure.intelligence.developer_implementation_plan.ticket_title
+                    if result.failure.intelligence.developer_implementation_plan
+                    else result.failure.intelligence.classification
+                )
+            traceability_chains.append(
+                {
+                    "epic": mapping.epic,
+                    "feature": mapping.feature,
+                    "user_story": mapping.user_story,
+                    "acceptance_criterion": mapping.acceptance_criteria,
+                    "scenario": mapping.scenario,
+                    "test_case": mapping.test_case,
+                    "script": result.script_id,
+                    "execution_status": result.status,
+                    "defect": defect_reference,
+                }
+            )
+            failure = result.failure
+            intelligence = failure.intelligence if failure else None
+            qa_diagnostic_reports.append(
+                {
+                    "script_id": result.script_id,
+                    "status": result.status,
+                    "classification": (
+                        intelligence.classification if intelligence else None
+                    ),
+                    "confidence": intelligence.confidence if intelligence else None,
+                    "confidence_gate": (
+                        intelligence.confidence_gate if intelligence else {}
+                    ),
+                    "locator": failure.ui_element if failure else None,
+                    "stack_trace": failure.stack_trace if failure else None,
+                    "screenshots": [failure.screenshot] if failure and failure.screenshot else [],
+                    "dom_snapshot": failure.dom_snapshot if failure else None,
+                    "network_errors": failure.network_errors if failure else [],
+                    "console_logs": failure.console_logs if failure else [],
+                    "playwright_trace": failure.trace_path if failure else None,
+                    "automation_recommendations": (
+                        intelligence.automation_recommendation.model_dump(mode="json")
+                        if intelligence and intelligence.automation_recommendation
+                        else {}
+                    ),
+                }
+            )
             if result.failure and result.failure.intelligence:
                 intelligence = result.failure.intelligence
                 plan = intelligence.developer_implementation_plan
@@ -1923,7 +2283,7 @@ class AutomationService:
                         "missing_functionality": (
                             plan.missing_functionality
                             if plan
-                            else intelligence.expected_behavior
+                            else "Not confirmed; evidence is insufficient for a developer task."
                         ),
                         "developer_implementation_requirements": {
                             "ui": plan.ui_changes_required if plan else [],
@@ -1938,6 +2298,9 @@ class AutomationService:
                             for item in intelligence.requirement_mapping.acceptance_criteria
                         ],
                         "priority": plan.priority if plan else "Medium",
+                        "classification": intelligence.classification,
+                        "confidence": intelligence.confidence,
+                        "developer_issue_created": bool(plan),
                     }
                 )
                 continue
@@ -2001,6 +2364,9 @@ class AutomationService:
                         for item in mapping.acceptance_criteria
                     ],
                     "priority": "Low",
+                    "classification": None,
+                    "confidence": 1.0 if passed_execution else 0.0,
+                    "developer_issue_created": False,
                 }
             )
         prior_failed_ids = {
@@ -2146,11 +2512,31 @@ class AutomationService:
                     for result in results
                 ),
                 "verified_fixes": len(retest_verification),
+                "inconclusive": sum(
+                    bool(
+                        result.failure
+                        and result.failure.intelligence
+                        and result.failure.intelligence.classification == "INCONCLUSIVE"
+                    )
+                    for result in results
+                ),
             },
             requirement_coverage=requirement_coverage,
             failed_requirement_mapping=failed_mappings,
             developer_ready_tickets=developer_tickets,
             developer_execution_reports=developer_execution_reports,
+            qa_diagnostic_reports=qa_diagnostic_reports,
+            traceability_chains=traceability_chains,
+            requirement_version=response.requirement_version if (response := generation.get("response")) else None,
+            script_lifecycle=[
+                {
+                    "script_id": script.script_id,
+                    "status": script.lifecycle_status,
+                    "requirement_version": script.requirement_version,
+                    "application_map_version": script.application_map_version,
+                }
+                for script in (response.scripts if response else [])
+            ],
             retest_verification=retest_verification,
         )
         self._reports[execution_id] = report

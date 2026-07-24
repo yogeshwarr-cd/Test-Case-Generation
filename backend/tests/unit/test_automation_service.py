@@ -14,9 +14,21 @@ from app.services.automation_service import (
     AutomationService,
     _best_page_url,
     _python_source,
+    _test_case_supported,
     _validate_css_selector,
     _validate_generated_source,
 )
+
+
+def test_dom_coverage_gate_ignores_non_interactive_verification_steps():
+    test_case = {
+        "steps": [
+            {"action": "Enter 'Lenovo' in the search field"},
+            {"action": "Verify matching products are displayed"},
+        ]
+    }
+    elements = [{"tag": "input", "label": "Search store", "page_url": "https://example.com"}]
+    assert _test_case_supported(test_case, elements) is True
 
 
 def test_generated_source_is_playwright_page_object_and_contains_traceable_id():
@@ -265,6 +277,12 @@ async def test_generation_reads_completed_workflow_without_mutating_it(monkeypat
             "title": "Login",
             "steps": [{"step_number": 1, "action": "Open login", "expected_result": "Page opens"}],
             "requirement_ids": ["REQ-1"],
+        }, {
+            "test_case_id": "TC-2",
+            "scenario_id": "SC-1",
+            "title": "Unsupported carousel",
+            "steps": [{"step_number": 1, "action": "Select carousel mode", "expected_result": "Carousel opens"}],
+            "requirement_ids": ["REQ-2"],
         }],
     }
     original = repr(state)
@@ -286,6 +304,8 @@ async def test_generation_reads_completed_workflow_without_mutating_it(monkeypat
     assert response.reachable is True
     assert response.scripts[0].requirement_ids == ["REQ-1"]
     assert response.scripts[0].user_story_ids == ["US-1"]
+    assert len(response.scripts) == 2
+    assert response.scripts[1].lifecycle_status == "Needs Review"
     assert repr(state) == original
     assert (tmp_path / response.generation_id / f"{response.scripts[0].script_id}{SCRIPT_ARTIFACT_SUFFIX}").is_file()
     assert not list((tmp_path / response.generation_id).glob("*.py"))
@@ -392,6 +412,7 @@ def test_failed_execution_generates_developer_ticket_and_retest_verification(
             actual_result="No products were displayed",
             failure_reason="AssertionError",
             failure_category="Assertion Failure",
+            page_url="https://example.com/products",
         ),
         traceability={
             "requirements": ["REQ-1"],
@@ -410,12 +431,24 @@ def test_failed_execution_generates_developer_ticket_and_retest_verification(
     assert intelligence is not None
     assert intelligence.root_cause_category == "Incorrect business logic"
     assert intelligence.requirement_mapping.user_story[0]["id"] == "US-1"
-    assert intelligence.developer_implementation_plan is not None
-    assert "Matching products are displayed" in (
-        intelligence.developer_implementation_plan.missing_functionality
-    )
-    assert report.developer_ready_tickets[0].test_case_reference == "TC-1"
+    assert intelligence.classification == "INCONCLUSIVE"
+    assert intelligence.developer_implementation_plan is None
+    assert intelligence.confidence_gate["checks"]["failure_reproducible"] is False
+    assert report.developer_ready_tickets == []
     assert report.failed_requirement_mapping[0]["scenario_id"] == "SC-1"
+    reproduced = service._save_report(
+        ExecuteScriptsRequest(generation_id=generation_id, mode="automated"),
+        [failed_result.model_copy(deep=True)],
+        1,
+        generation_directory,
+        {"workflow": workflow},
+    )
+    reproduced_intelligence = reproduced.results[0].failure.intelligence
+    assert reproduced_intelligence.classification == "APPLICATION_DEFECT"
+    assert reproduced_intelligence.developer_implementation_plan is not None
+    assert reproduced.developer_ready_tickets[0].test_case_reference == "TC-1"
+    assert reproduced.qa_diagnostic_reports[0]["classification"] == "APPLICATION_DEFECT"
+    assert reproduced.traceability_chains[0]["script"] == "pw-001"
 
     passed_result = ScriptExecutionResult(
         script_id="pw-001",

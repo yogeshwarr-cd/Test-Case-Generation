@@ -38,6 +38,11 @@ class GeneratedScript(BaseModel):
     download_path: str
     requirement_ids: list[str] = Field(default_factory=list)
     user_story_ids: list[str] = Field(default_factory=list)
+    application_map_version: str | None = None
+    requirement_version: str | None = None
+    lifecycle_status: Literal[
+        "Valid", "Needs Review", "Obsolete", "Regeneration Required"
+    ] = "Valid"
 
 
 class ScriptGenerationResponse(BaseModel):
@@ -46,6 +51,9 @@ class ScriptGenerationResponse(BaseModel):
     reachable: bool
     page_title: str | None = None
     discovered_elements: list[DiscoveredElement] = Field(default_factory=list)
+    application_map: dict[str, Any] = Field(default_factory=dict)
+    application_map_version: str | None = None
+    requirement_version: str | None = None
     scripts: list[GeneratedScript]
 
 
@@ -149,6 +157,15 @@ class RetestStrategy(BaseModel):
 
 
 class FailureIntelligence(BaseModel):
+    classification: Literal[
+        "APPLICATION_DEFECT",
+        "MISSING_FEATURE",
+        "REQUIREMENT_MISMATCH",
+        "AUTOMATION_DEFECT",
+        "ENVIRONMENT_FAILURE",
+        "TEST_DATA_FAILURE",
+        "INCONCLUSIVE",
+    ] = "INCONCLUSIVE"
     root_cause_category: Literal[
         "Missing application functionality",
         "Incorrect business logic",
@@ -161,6 +178,7 @@ class FailureIntelligence(BaseModel):
         "Environment or configuration issue",
     ]
     confidence: float = Field(ge=0, le=1)
+    confidence_gate: dict[str, Any] = Field(default_factory=dict)
     is_application_issue: bool
     deviation_step: dict[str, Any] = Field(default_factory=dict)
     requirement_mapping: RequirementMapping
@@ -205,6 +223,10 @@ class ExecutionReport(BaseModel):
     failed_requirement_mapping: list[dict[str, Any]] = Field(default_factory=list)
     developer_ready_tickets: list[DeveloperImplementationPlan] = Field(default_factory=list)
     developer_execution_reports: list[dict[str, Any]] = Field(default_factory=list)
+    qa_diagnostic_reports: list[dict[str, Any]] = Field(default_factory=list)
+    traceability_chains: list[dict[str, Any]] = Field(default_factory=list)
+    requirement_version: str | None = None
+    script_lifecycle: list[dict[str, Any]] = Field(default_factory=list)
     retest_verification: list[dict[str, Any]] = Field(default_factory=list)
 
 

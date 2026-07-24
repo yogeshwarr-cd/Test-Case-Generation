@@ -164,6 +164,9 @@ export interface GeneratedScript {
   download_path: string;
   requirement_ids: string[];
   user_story_ids: string[];
+  application_map_version?: string;
+  requirement_version?: string;
+  lifecycle_status: 'Valid' | 'Needs Review' | 'Obsolete' | 'Regeneration Required';
 }
 
 export interface ScriptGeneration {
@@ -172,6 +175,15 @@ export interface ScriptGeneration {
   reachable: boolean;
   page_title?: string;
   discovered_elements: Array<{ role?: string; name?: string; label?: string; test_id?: string; tag: string }>;
+  application_map: {
+    page_count?: number;
+    element_count?: number;
+    discovery_engine?: string;
+    pages?: Array<Record<string, unknown>>;
+    relationships?: Array<Record<string, unknown>>;
+  };
+  application_map_version?: string;
+  requirement_version?: string;
   scripts: GeneratedScript[];
 }
 
@@ -245,6 +257,14 @@ export interface DeveloperImplementationPlan {
 }
 
 export interface FailureIntelligence {
+  classification:
+    | 'APPLICATION_DEFECT'
+    | 'MISSING_FEATURE'
+    | 'REQUIREMENT_MISMATCH'
+    | 'AUTOMATION_DEFECT'
+    | 'ENVIRONMENT_FAILURE'
+    | 'TEST_DATA_FAILURE'
+    | 'INCONCLUSIVE';
   root_cause_category:
     | 'Missing application functionality'
     | 'Incorrect business logic'
@@ -256,6 +276,11 @@ export interface FailureIntelligence {
     | 'API/Backend failure'
     | 'Environment or configuration issue';
   confidence: number;
+  confidence_gate: {
+    threshold?: number;
+    passed?: boolean;
+    checks?: Record<string, boolean>;
+  };
   is_application_issue: boolean;
   deviation_step: Record<string, unknown>;
   requirement_mapping: RequirementMapping;
@@ -311,6 +336,25 @@ export interface DeveloperExecutionReport {
   };
   acceptance_criteria: Array<{ id: string; title: string }>;
   priority: 'Critical' | 'High' | 'Medium' | 'Low';
+  classification?: FailureIntelligence['classification'];
+  confidence?: number;
+  developer_issue_created?: boolean;
+}
+
+export interface QaDiagnosticReport {
+  script_id: string;
+  status: 'passed' | 'failed' | 'skipped';
+  classification?: FailureIntelligence['classification'];
+  confidence?: number;
+  confidence_gate: FailureIntelligence['confidence_gate'];
+  locator?: string;
+  stack_trace?: string;
+  screenshots: string[];
+  dom_snapshot?: string;
+  network_errors: string[];
+  console_logs: string[];
+  playwright_trace?: string;
+  automation_recommendations: Record<string, string[]>;
 }
 
 export interface ExecutionReport {
@@ -355,6 +399,7 @@ export interface ExecutionReport {
     application_failures?: number;
     automation_failures?: number;
     verified_fixes?: number;
+    inconclusive?: number;
   };
   requirement_coverage: {
     total_mapped_requirements: number;
@@ -365,5 +410,14 @@ export interface ExecutionReport {
   failed_requirement_mapping: Array<Record<string, unknown>>;
   developer_ready_tickets: DeveloperImplementationPlan[];
   developer_execution_reports: DeveloperExecutionReport[];
+  qa_diagnostic_reports: QaDiagnosticReport[];
+  traceability_chains: Array<Record<string, unknown>>;
+  requirement_version?: string;
+  script_lifecycle: Array<{
+    script_id: string;
+    status: 'Valid' | 'Needs Review' | 'Obsolete' | 'Regeneration Required';
+    requirement_version?: string;
+    application_map_version?: string;
+  }>;
   retest_verification: Array<{ script_id: string; previous_status: string; current_status: string; verified: boolean; message: string }>;
 }

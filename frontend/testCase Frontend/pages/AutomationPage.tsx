@@ -5,7 +5,7 @@ import { CheckCircle2, Download, LoaderCircle, Play } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
-import type { DeveloperExecutionReport, ExecutionReport, ScriptGeneration } from '../types';
+import type { DeveloperExecutionReport, ExecutionReport, QaDiagnosticReport, ScriptGeneration } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
 export function AutomationPage() {
@@ -72,7 +72,7 @@ export function AutomationPage() {
         <>
           <section className="rounded-2xl border border-green-500/30 bg-green-500/5 p-5">
             <div className="flex items-center gap-2 font-semibold text-green-600"><CheckCircle2 className="h-5 w-5" /> Application reachable</div>
-            <p className="mt-2 text-sm text-muted-foreground">{generation.page_title || generation.application_url} · {generation.discovered_elements.length} interactive elements discovered · {generation.scripts.length} scripts generated</p>
+            <p className="mt-2 text-sm text-muted-foreground">{generation.page_title || generation.application_url} · {generation.application_map?.page_count ?? 1} pages · {generation.discovered_elements.length} verified interactive elements · {generation.scripts.length} scripts generated</p>
           </section>
 
           <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
@@ -123,6 +123,7 @@ function DeveloperReportCard({ report }: { report: DeveloperExecutionReport }) {
   ];
   return <div className="mt-4 space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
     <ReportSection title="Issue Title"><h4 className="text-base font-semibold">{report.issue_title}</h4></ReportSection>
+    {report.classification && <ReportSection title="Evidence Classification"><p className="font-semibold">{report.classification} · {Math.round((report.confidence ?? 0) * 100)}% confidence{report.developer_issue_created ? ' · developer issue created' : ' · no developer issue created'}</p></ReportSection>}
     <ReportSection title="Affected Feature/User Story"><p><strong>{report.affected_feature_user_story.feature}</strong></p><TextList values={report.affected_feature_user_story.user_stories} empty="No mapped user story was found." /></ReportSection>
     <ReportSection title="Problem Description"><p>{report.problem_description}</p></ReportSection>
     <ReportSection title="Expected vs Actual Application Behavior"><p><strong>Expected:</strong> {report.expected_vs_actual_application_behavior.expected}</p><p className="mt-2"><strong>Actual:</strong> {report.expected_vs_actual_application_behavior.actual}</p></ReportSection>
@@ -138,10 +139,33 @@ function TextList({ values, empty = 'No changes identified.', ordered = false }:
 
 function DetailedTestReport({ report }: { report: ExecutionReport }) {
   const developerReports = report.developer_execution_reports ?? [];
+  const qaReports = report.qa_diagnostic_reports ?? [];
   return <section className="space-y-5 rounded-2xl border border-border bg-card p-5">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Developer implementation report</p><h2 className="mt-1 text-xl font-bold">Application behavior report</h2></div><button onClick={() => downloadFile(`developer-report-${report.execution_id}.json`, JSON.stringify(developerReports, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold"><Download className="h-4 w-4" /> Download developer report</button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Developer implementation report</p><h2 className="mt-1 text-xl font-bold">Evidence-gated application behavior</h2></div><button onClick={() => downloadFile(`developer-report-${report.execution_id}.json`, JSON.stringify(developerReports, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold"><Download className="h-4 w-4" /> Download developer report</button></div>
     {developerReports.length ? developerReports.map((item, index) => <DeveloperReportCard key={`${item.issue_title}-${index}`} report={item} />) : <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">No execution results are available.</p>}
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-5"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">QA diagnostic report</p><h2 className="mt-1 text-xl font-bold">Automation and technical evidence</h2></div><button onClick={() => downloadFile(`qa-diagnostic-${report.execution_id}.json`, JSON.stringify(qaReports, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold"><Download className="h-4 w-4" /> Download QA report</button></div>
+    {qaReports.map((item) => <QaDiagnosticCard key={item.script_id} report={item} />)}
   </section>;
+}
+
+function QaDiagnosticCard({ report }: { report: QaDiagnosticReport }) {
+  const checks = Object.entries(report.confidence_gate?.checks ?? {}).map(([key, passed]) => `${passed ? 'PASS' : 'FAIL'}: ${key.replaceAll('_', ' ')}`);
+  const recommendations = Object.values(report.automation_recommendations ?? {}).flat();
+  const evidence = [
+    report.locator ? `Locator: ${report.locator}` : '',
+    report.playwright_trace ? `Trace: ${report.playwright_trace}` : '',
+    report.dom_snapshot ? `DOM: ${report.dom_snapshot}` : '',
+    ...report.screenshots.map((value) => `Screenshot: ${value}`),
+    ...report.network_errors.map((value) => `Network: ${value}`),
+    ...report.console_logs.map((value) => `Console: ${value}`),
+    report.stack_trace ? `Stack trace: ${report.stack_trace}` : '',
+  ].filter(Boolean);
+  return <article className="space-y-3 rounded-xl border border-border bg-muted/20 p-4 text-sm">
+    <h3 className="font-semibold">{report.script_id} · {report.status}{report.classification ? ` · ${report.classification}` : ''}</h3>
+    <ReportSection title="Confidence Gate"><TextList values={checks} empty="Not applicable for this result." /></ReportSection>
+    <ReportSection title="Technical Evidence"><TextList values={evidence} empty="No failure evidence was produced." /></ReportSection>
+    <ReportSection title="Automation Recommendations"><TextList values={recommendations} /></ReportSection>
+  </article>;
 }
 
 function Metric({ label, value }: { label: string; value: string | number }) { return <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-xl font-bold">{value}</p></div>; }

@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     automation_action_timeout_seconds: float = 10.0
     automation_navigation_settle_timeout_seconds: float = 3.0
     automation_wait_for_network_idle: bool = False
+    automation_defect_confidence_threshold: float = 0.80
+    automation_require_reproducible_failure: bool = True
+    automation_crawl_page_limit: int = 20
+    automation_crawl_depth_limit: int = 5
     skyvern_fallback_enabled: bool = False
     skyvern_integration_mode: str = "self_hosted"
     skyvern_base_url: str = "http://localhost:8000"
