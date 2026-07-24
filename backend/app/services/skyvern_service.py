@@ -15,6 +15,7 @@ class SkyvernRecovery:
     succeeded: bool
     locator: str | None = None
     message: str | None = None
+    attempts: int = 0
 
 
 class SkyvernAdapter:
@@ -58,7 +59,12 @@ class SkyvernAdapter:
             "max_steps": 5,
         }
         last_message = None
-        for _ in range(max(1, settings.skyvern_max_attempts)):
+        # Recovery is deliberately bounded.  A recovery provider must never
+        # turn a single failed action into an unbounded execution loop.
+        max_attempts = min(2, max(1, int(settings.skyvern_max_attempts)))
+        attempts = 0
+        for _ in range(max_attempts):
+            attempts += 1
             try:
                 async with httpx.AsyncClient(timeout=settings.skyvern_timeout_seconds) as client:
                     response = await client.post(f"{self.base_url}/v1/run/tasks", json=payload, headers=headers)
@@ -85,8 +91,9 @@ class SkyvernAdapter:
                         status == "completed" and bool(locator),
                         locator,
                         data.get("failure_reason"),
+                        attempts,
                     )
                 last_message = f"Skyvern returned HTTP {response.status_code}"
             except (httpx.HTTPError, ValueError) as exc:
                 last_message = type(exc).__name__
-        return SkyvernRecovery(True, False, message=last_message)
+        return SkyvernRecovery(True, False, message=last_message, attempts=attempts)

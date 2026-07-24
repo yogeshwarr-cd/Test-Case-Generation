@@ -14,6 +14,10 @@ class GenerateScriptsRequest(BaseModel):
 class DiscoveredElement(BaseModel):
     role: str | None = None
     name: str | None = None
+    element_id: str | None = None
+    html_name: str | None = None
+    aria_label: str | None = None
+    aria_labelledby: str | None = None
     label: str | None = None
     test_id: str | None = None
     tag: str
@@ -22,6 +26,9 @@ class DiscoveredElement(BaseModel):
     visible_text: str | None = None
     href: str | None = None
     page_url: str | None = None
+    frame_url: str | None = None
+    css_path: str | None = None
+    attributes: dict[str, str] = Field(default_factory=dict)
     options: list[dict[str, str]] = Field(default_factory=list)
     checked: bool | None = None
 
@@ -97,6 +104,11 @@ class FailureAnalysis(BaseModel):
     stack_trace: str | None = None
     skyvern_attempted: bool = False
     skyvern_succeeded: bool = False
+    # Bounded recovery diagnostics.  Defaults preserve compatibility with
+    # existing stored reports and API clients.
+    recovery_attempts: int = 0
+    repaired_locator: str | None = None
+    recommended_action: str | None = None
 
 
 class ScriptExecutionResult(BaseModel):

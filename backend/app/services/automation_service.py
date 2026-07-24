@@ -4,6 +4,7 @@ import asyncio
 import ast
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -32,12 +33,16 @@ from app.schemas.automation_schema import (
     TraceabilityReport,
 )
 from app.services.skyvern_service import SkyvernAdapter
+from app.services.failure_analysis_service import FailureAnalysisService
 from app.services.cache_service import cache
 from app.services.workflow_service import workflow_service
+from app.playwright_automation.semantic_mapping import build_intent
+from app.playwright_automation.knowledge_graph import build_ui_graph
 
 R = TypeVar("R")
 logger = logging.getLogger(__name__)
 SCRIPT_ARTIFACT_SUFFIX = ".pwscript"
+AUTOMATION_PIPELINE_VERSION = "mapped-ui-v6-2026-07-24"
 
 
 async def _on_playwright_loop(factory: Callable[[], Awaitable[R]]) -> R:
@@ -87,6 +92,94 @@ def _meaningful_words(value: str) -> set[str]:
         word.lower() for word in re.findall(r"[A-Za-z0-9]+", value)
         if len(word) > 1 and word.lower() not in ignored
     }
+
+
+def _explicit_input_value(
+    action: str, expected_result: str, test_data: dict[str, Any] | None, seed: str
+) -> str:
+    quoted = re.findall(r"['\"]([^'\"]+)['\"]", action)
+    if quoted:
+        return quoted[-1]
+    combined = f"{action} {expected_result}".lower()
+    for key, value in (test_data or {}).items():
+        if _meaningful_words(str(key)) & _meaningful_words(combined):
+            if value is not None and not isinstance(value, (dict, list)):
+                return str(value)
+    quoted = re.findall(r"['\"]([^'\"]+)['\"]", expected_result)
+    if quoted:
+        return quoted[-1]
+    stable = re.sub(r"[^a-z0-9]", "", seed.lower())[-10:] or "test"
+    if "email" in combined:
+        return f"automation+{stable}@example.com"
+    if "password" in combined:
+        return "Automation#2026"
+    if "phone" in combined:
+        return "2025550147"
+    if any(word in combined for word in ("quantity", "number", "amount")):
+        return "1"
+    if "date" in combined:
+        return "2026-01-15"
+    return "Automation test"
+
+
+def _plan_test_prerequisites(
+    test_cases: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build deterministic setup steps from producer cases already in the suite.
+
+    This is domain-neutral: dependencies are inferred from precondition/action
+    vocabulary and producer outcomes, not from website or product names.
+    """
+    planned: list[dict[str, Any]] = []
+    producers: list[tuple[set[str], list[dict[str, Any]]]] = []
+    dependency_terms = {
+        "existing", "created", "available", "present", "added", "authenticated",
+        "selected", "completed", "configured", "saved", "contains",
+    }
+    for original in test_cases:
+        case = dict(original)
+        own_steps = [dict(step) for step in case.get("steps", [])]
+        precondition_text = " ".join(
+            str(value) for value in case.get("preconditions", [])
+        )
+        intent_text = " ".join(
+            [str(case.get("title", "")), precondition_text]
+            + [str(step.get("action", "")) for step in own_steps[:1]]
+        )
+        intent_words = _meaningful_words(intent_text)
+        needs_setup = bool(intent_words & dependency_terms) or bool(precondition_text)
+        setup_steps: list[dict[str, Any]] = []
+        if needs_setup and producers:
+            ranked = sorted(
+                (
+                    (len(intent_words & produced_words), steps)
+                    for produced_words, steps in producers
+                ),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            if ranked and ranked[0][0] > 0:
+                setup_steps = [
+                    {
+                        **step,
+                        "step_number": index,
+                        "is_prerequisite": True,
+                    }
+                    for index, step in enumerate(ranked[0][1], start=1)
+                ]
+        combined = setup_steps + own_steps
+        case["steps"] = [
+            {**step, "step_number": index}
+            for index, step in enumerate(combined, start=1)
+        ]
+        case["prerequisite_step_count"] = len(setup_steps)
+        planned.append(case)
+        outcome_text = " ".join(
+            [str(case.get("title", ""))]
+            + [str(step.get("expected_result", "")) for step in own_steps]
+        )
+        producers.append((_meaningful_words(outcome_text), combined))
+    return planned
 
 
 def _best_page_url(test_case: dict[str, Any], base_url: str, elements: list[dict[str, Any]]) -> str:
@@ -143,8 +236,22 @@ def _validate_css_selector(selector: str) -> str:
 
 
 def _validate_generated_source(source: str) -> None:
-    """Compile generated Python and validate every literal CSS locator it contains."""
+    """Quality gate: syntax, intent contract, assertions, and CSS literals."""
     tree = ast.parse(source)
+    required_names = {"BASE_URL", "STEPS", "DISCOVERED_ELEMENTS", "AUTOMATION_INTENT"}
+    assigned = {
+        node.targets[0].id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and node.targets
+        and isinstance(node.targets[0], ast.Name)
+    }
+    missing = required_names - assigned
+    if missing:
+        raise ValueError(f"Generated script is missing quality-gate fields: {sorted(missing)}")
+    functions = {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    if not any(name in functions for name in {"assert_expected", "assert_step", "assert_outcome"}):
+        raise ValueError("Generated script contains no deterministic assertion handler")
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
@@ -161,19 +268,25 @@ def _python_source(
     test_case: dict[str, Any],
     application_url: str,
     discovered_elements: list[dict[str, Any]] | None = None,
+    target_url: str | None = None,
 ) -> str:
     """Generate a Playwright test script whose selectors come ONLY from the
     discovered DOM.  No CSS is inferred from action text."""
     class_name = "PageObject" + "".join(part.title() for part in _safe_name(test_case["title"]).split("-"))
     steps = pformat(test_case.get("steps", []), width=100, sort_dicts=False)
     discovered = pformat(discovered_elements or [], width=100, sort_dicts=False)
+    intent = pformat(build_intent(test_case, discovered_elements or []), width=100, sort_dicts=False)
     return f'''"""Generated from test case {test_case["test_case_id"]}."""
 import re
 from playwright.sync_api import Page, expect
 
 BASE_URL = {application_url!r}
+TARGET_URL = {(target_url or application_url)!r}
 STEPS = {steps}
 DISCOVERED_ELEMENTS = {discovered}
+AUTOMATION_INTENT = {intent}
+TEST_DATA = {pformat(test_case.get("test_data", {}), width=100, sort_dicts=False)}
+TEST_SEED = {str(test_case["test_case_id"])!r}
 
 
 class {class_name}:
@@ -209,7 +322,8 @@ class {class_name}:
         for element in DISCOVERED_ELEMENTS:
             identity = " ".join(
                 str(element.get(k) or "")
-                for k in ("name", "label", "test_id", "placeholder", "visible_text")
+                for k in ("name", "label", "test_id", "element_id", "html_name",
+                          "aria_label", "placeholder", "visible_text")
             )
             score = len(phrase_words & set(re.findall(r"[a-z0-9]+", identity.lower())))
             if score > best_score:
@@ -219,11 +333,23 @@ class {class_name}:
         if best_element:
             if best_element.get("test_id"):
                 return self.page.get_by_test_id(best_element["test_id"])
+            if best_element.get("element_id"):
+                return self.page.locator(
+                    "[id=" + repr(best_element["element_id"]) + "]"
+                )
+            if best_element.get("aria_label"):
+                return self.page.get_by_label(
+                    best_element["aria_label"], exact=True
+                )
             if best_element.get("label"):
                 return self.page.get_by_label(best_element["label"], exact=True)
             if best_element.get("role") and best_element.get("name"):
                 return self.page.get_by_role(
                     best_element["role"], name=best_element["name"], exact=True
+                )
+            if best_element.get("html_name"):
+                return self.page.locator(
+                    "[name=" + repr(best_element["html_name"]) + "]"
                 )
             if best_element.get("placeholder"):
                 return self.page.get_by_placeholder(
@@ -250,16 +376,34 @@ class {class_name}:
             f"Feature not found in application: no discovered element matches {{instruction!r}}"
         )
 
-    def perform(self, instruction: str):
+    def value_for(self, instruction: str, expected_result: str):
+        quoted = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", instruction)
+        if quoted:
+            return quoted[-1]
+        combined = f"{{instruction}} {{expected_result}}".lower()
+        for key, value in TEST_DATA.items():
+            if set(re.findall(r"[a-z0-9]+", str(key).lower())) & set(re.findall(r"[a-z0-9]+", combined)):
+                if value is not None and not isinstance(value, (dict, list)):
+                    return str(value)
+        stable = re.sub(r"[^a-z0-9]", "", TEST_SEED.lower())[-10:] or "test"
+        if "email" in combined:
+            return f"automation+{{stable}}@example.com"
+        if "password" in combined:
+            return "Automation#2026"
+        if any(word in combined for word in ("quantity", "number", "amount")):
+            return "1"
+        return "Automation test"
+
+    def perform(self, instruction: str, expected_result: str):
         lowered = instruction.lower()
         values = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", instruction)
-        value = values[-1] if values else None
+        value = values[-1] if values else self.value_for(instruction, expected_result)
         if any(token in lowered for token in ("navigate", "open", "visit", "go to")):
-            self.page.goto(BASE_URL, wait_until="domcontentloaded")
-            self.page.wait_for_load_state("networkidle")
+            self.page.goto(TARGET_URL, wait_until="domcontentloaded")
+        elif re.search(r"\\bpress(?:\\s+the)?\\s+(enter|return|tab|escape|space)(?:\\s+key)?\\b", lowered):
+            key = re.search(r"\\b(enter|return|tab|escape|space)\\b", lowered).group(1)
+            self.page.keyboard.press({{"return": "Enter", "space": "Space"}}.get(key, key.title()))
         elif any(token in lowered for token in ("select", "choose")):
-            if value is None:
-                raise AssertionError(f"Selection has no explicit UI value: {{instruction}}")
             locator = self.stable_locator(instruction)
             locator.wait_for(state="visible")
             if locator.evaluate("el => el.tagName.toLowerCase()") == "select":
@@ -275,30 +419,58 @@ class {class_name}:
             locator = self.stable_locator(instruction)
             locator.wait_for(state="visible")
             locator.click()
+        elif "focus" in lowered:
+            locator = self.stable_locator(instruction)
+            locator.wait_for(state="visible")
+            locator.focus()
         elif any(token in lowered for token in ("enter", "type", "fill")):
-            if value is None:
-                raise AssertionError(f"Input has no explicit UI value: {{instruction}}")
             locator = self.stable_locator(instruction)
             locator.wait_for(state="visible")
             locator.fill(value)
         else:
-            expect(self.page.locator("body")).to_be_visible()
+            return
 
-    def assert_expected(self, expected_result: str):
+    def assert_expected(self, expected_result: str, action: str):
+        lowered = expected_result.lower()
         quoted = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", expected_result)
-        if quoted and any(word in expected_result.lower() for word in ("visible", "displayed", "shown")):
-            expect(self.page.get_by_text(quoted[-1], exact=False).first).to_be_visible()
-        else:
-            expect(self.page.locator("body")).to_be_visible()
+        if any(word in lowered for word in ("entered", "input", "field", "value")) and any(
+            word in lowered for word in ("contains", "display", "entered", "value")
+        ):
+            expect(self.stable_locator(action)).to_have_value(
+                self.value_for(action, expected_result)
+            )
+            return
+        if any(word in lowered for word in ("empty", "cleared")):
+            expect(self.stable_locator(action)).to_have_value("")
+            return
+        if "checked" in lowered or "completed" in lowered:
+            try:
+                expect(self.stable_locator(action)).to_be_checked()
+                return
+            except Exception:
+                pass
+        if any(word in lowered for word in ("not visible", "removed", "disappear")) and quoted:
+            expect(self.page.get_by_text(quoted[-1], exact=False).first).not_to_be_visible()
+            return
+        if quoted and any(word in lowered for word in ("visible", "displayed", "shown", "appears", "contains")):
+            for text in quoted:
+                expect(self.page.get_by_text(text, exact=False).first).to_be_visible()
+            return
+        if any(word in lowered for word in ("focus", "focused")):
+            expect(self.stable_locator(action)).to_be_focused()
+            return
+        if any(word in lowered for word in ("enabled", "ready")):
+            expect(self.stable_locator(action)).to_be_enabled()
+            return
+        raise AssertionError(f"Expected outcome is not grounded in a discoverable UI assertion: {{expected_result}}")
 
 
 def test_{_safe_name(test_case["test_case_id"]).replace("-", "_")}(page: Page):
     app = {class_name}(page)
-    page.goto(BASE_URL, wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle")
+    page.goto(TARGET_URL, wait_until="domcontentloaded")
     for step in STEPS:
-        app.perform(step["action"])
-        app.assert_expected(step["expected_result"])
+        app.perform(step["action"], step.get("expected_result", ""))
+        app.assert_expected(step.get("expected_result", ""), step["action"])
 '''
 
 
@@ -360,6 +532,7 @@ class AutomationService:
         self._reports: dict[str, ExecutionReport] = {}
         self._comparisons: dict[str, TraceabilityReport] = {}
         self.skyvern = SkyvernAdapter()
+        self.failure_analysis = FailureAnalysisService()
 
     @property
     def artifact_root(self) -> Path:
@@ -452,26 +625,119 @@ class AutomationService:
                         continue
                     visited.add(page.url)
                     title = title or await page.title()
-                    discovered = await page.locator(
-                        "button,input,select,textarea,a,label,form,table,menu,"
-                        "[role],[data-testid],[contenteditable='true'],[tabindex]"
-                    ).evaluate_all(
-                        """els => els.slice(0, 300).filter(el => {
+                    # Dismiss non-destructive consent overlays before discovery.  This is
+                    # deliberately conservative: only buttons with common consent labels
+                    # are clicked, and failures are ignored so discovery remains read-only.
+                    try:
+                        await page.get_by_role(
+                            "button",
+                            name=re.compile(
+                                r"^(accept|accept all|allow all|agree|i agree|got it|close)$",
+                                re.I,
+                            ),
+                        ).first.click(timeout=600)
+                    except Exception:
+                        pass
+                    # Trigger ordinary lazy rendering before taking the DOM
+                    # snapshot. Multiple bounded passes cover infinite-scroll pages while
+                    # preventing an unbounded crawl.
+                    try:
+                        await page.evaluate("""async () => {
+                          const pause = ms => new Promise(r => setTimeout(r, ms));
+                          let stable = 0; let previous = 0;
+                          for (let pass = 0; pass < 8 && stable < 2; pass++) {
+                            const limit = Math.min(document.documentElement.scrollHeight, 30000);
+                            for (let y = 0; y <= limit; y += 700) {
+                              window.scrollTo(0, y); await pause(80);
+                            }
+                            await pause(150);
+                            const current = document.documentElement.scrollHeight;
+                            stable = current === previous ? stable + 1 : 0;
+                            previous = current;
+                          }
+                          window.scrollTo(0, 0);
+                        }""")
+                    except Exception:
+                        pass
+                    discovered: list[dict[str, Any]] = []
+                    for frame in page.frames:
+                        try:
+                            frame_items = await frame.locator(
+                                "button,input,select,textarea,a[href],label,form,table,menu,"
+                                "dialog,[role],[data-testid],[data-test],[data-cy],"
+                                "[contenteditable='true'],[tabindex],[onclick]"
+                            ).evaluate_all(
+                        """els => els.slice(0, 500).filter(el => {
                           const style = getComputedStyle(el); const box = el.getBoundingClientRect();
                           return style.visibility !== 'hidden' && style.display !== 'none' && box.width > 0 && box.height > 0;
                         }).map(el => ({
                           role: el.getAttribute('role') || (el.tagName.toLowerCase() === 'input'
                             ? ({checkbox:'checkbox',radio:'radio',number:'spinbutton',submit:'button',button:'button'}[el.type] || 'textbox')
                             : ({button:'button',a:'link',select:'combobox',textarea:'textbox'}[el.tagName.toLowerCase()] ?? null)),
-                          name: el.getAttribute('aria-label') || el.getAttribute('name') || el.innerText?.trim() || null,
-                          label: el.labels?.[0]?.innerText?.trim() || el.getAttribute('aria-labelledby') || null,
-                          placeholder: el.getAttribute('placeholder'), test_id: el.getAttribute('data-testid'),
+                          name: el.getAttribute('aria-label') || el.labels?.[0]?.innerText?.trim()
+                            || el.getAttribute('name') || el.innerText?.trim() || null,
+                          element_id: el.id || null, html_name: el.getAttribute('name'),
+                          aria_label: el.getAttribute('aria-label'),
+                          aria_labelledby: el.getAttribute('aria-labelledby'),
+                          label: el.labels?.[0]?.innerText?.trim() || null,
+                          placeholder: el.getAttribute('placeholder'),
+                          test_id: el.getAttribute('data-testid') || el.getAttribute('data-test')
+                            || el.getAttribute('data-cy'),
                           visible_text: el.innerText?.trim() || null, href: el.href || null,
                           tag: el.tagName.toLowerCase(), input_type: el.getAttribute('type'),
                           checked: typeof el.checked === 'boolean' ? el.checked : null,
+                          attributes: Object.fromEntries([...el.attributes]
+                            .filter(a => a.name.startsWith('data-')).map(a => [a.name, a.value])),
+                          parent_tag: el.parentElement?.tagName?.toLowerCase() || null,
+                          parent_id: el.parentElement?.id || null,
+                          parent_role: el.parentElement?.getAttribute('role') || null,
+                          css_path: el.id ? `#${CSS.escape(el.id)}` : null,
                           options: el.tagName.toLowerCase() === 'select' ? [...el.options].map(o => ({label:o.text.trim(), value:o.value})) : []
                         }))"""
-                    )
+                            )
+                            for item in frame_items:
+                                item["frame_url"] = frame.url
+                                attrs = item.setdefault("attributes", {})
+                                for key in ("parent_tag", "parent_id", "parent_role"):
+                                    if item.get(key):
+                                        attrs[key] = str(item.pop(key))
+                            discovered.extend(frame_items)
+                        except Exception as frame_error:
+                            inaccessible.append({
+                                "url": frame.url or page.url,
+                                "reason": f"Frame inspection failed: {type(frame_error).__name__}",
+                            })
+                    # Playwright locators pierce open shadow roots, but a frame-level
+                    # locator query does not expose the host relationship. Traverse open
+                    # roots explicitly and add the same stable metadata for those nodes.
+                    try:
+                        shadow_items = await page.evaluate("""() => {
+                          const selector = "button,input,select,textarea,a[href],label,form,table,menu,dialog,[role],[data-testid],[data-test],[data-cy],[contenteditable='true'],[tabindex],[onclick]";
+                          const out = []; const seen = new Set();
+                          const text = el => (el.innerText || el.getAttribute('aria-label') || el.getAttribute('name') || '').trim() || null;
+                          const walk = (root, host = null) => {
+                            if (!root || !root.querySelectorAll) return;
+                            root.querySelectorAll(selector).forEach(el => {
+                              if (seen.has(el)) return; seen.add(el);
+                              const r = el.getAttribute('role') || (el.tagName.toLowerCase() === 'button' ? 'button' : null);
+                              out.push({tag: el.tagName.toLowerCase(), role: r, name: text(el), element_id: el.id || null,
+                                html_name: el.getAttribute('name'), aria_label: el.getAttribute('aria-label'),
+                                aria_labelledby: el.getAttribute('aria-labelledby'), label: el.labels?.[0]?.innerText?.trim() || null,
+                                placeholder: el.getAttribute('placeholder'), test_id: el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('data-cy'),
+                                visible_text: el.innerText?.trim() || null, href: el.href || null, input_type: el.getAttribute('type'),
+                                frame_url: location.href, css_path: el.id ? '#' + CSS.escape(el.id) : null,
+                                attributes: {shadow_host: host?.tagName?.toLowerCase() || ''}});
+                              if (el.shadowRoot) walk(el.shadowRoot, el);
+                            });
+                            root.querySelectorAll('*').forEach(el => { if (el.shadowRoot) walk(el.shadowRoot, el); });
+                          };
+                          walk(document); return out;
+                        }""")
+                        for item in shadow_items:
+                            item["page_url"] = page.url
+                        discovered.extend(shadow_items)
+                    except Exception as shadow_error:
+                        inaccessible.append({"url": page.url, "reason": f"Shadow DOM inspection failed: {type(shadow_error).__name__}"})
                     for item in discovered:
                         item["page_url"] = page.url
                     raw.extend(discovered)
@@ -529,12 +795,16 @@ class AutomationService:
         script_cache_key = cache.fingerprint(
             "scripts",
             {
-                "generator_version": 5,
-                "generation_mode": "ui_discovery",
+                "generator_version": 6,
+                "pipeline_version": AUTOMATION_PIPELINE_VERSION,
+                "generation_mode": "mapped_ui",
                 "application_url": url,
+                "test_cases": state.get("test_cases", []),
             },
         )
         cached = await cache.get_json(script_cache_key)
+        if cached and cached.get("pipeline_version") != AUTOMATION_PIPELINE_VERSION:
+            cached = None
         if cached:
             generation_id = f"gen-{uuid.uuid4()}"
             directory = self.artifact_root / generation_id
@@ -570,7 +840,8 @@ class AutomationService:
                 "workflow": state,
                 "directory": directory,
                 "learned_locators": {},
-                "ui_specs": cached.get("ui_specs", []),
+                "execution_cases": cached.get("execution_cases", []),
+                "pipeline_version": AUTOMATION_PIPELINE_VERSION,
             }
             await self._cache_generation(generation_id)
             return response
@@ -595,20 +866,27 @@ class AutomationService:
         directory = self.artifact_root / generation_id
         directory.mkdir(parents=True, exist_ok=False)
         element_dicts = [element.model_dump(mode="json") for element in elements]
-        pages: dict[str, list[dict[str, Any]]] = {}
-        for element in element_dicts:
-            pages.setdefault(str(element.get("page_url") or url), []).append(element)
-        if not pages:
-            pages[url] = []
+        ui_graph = build_ui_graph(element_dicts, url)
+        planned_cases = _plan_test_prerequisites(state.get("test_cases", []))
+        scenarios = {
+            str(item.get("scenario_id")): item for item in state.get("scenarios", [])
+        }
         scripts: list[GeneratedScript] = []
-        ui_specs: list[dict[str, Any]] = []
-        for index, (page_url, page_elements) in enumerate(sorted(pages.items()), start=1):
-            script_id = f"ui-page-{index:03d}"
+        for index, test_case in enumerate(planned_cases, start=1):
+            target_url = _best_page_url(test_case, url, element_dicts)
+            page_elements = [
+                element for element in element_dicts
+                if str(element.get("page_url") or url) == target_url
+            ] or element_dicts
+            script_id = f"pw-{index:03d}-{_safe_name(str(test_case['test_case_id']))}"
             path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
             try:
-                source = _ui_python_source(script_id, url, page_url, page_elements)
-                # Bug 6 fix: catch per-script validation errors so one bad script
-                # doesn't abort generation of all remaining scripts.
+                source = _python_source(
+                    test_case,
+                    url,
+                    page_elements,
+                    target_url=target_url,
+                )
                 _validate_generated_source(source)
             except (SyntaxError, ValueError) as source_err:
                 logger.warning(
@@ -618,26 +896,23 @@ class AutomationService:
                 )
                 continue
             path.write_text(source, encoding="utf-8")
-            page_name = urlsplit(page_url).path.strip("/") or "Home"
+            scenario = scenarios.get(str(test_case.get("scenario_id")), {})
             scripts.append(
                 GeneratedScript(
                     script_id=script_id,
                     workflow_id=request.workflow_id,
-                    test_case_id=script_id,
-                    scenario_id="ui-discovery",
-                    name=f"UI coverage: {page_name}",
+                    test_case_id=str(test_case["test_case_id"]),
+                    scenario_id=str(test_case.get("scenario_id") or "unmapped"),
+                    name=str(test_case.get("title") or script_id),
                     application_url=url,
                     source=source,
                     download_path=f"/api/v1/automation/scripts/{generation_id}/{script_id}/download",
-                    requirement_ids=[],
-                    user_story_ids=[],
+                    requirement_ids=test_case.get("requirement_ids", []),
+                    user_story_ids=scenario.get("user_story_ids", []),
                 )
             )
-            ui_specs.append(
-                {"script_id": script_id, "page_url": page_url, "elements": page_elements}
-            )
         logger.info(
-            "generate() complete: %d UI scripts built. generation_id=%s",
+            "generate() complete: %d mapped scripts built. generation_id=%s",
             len(scripts), generation_id,
         )
         if not scripts:
@@ -656,7 +931,9 @@ class AutomationService:
             "workflow": state,
             "directory": directory,
             "learned_locators": {},
-            "ui_specs": ui_specs,
+            "execution_cases": planned_cases,
+            "pipeline_version": AUTOMATION_PIPELINE_VERSION,
+            "ui_knowledge_graph": ui_graph,
         }
         await self._cache_generation(generation_id)
         await cache.set_json(
@@ -665,7 +942,9 @@ class AutomationService:
                 "page_title": title,
                 "discovered_elements": [item.model_dump(mode="json") for item in elements],
                 "scripts": [item.model_dump(mode="json") for item in scripts],
-                "ui_specs": ui_specs,
+                "execution_cases": planned_cases,
+                "pipeline_version": AUTOMATION_PIPELINE_VERSION,
+                "ui_knowledge_graph": ui_graph,
                 **crawl_summary,
             },
             settings.redis_script_ttl_seconds,
@@ -679,7 +958,8 @@ class AutomationService:
             "workflow": generation["workflow"],
             "directory": str(generation["directory"]),
             "learned_locators": generation.get("learned_locators", {}),
-            "ui_specs": generation.get("ui_specs", []),
+            "execution_cases": generation.get("execution_cases", []),
+            "pipeline_version": generation.get("pipeline_version", AUTOMATION_PIPELINE_VERSION),
         }
         (generation["directory"] / "generation.json").write_text(
             json.dumps(manifest, default=str, indent=2), encoding="utf-8"
@@ -692,7 +972,14 @@ class AutomationService:
 
     async def generation(self, generation_id: str) -> dict[str, Any]:
         if generation_id in self._generations:
-            return self._generations[generation_id]
+            generation = self._generations[generation_id]
+            if generation.get("pipeline_version") != AUTOMATION_PIPELINE_VERSION:
+                self._generations.pop(generation_id, None)
+                raise AutomationNotFound(
+                    "This generation belongs to an older automation pipeline. "
+                    "Generate the scripts again before execution."
+                )
+            return generation
         safe_generation_id = _safe_name(generation_id)
         if safe_generation_id == generation_id:
             manifest_path = self.artifact_root / generation_id / "generation.json"
@@ -704,8 +991,14 @@ class AutomationService:
                         "workflow": stored["workflow"],
                         "directory": manifest_path.parent,
                         "learned_locators": stored.get("learned_locators", {}),
-                        "ui_specs": stored.get("ui_specs", []),
+                        "execution_cases": stored.get("execution_cases", []),
+                        "pipeline_version": stored.get("pipeline_version"),
                     }
+                    if generation["pipeline_version"] != AUTOMATION_PIPELINE_VERSION:
+                        raise AutomationNotFound(
+                            "This generation belongs to an older automation pipeline. "
+                            "Generate the scripts again before execution."
+                        )
                     self._generations[generation_id] = generation
                     return generation
                 except (KeyError, ValueError, TypeError):
@@ -720,8 +1013,14 @@ class AutomationService:
                 "workflow": cached["workflow"],
                 "directory": Path(cached["directory"]),
                 "learned_locators": cached.get("learned_locators", {}),
-                "ui_specs": cached.get("ui_specs", []),
+                "execution_cases": cached.get("execution_cases", []),
+                "pipeline_version": cached.get("pipeline_version"),
             }
+            if generation["pipeline_version"] != AUTOMATION_PIPELINE_VERSION:
+                raise AutomationNotFound(
+                    "This generation belongs to an older automation pipeline. "
+                    "Generate the scripts again before execution."
+                )
             self._generations[generation_id] = generation
             return generation
         raise AutomationNotFound("Script generation was not found")
@@ -783,8 +1082,8 @@ class AutomationService:
             identity = " ".join(
                 str(element.get(key) or "")
                 for key in (
-                    "name", "label", "test_id", "placeholder", "visible_text",
-                    "href", "title", "id", "class",
+                    "name", "label", "test_id", "element_id", "html_name",
+                    "aria_label", "placeholder", "visible_text", "href",
                 )
             )
             score = len(phrase_words & _meaningful_words(identity))
@@ -792,22 +1091,48 @@ class AutomationService:
                 ranked.append((score, element))
         candidates = []
         for _, element in sorted(ranked, key=lambda item: item[0], reverse=True):
+            scope = page
+            frame_url = element.get("frame_url")
+            if frame_url and frame_url != page.url:
+                matching_frame = next(
+                    (frame for frame in page.frames if frame.url == frame_url), None
+                )
+                if matching_frame is not None:
+                    scope = matching_frame
             if element.get("test_id"):
-                candidates.append(page.get_by_test_id(element["test_id"]))
-            if element.get("label"):
-                candidates.append(page.get_by_label(element["label"], exact=True))
+                candidates.append(scope.get_by_test_id(element["test_id"]))
+            if element.get("element_id"):
+                candidates.append(
+                    scope.locator("[id=" + json.dumps(str(element["element_id"])) + "]")
+                )
+            if element.get("aria_label"):
+                candidates.append(
+                    scope.locator(
+                        "[aria-label=" + json.dumps(str(element["aria_label"])) + "]"
+                    )
+                )
             if element.get("role") and element.get("name"):
                 candidates.append(
-                    page.get_by_role(element["role"], name=element["name"], exact=True)
+                    scope.get_by_role(element["role"], name=element["name"], exact=True)
+                )
+            if element.get("label"):
+                candidates.append(scope.get_by_label(element["label"], exact=True))
+            if element.get("html_name"):
+                candidates.append(
+                    scope.locator("[name=" + json.dumps(str(element["html_name"])) + "]")
                 )
             if element.get("placeholder"):
                 candidates.append(
-                    page.get_by_placeholder(element["placeholder"], exact=True)
+                    scope.get_by_placeholder(element["placeholder"], exact=True)
                 )
             if element.get("visible_text"):
                 candidates.append(
-                    page.get_by_text(element["visible_text"], exact=False)
+                    scope.get_by_text(element["visible_text"], exact=False)
                 )
+            if element.get("css_path"):
+                candidates.append(scope.locator(element["css_path"]))
+            if element.get("xpath"):
+                candidates.append(scope.locator("xpath=" + str(element["xpath"])))
         return candidates
 
     async def _resolve_locators(
@@ -862,6 +1187,9 @@ class AutomationService:
         page: Any,
         action: str,
         discovered_elements: list[dict[str, Any]] | None = None,
+        expected_result: str = "",
+        test_data: dict[str, Any] | None = None,
+        seed: str = "test",
     ) -> str | None:
         lowered = action.lower()
         phrase = self._locator_phrase(action)
@@ -883,9 +1211,24 @@ class AutomationService:
             except LookupError:
                 return f"page | {page.url}"
         values = re.findall(r"['\"]([^'\"]+)['\"]", action)
-        desired = values[-1] if values else None
+        desired = values[-1] if values else _explicit_input_value(
+            action, expected_result, test_data, seed
+        )
+        key_match = re.search(
+            r"\bpress(?:\s+the)?\s+(enter|return|tab|escape|space)(?:\s+key)?\b",
+            lowered,
+        )
+        if key_match:
+            key = {"return": "Enter", "space": "Space"}.get(
+                key_match.group(1), key_match.group(1).title()
+            )
+            await page.keyboard.press(key)
+            return f"keyboard | {key}"
         roles: tuple[str, ...]
-        interactive_tokens = ("click", "press", "select", "choose", "check", "uncheck", "enter", "type", "fill", "radio")
+        interactive_tokens = (
+            "click", "press", "select", "choose", "check", "uncheck",
+            "enter", "type", "fill", "radio", "focus",
+        )
         if not any(token in lowered for token in interactive_tokens):
             # Passive / observation step — no element click/fill required
             return "passive | page state"
@@ -895,16 +1238,45 @@ class AutomationService:
             roles = ("checkbox", "radio")
         elif any(token in lowered for token in ("click", "press")):
             roles = ("button", "link")
+        elif "focus" in lowered:
+            roles = ("textbox", "spinbutton", "combobox", "button", "link")
         elif any(token in lowered for token in ("enter", "type", "fill")):
-            if desired is None:
-                raise LookupError(f"Input action has no explicit value: '{action}'")
             roles = ("textbox", "spinbutton")
         else:
             roles = ("button", "link")
 
-        locators = await self._resolve_locators(
-            page, phrase, roles, discovered_elements
-        )
+        locators: list[tuple[Any, str]] = []
+        # Dynamic row/card controls often have a generic accessible name
+        # ("Toggle", "Remove") while the instruction names the surrounding
+        # item. Resolve the named item first, then search its nearest semantic
+        # container. This is framework- and application-independent.
+        if values and any(
+            token in lowered for token in ("click", "check", "uncheck", "radio")
+        ):
+            try:
+                named_item = page.get_by_text(values[0], exact=False).first
+                if await named_item.count():
+                    container = named_item.locator(
+                        "xpath=ancestor-or-self::*[self::li or self::tr or self::article or self::section or self::form or self::div][1]"
+                    )
+                    for role in roles:
+                        contextual = container.get_by_role(role)
+                        if await contextual.count() and await contextual.first.is_visible():
+                            locators.append((
+                                contextual.first,
+                                f"contextual {role} near {values[0]!r}",
+                            ))
+            except Exception:
+                pass
+        try:
+            locators.extend(
+                await self._resolve_locators(
+                    page, phrase, roles, discovered_elements
+                )
+            )
+        except LookupError:
+            if not locators:
+                raise
         last_error: Exception | None = None
         for locator, description in locators:
             try:
@@ -966,6 +1338,8 @@ class AutomationService:
                         await locator.uncheck()
                     else:
                         await locator.check()
+                elif "focus" in lowered:
+                    await locator.focus()
                 elif any(token in lowered for token in ("enter", "type", "fill")):
                     await locator.fill(
                         desired,
@@ -1100,17 +1474,61 @@ class AutomationService:
 
     @staticmethod
     async def _wait_for_page_stable(page: Any) -> None:
-        """Wait for network idle; fall back to domcontentloaded on timeout."""
+        """Wait briefly for DOM readiness without requiring an idle network.
+
+        Modern applications commonly keep analytics, sockets, and polling
+        requests open, so networkidle is not a reliable readiness signal.
+        """
         try:
-            await page.wait_for_load_state(
-                "networkidle",
-                timeout=int(min(settings.automation_navigation_timeout_seconds, 15) * 1000),
+            await page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
+        try:
+            await page.locator("body").wait_for(state="visible", timeout=5000)
+            await page.wait_for_timeout(250)
+        except Exception:
+            pass
+        # Do not require network-idle (SPAs often keep sockets open), but give
+        # pending route/render work a bounded opportunity to settle.
+        try:
+            await page.wait_for_function(
+                "() => !document.querySelector('[aria-busy=\"true\"], .loading, .spinner')",
+                timeout=1500,
             )
         except Exception:
+            pass
+
+    async def _perform_with_retries(
+        self,
+        page: Any,
+        action: str,
+        page_elements: list[dict[str, Any]],
+        expected: str,
+        test_data: dict[str, Any],
+        test_case_id: str,
+        max_retries: int = 2,
+    ) -> tuple[Any, int]:
+        """Execute one deterministic action with bounded synchronization retries.
+
+        Retries only repeat the same business action; they never alter the test
+        case or automation intent. This handles detached locators and SPA
+        transitions before recovery services are considered.
+        """
+        last_error: Exception | None = None
+        for attempt in range(max_retries + 1):
             try:
-                await page.wait_for_load_state("domcontentloaded", timeout=5000)
-            except Exception:
-                pass
+                await self._wait_for_page_stable(page)
+                return await self._perform(
+                    page, action, page_elements, expected, test_data, test_case_id
+                ), attempt
+            except Exception as exc:
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                await self._dismiss_overlays(page)
+                await page.wait_for_timeout(150 * (attempt + 1))
+        assert last_error is not None
+        raise last_error
 
     @staticmethod
     async def _validate_navigation(page: Any, expected_url_prefix: str | None = None) -> None:
@@ -1188,16 +1606,101 @@ class AutomationService:
                 continue
         return False
 
-    async def _assert_expected(self, page: Any, expected_result: str) -> None:
+    async def _assert_expected(
+        self,
+        page: Any,
+        expected_result: str,
+        action: str = "",
+        test_data: dict[str, Any] | None = None,
+        seed: str = "test",
+    ) -> None:
+        lowered = expected_result.lower()
         quoted = re.findall(r"['\"]([^'\"]+)['\"]", expected_result)
+        # Input-value outcomes must be checked as values, not as visible text.
+        if any(word in lowered for word in ("entered", "input", "field", "value")) and (
+            any(word in lowered for word in ("contains", "display", "entered", "value"))
+        ):
+            try:
+                locators = await self._resolve_locators(
+                    page, self._locator_phrase(action), ("textbox", "spinbutton", "combobox")
+                )
+                expected_value = _explicit_input_value(
+                    action, expected_result, test_data, seed
+                )
+                actual = await locators[0][0].input_value()
+                if actual != expected_value:
+                    raise AssertionError(
+                        f"Expected field value {expected_value!r}, received {actual!r}"
+                    )
+                return
+            except LookupError:
+                pass
         if quoted and any(
-            word in expected_result.lower() for word in ("visible", "displayed", "shown")
+            phrase in lowered for phrase in ("not visible", "removed", "disappear")
         ):
             await page.get_by_text(quoted[-1], exact=False).first.wait_for(
-                state="visible", timeout=int(settings.automation_action_timeout_seconds * 1000)
+                state="hidden",
+                timeout=int(settings.automation_action_timeout_seconds * 1000),
             )
-        else:
-            await page.locator("body").wait_for(state="visible")
+            return
+        if any(word in lowered for word in ("empty", "cleared")):
+            locators = await self._resolve_locators(
+                page, self._locator_phrase(action), ("textbox", "spinbutton")
+            )
+            actual = await locators[0][0].input_value()
+            if actual:
+                raise AssertionError(f"Expected an empty field, received {actual!r}")
+            return
+        if any(word in lowered for word in ("checked", "completed")):
+            if quoted:
+                try:
+                    item = page.get_by_text(quoted[-1], exact=False).first
+                    container = item.locator(
+                        "xpath=ancestor-or-self::*[self::li or self::tr or self::div][1]"
+                    )
+                    checkbox = container.get_by_role("checkbox").first
+                    if await checkbox.count() and await checkbox.is_checked():
+                        return
+                except Exception:
+                    pass
+            try:
+                locators = await self._resolve_locators(
+                    page, self._locator_phrase(action), ("checkbox", "radio")
+                )
+                if await locators[0][0].is_checked():
+                    return
+            except LookupError:
+                pass
+        if quoted and any(
+            word in lowered for word in (
+                "visible", "displayed", "shown", "appears", "contains", "display"
+            )
+        ):
+            for text in quoted:
+                await page.get_by_text(text, exact=False).first.wait_for(
+                    state="visible",
+                    timeout=int(settings.automation_action_timeout_seconds * 1000),
+                )
+            return
+        if any(word in lowered for word in ("focus", "focused")):
+            has_focus = await page.evaluate(
+                "() => document.activeElement && document.activeElement !== document.body"
+            )
+            if not has_focus:
+                raise AssertionError("Expected an interactive element to have focus")
+            return
+        if any(word in lowered for word in ("enabled", "ready")) and action:
+            locators = await self._resolve_locators(
+                page,
+                self._locator_phrase(action),
+                ("textbox", "button", "link", "combobox", "checkbox", "radio"),
+            )
+            if not await locators[0][0].is_enabled():
+                raise AssertionError("Expected the target UI element to be enabled")
+            return
+        raise AssertionError(
+            f"Expected outcome is not grounded in a discoverable UI assertion: {expected_result}"
+        )
 
     async def _execute_ui_specs(
         self, request: ExecuteScriptsRequest, generation: dict[str, Any]
@@ -1361,7 +1864,8 @@ class AutomationService:
         started = time.perf_counter()
         results: list[ScriptExecutionResult] = []
         state = generation["workflow"]
-        cases = {str(item["test_case_id"]): item for item in state.get("test_cases", [])}
+        execution_cases = generation.get("execution_cases") or state.get("test_cases", [])
+        cases = {str(item["test_case_id"]): item for item in execution_cases}
         run_skyvern_calls = 0
         from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -1392,6 +1896,7 @@ class AutomationService:
                 element = None
                 skyvern_attempted = False
                 skyvern_succeeded = False
+                recovery_attempts = 0
                 failure_category = "Script Generation"
                 try:
                     test_case = cases[script.test_case_id]
@@ -1433,7 +1938,15 @@ class AutomationService:
                                 el for el in disc_dicts
                                 if not el.get("page_url") or el.get("page_url") == page.url
                             ]
-                            element = await self._perform(page, action, page_elements)
+                            element, action_attempts = await self._perform_with_retries(
+                                page,
+                                action,
+                                page_elements,
+                                expected or "",
+                                test_case.get("test_data", {}),
+                                str(test_case["test_case_id"]),
+                            )
+                            recovery_attempts += action_attempts
                         except (LookupError, PlaywrightError, PlaywrightTimeoutError) as action_error:
                             # Classify timeout separately
                             if isinstance(action_error, PlaywrightTimeoutError):
@@ -1466,6 +1979,7 @@ class AutomationService:
                                 )
                                 skyvern_attempted = recovery.attempted
                                 skyvern_succeeded = recovery.succeeded
+                                recovery_attempts += int(getattr(recovery, "attempts", 0) or 0)
                                 if recovery.locator:
                                     try:
                                         await self._retry_recovered(
@@ -1488,7 +2002,13 @@ class AutomationService:
 
                         # ---- Post-action assertion (req 4) ----
                         failure_category = "Assertion Failure"
-                        await self._assert_expected(page, expected or "")
+                        await self._assert_expected(
+                            page,
+                            expected or "",
+                            action,
+                            test_case.get("test_data", {}),
+                            str(test_case["test_case_id"]),
+                        )
 
                     results.append(
                         ScriptExecutionResult(
@@ -1498,7 +2018,10 @@ class AutomationService:
                             scenario_id=script.scenario_id,
                             status="passed",
                             duration_seconds=round(time.perf_counter() - test_started, 3),
-                            traceability=self._traceability(script),
+                            traceability={
+                                **self._traceability(script),
+                                "recovery_attempts": recovery_attempts,
+                            },
                         )
                     )
                     # Stop trace cleanly on pass (no need to save)
@@ -1508,11 +2031,15 @@ class AutomationService:
                         pass
 
                 except Exception as exc:
-                    # ---- Classify environment errors (req 10) ----
-                    if isinstance(exc, (ImportError, OSError, PermissionError, EnvironmentError)):
-                        failure_category = "Environment Issue"
-                    elif isinstance(exc, AssertionError):
-                        failure_category = "Assertion Failure"
+                    # Central deterministic classification.  Keep the legacy
+                    # schema labels while exposing the recommendation in the
+                    # execution log; no LLM is involved in this path.
+                    diagnostic = self.failure_analysis.classify(
+                        exc,
+                        network_errors=network_errors,
+                        page_url=page.url,
+                    )
+                    failure_category = diagnostic.category
 
                     # ---- Screenshot (req 11) ----
                     screenshot_path: Path | None = None
@@ -1544,7 +2071,10 @@ class AutomationService:
                         failed_step=failed_step,
                         expected_result=expected,
                         actual_result=str(exc),
-                        failure_reason=type(exc).__name__,
+                        failure_reason=(
+                            f"{type(exc).__name__}: {diagnostic.reason}; "
+                            f"recommended_action={diagnostic.recommended_action}"
+                        ),
                         failure_category=failure_category,
                         page_url=page.url,
                         ui_element=element,
@@ -1556,6 +2086,9 @@ class AutomationService:
                         stack_trace=traceback.format_exc(),
                         skyvern_attempted=skyvern_attempted,
                         skyvern_succeeded=skyvern_succeeded,
+                        recovery_attempts=recovery_attempts,
+                        repaired_locator=(element if recovery_attempts and element else None),
+                        recommended_action=diagnostic.recommended_action,
                     )
                     results.append(
                         ScriptExecutionResult(
@@ -1567,7 +2100,7 @@ class AutomationService:
                             duration_seconds=round(time.perf_counter() - test_started, 3),
                             error_message=str(exc),
                             failure=failure,
-                            traceability=self._traceability(script),
+                        traceability=self._traceability(script),
                         )
                     )
                 finally:
@@ -1812,6 +2345,11 @@ class AutomationService:
         return comparison
 
     async def health(self, *, _dedicated_loop: bool = False) -> AutomationHealth:
+        identity = {
+            "pipeline_version": AUTOMATION_PIPELINE_VERSION,
+            "process_id": str(os.getpid()),
+            "codebase": str(Path(__file__).resolve().parents[3]),
+        }
         if settings.app_mock_mode:
             return AutomationHealth(
                 status="healthy",
@@ -1820,7 +2358,7 @@ class AutomationService:
                 skyvern_enabled=False,
                 skyvern_api_reachable=None,
                 skyvern_configuration_valid=True,
-                details={"mode": "mock"},
+                details={"mode": "mock", **identity},
             )
         if sys.platform == "win32" and not _dedicated_loop:
             return await _on_playwright_loop(
@@ -1828,7 +2366,7 @@ class AutomationService:
             )
         playwright_available = False
         browser_available = False
-        details = {}
+        details = dict(identity)
         try:
             from playwright.async_api import async_playwright
 
