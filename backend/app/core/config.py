@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     app_name: str = "Test Case Generator"
     app_env: str = "development"
     app_host: str = "0.0.0.0"
-    app_port: int = 8001
+    app_port: int = 8003
     debug: bool = True
     app_mock_mode: bool = False  # TODO: re-enable mock mode when needed
     database_url: str = (

@@ -17,7 +17,7 @@ Install and start the backend:
 cd backend
 ..\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ..\.venv\Scripts\python.exe -m playwright install chromium
-..\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+..\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8003
 ```
 
 Readiness is available at `GET /api/v1/automation/health`.

@@ -27,7 +27,7 @@ Alternatively, start Redis 7 locally or in WSL on port 6379.
 Then restart the backend and verify:
 
 ```text
-GET http://localhost:8001/health/cache
+GET http://localhost:8003/health/cache
 ```
 
 A healthy response confirms caching is active. If Redis is unavailable, cache

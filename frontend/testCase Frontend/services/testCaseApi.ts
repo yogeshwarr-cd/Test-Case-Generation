@@ -10,7 +10,7 @@ import type {
 } from '../types';
 import { parseWorkflowEvent } from '../utils';
 
-const BASE_URL = (process.env.NEXT_PUBLIC_TESTCASE_API_BASE_URL ?? 'http://127.0.0.1:8001').replace(/\/$/, '');
+const BASE_URL = (process.env.NEXT_PUBLIC_TESTCASE_API_BASE_URL ?? 'http://127.0.0.1:8003').replace(/\/$/, '');
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 30000): Promise<T> {
   const controller = new AbortController();

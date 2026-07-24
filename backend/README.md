@@ -14,10 +14,10 @@ cd backend
 pip install -r requirements.txt
 Copy-Item .env.example .env
 alembic upgrade head
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8003
 ```
 
-Swagger is at `http://localhost:8001/docs`. Do not point tests at development or production data.
+Swagger is at `http://localhost:8003/docs`. Do not point tests at development or production data.
 
 ## Optional wireframe and screenshot analysis
 
@@ -30,10 +30,10 @@ Identical images reuse SHA-256 cached analysis under `IMAGE_STORAGE_PATH`; no ad
 Upload example:
 
 ```powershell
-curl.exe -X POST http://localhost:8001/api/v1/images/upload -F "image=@login.png" -F "image_description=Customer login wireframe"
+curl.exe -X POST http://localhost:8003/api/v1/images/upload -F "image=@login.png" -F "image_description=Customer login wireframe"
 ```
 
-Then include `"image_ids":["<returned-uuid>"]` inside `input_payload` when starting the existing workflow. Inspect and test both endpoints at `http://localhost:8001/docs`.
+Then include `"image_ids":["<returned-uuid>"]` inside `input_payload` when starting the existing workflow. Inspect and test both endpoints at `http://localhost:8003/docs`.
 
 Install runtime dependencies with `pip install -r requirements.txt`. For PaddleOCR and YOLO training use `pip install -r requirements-ml.txt` plus the platform-appropriate PaddlePaddle runtime. Tesseract fallback also requires the local Tesseract executable.
 

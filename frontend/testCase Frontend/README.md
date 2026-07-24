@@ -17,7 +17,7 @@ The public App Router entry points live under `app/test-case-generation` and ren
 Set the second backend base URL:
 
 ```env
-NEXT_PUBLIC_TESTCASE_API_BASE_URL=http://127.0.0.1:8001
+NEXT_PUBLIC_TESTCASE_API_BASE_URL=http://127.0.0.1:8003
 ```
 
 The existing `NEXT_PUBLIC_API_BASE_URL` is not changed.

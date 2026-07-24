@@ -544,7 +544,9 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
             provider_name="cerebras_fallback",
         ),
     }
-    providers = [provider_map["cerebras"], provider_map["cerebras_fallback"]]
+    providers = [provider_map["cerebras"]]
+    if settings.cerebras_fallback_api_key:
+        providers.append(provider_map["cerebras_fallback"])
     return LLMClient(
         providers,
         timeout=settings.llm_request_timeout_seconds,
