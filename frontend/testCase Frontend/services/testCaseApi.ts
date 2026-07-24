@@ -6,6 +6,7 @@ import type {
   WorkflowStartResponse,
   ScriptGeneration,
   ExecutionReport,
+  TraceabilityComparisonReport,
 } from '../types';
 import { parseWorkflowEvent } from '../utils';
 
@@ -47,6 +48,11 @@ export const testCaseApi = {
     return request<ExecutionReport>('/api/v1/automation/executions', {
       method: 'POST', body: JSON.stringify({ generation_id: generationId, mode }),
     }, 600000);
+  },
+  compareExecution(executionId: string) {
+    return request<TraceabilityComparisonReport>('/api/v1/automation/executions/compare', {
+      method: 'POST', body: JSON.stringify({ execution_id: executionId }),
+    }, 120000);
   },
 
   async uploadImage(image: File, imageDescription: string) {

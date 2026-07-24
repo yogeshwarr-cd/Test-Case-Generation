@@ -1,0 +1,144 @@
+{
+  "response": {
+    "generation_id": "gen-3423fdb0-c13f-4cb4-977c-d5ededf9c062",
+    "application_url": "https://example.com/",
+    "reachable": true,
+    "page_title": "Example",
+    "discovered_elements": [
+      {
+        "role": "button",
+        "name": "Login",
+        "label": null,
+        "test_id": null,
+        "tag": "button",
+        "input_type": null,
+        "placeholder": null,
+        "visible_text": null,
+        "href": null,
+        "page_url": null,
+        "options": [],
+        "checked": null
+      }
+    ],
+    "application_map": {
+      "start_url": "https://example.com/",
+      "pages": [
+        {
+          "url": "https://example.com/",
+          "title": "Example",
+          "elements": [
+            {
+              "role": "button",
+              "name": "Login",
+              "label": null,
+              "test_id": null,
+              "tag": "button",
+              "input_type": null,
+              "placeholder": null,
+              "visible_text": null,
+              "href": null,
+              "page_url": null,
+              "options": [],
+              "checked": null
+            }
+          ]
+        }
+      ],
+      "relationships": [],
+      "page_count": 1,
+      "element_count": 1,
+      "discovery_engine": "Playwright",
+      "capture_engine": "Playwright"
+    },
+    "application_map_version": "c0081689d2a67cc8",
+    "requirement_version": "8aa927b240e21e5f",
+    "scripts": [
+      {
+        "script_id": "pw-001-TC-1",
+        "workflow_id": "b4ee628c-65c2-4f49-a4ed-1a28ee36c147",
+        "test_case_id": "TC-1",
+        "scenario_id": "SC-1",
+        "name": "Login",
+        "application_url": "https://example.com/",
+        "language": "python",
+        "source": "\"\"\"Generated from test case TC-1.\"\"\"\nimport re\nfrom playwright.sync_api import Page, expect\n\nBASE_URL = 'https://example.com/'\nSTEPS = [{'step_number': 1, 'action': 'Open login', 'expected_result': 'Page opens'}]\nDISCOVERED_ELEMENTS = [{'role': 'button',\n  'name': 'Login',\n  'label': None,\n  'test_id': None,\n  'tag': 'button',\n  'input_type': None,\n  'placeholder': None,\n  'visible_text': None,\n  'href': None,\n  'page_url': None,\n  'options': [],\n  'checked': None}]\n\n\nclass PageObjectLogin:\n    def __init__(self, page: Page):\n        self.page = page\n\n    # ------------------------------------------------------------------\n    # stable_locator: resolves ONLY from the discovered element catalogue.\n    # Never invents a CSS selector from action text.\n    # ------------------------------------------------------------------\n    def stable_locator(self, instruction: str):\n        ignored = {\n            \"click\", \"press\", \"select\", \"choose\", \"check\", \"enter\", \"type\",\n            \"fill\", \"button\", \"link\", \"field\", \"dropdown\", \"into\", \"from\",\n            \"with\", \"the\", \"on\", \"in\", \"value\",\n        }\n        quoted = re.findall(r\"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]\", instruction)\n        lowered = instruction.lower()\n        target = (\n            quoted[0]\n            if quoted and any(t in lowered for t in (\"click\", \"press\"))\n            else re.sub(r\"[\\'\\\"][^\\'\\\"]+[\\'\\\"]\", \"\", instruction)\n        )\n        words = [\n            w for w in re.findall(r\"[A-Za-z0-9]+\", target)\n            if len(w) > 1 and w.lower() not in ignored\n        ]\n        phrase_words = {w.lower() for w in words}\n\n        # --- Pass 1: match against discovered catalogue ---\n        best_score = 0\n        best_element: dict | None = None\n        for element in DISCOVERED_ELEMENTS:\n            identity = \" \".join(\n                str(element.get(k) or \"\")\n                for k in (\"name\", \"label\", \"test_id\", \"placeholder\", \"visible_text\")\n            )\n            score = len(phrase_words & set(re.findall(r\"[a-z0-9]+\", identity.lower())))\n            if score > best_score:\n                best_score = score\n                best_element = element\n\n        if best_element:\n            if best_element.get(\"test_id\"):\n                return self.page.get_by_test_id(best_element[\"test_id\"])\n            if best_element.get(\"label\"):\n                return self.page.get_by_label(best_element[\"label\"], exact=True)\n            if best_element.get(\"role\") and best_element.get(\"name\"):\n                return self.page.get_by_role(\n                    best_element[\"role\"], name=best_element[\"name\"], exact=True\n                )\n            if best_element.get(\"placeholder\"):\n                return self.page.get_by_placeholder(\n                    best_element[\"placeholder\"], exact=True\n                )\n            if best_element.get(\"visible_text\"):\n                return self.page.get_by_text(\n                    best_element[\"visible_text\"], exact=False\n                ).first\n\n        raise AssertionError(\n            f\"Feature not found in application: no discovered element matches {instruction!r}\"\n        )\n\n    def perform(self, instruction: str):\n        lowered = instruction.lower()\n        values = re.findall(r\"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]\", instruction)\n        value = values[-1] if values else None\n        if any(token in lowered for token in (\"navigate\", \"open\", \"visit\", \"go to\")):\n            self.page.goto(BASE_URL, wait_until=\"domcontentloaded\")\n            self.page.wait_for_load_state(\"networkidle\")\n        elif any(token in lowered for token in (\"select\", \"choose\")):\n            if value is None:\n                raise AssertionError(f\"Selection has no explicit UI value: {instruction}\")\n            locator = self.stable_locator(instruction)\n            locator.wait_for(state=\"visible\")\n            if locator.evaluate(\"el => el.tagName.toLowerCase()\") == \"select\":\n                locator.select_option(label=value)\n            else:\n                locator.click()\n                self.page.get_by_role(\"option\", name=re.compile(re.escape(value), re.I)).click()\n        elif any(token in lowered for token in (\"check\", \"uncheck\")):\n            locator = self.stable_locator(instruction)\n            locator.wait_for(state=\"visible\")\n            locator.uncheck() if \"uncheck\" in lowered else locator.check()\n        elif any(token in lowered for token in (\"click\", \"press\")):\n            locator = self.stable_locator(instruction)\n            locator.wait_for(state=\"visible\")\n            locator.click()\n        elif any(token in lowered for token in (\"enter\", \"type\", \"fill\")):\n            if value is None:\n                raise AssertionError(f\"Input has no explicit UI value: {instruction}\")\n            locator = self.stable_locator(instruction)\n            locator.wait_for(state=\"visible\")\n            locator.fill(value)\n        else:\n            expect(self.page.locator(\"body\")).to_be_visible()\n\n    def assert_expected(self, expected_result: str):\n        quoted = re.findall(r\"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]\", expected_result)\n        if quoted and any(word in expected_result.lower() for word in (\"visible\", \"displayed\", \"shown\")):\n            expect(self.page.get_by_text(quoted[-1], exact=False).first).to_be_visible()\n        else:\n            expect(self.page.locator(\"body\")).to_be_visible()\n\n\ndef test_TC_1(page: Page):\n    app = PageObjectLogin(page)\n    page.goto(BASE_URL, wait_until=\"domcontentloaded\")\n    page.wait_for_load_state(\"networkidle\")\n    for step in STEPS:\n        app.perform(step[\"action\"])\n        app.assert_expected(step[\"expected_result\"])\n",
+        "download_path": "/api/v1/automation/scripts/gen-3423fdb0-c13f-4cb4-977c-d5ededf9c062/pw-001-TC-1/download",
+        "requirement_ids": [
+          "REQ-1"
+        ],
+        "user_story_ids": [
+          "US-1"
+        ],
+        "application_map_version": "c0081689d2a67cc8",
+        "requirement_version": "8aa927b240e21e5f",
+        "lifecycle_status": "Valid"
+      },
+      {
+        "script_id": "pw-002-TC-2",
+        "workflow_id": "b4ee628c-65c2-4f49-a4ed-1a28ee36c147",
+        "test_case_id": "TC-2",
+        "scenario_id": "SC-1",
+        "name": "Unsupported carousel",
+        "application_url": "https://example.com/",
+        "language": "python",
+        "source": "\"\"\"Generated from test case TC-2.\"\"\"\nimport re\nfrom playwright.sync_api import Page, expect\n\nBASE_URL = 'https://example.com/'\nSTEPS = [{'step_number': 1, 'action': 'Select carousel mode', 'expected_result': 'Carousel opens'}]\nDISCOVERED_ELEMENTS = [{'role': 'button',\n  'name': 'Login',\n  'label': None,\n  'test_id': None,\n  'tag': 'button',\n  'input_type': None,\n  'placeholder': None,\n  'visible_text': None,\n  'href': None,\n  'page_url': None,\n  'options': [],\n  'checked': None}]\n\n\nclass PageObjectUnsupportedCarousel:\n    def __init__(self, page: Page):\n        self.page = page\n\n    # ------------------------------------------------------------------\n    # stable_locator: resolves ONLY from the discovered element catalogue.\n    # Never invents a CSS selector from action text.\n    # ------------------------------------------------------------------\n    def stable_locator(self, instruction: str):\n        ignored = {\n            \"click\", \"press\", \"select\", \"choose\", \"check\", \"enter\", \"type\",\n            \"fill\", \"button\", \"link\", \"field\", \"dropdown\", \"into\", \"from\",\n            \"with\", \"the\", \"on\", \"in\", \"value\",\n        }\n        quoted = re.findall(r\"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]\", instruction)\n        lowered = instruction.lower()\n        target = (\n            quoted[0]\n            if quoted and any(t in lowered for t in (\"click\", \"press\"))\n            else re.sub(r\"[\\'\\\"][^\\'\\\"]+[\\'\\\"]\", \"\", instruction)\n        )\n        words = [\n            w for w in re.findall(r\"[A-Za-z0-9]+\", target)\n            if len(w) > 1 and w.lower() not in ignored\n        ]\n        phrase_words = {w.lower() for w in words}\n\n        # --- Pass 1: match against discovered catalogue ---\n        best_score = 0\n        best_element: dict | None = None\n        for element in DISCOVERED_ELEMENTS:\n            identity = \" \".join(\n                str(element.get(k) or \"\")\n                for k in (\"name\", \"label\", \"test_id\", \"placeholder\", \"visible_text\")\n            )\n            score = len(phrase_words & set(re.findall(r\"[a-z0-9]+\", identity.lower())))\n            if score > best_score:\n                best_score = score\n                best_element = element\n\n        if best_element:\n            if best_element.get(\"test_id\"):\n                return self.page.get_by_test_id(best_element[\"test_id\"])\n            if best_element.get(\"label\"):\n                return self.page.get_by_label(best_element[\"label\"], exact=True)\n            if best_element.get(\"role\") and best_element.get(\"name\"):\n                return self.page.get_by_role(\n                    best_element[\"role\"], name=best_element[\"name\"], exact=True\n                )\n            if best_element.get(\"placeholder\"):\n                return self.page.get_by_placeholder(\n                    best_element[\"placeholder\"], exact=True\n                )\n            if best_element.get(\"visible_text\"):\n                return self.page.get_by_text(\n                    best_element[\"visible_text\"], exact=False\n                ).first\n\n        raise AssertionError(\n            f\"Feature not found in application: no discovered element matches {instruction!r}\"\n        )\n\n    def perform(self, instruction: str):\n        lowered = instruction.lower()\n        values = re.findall(r\"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]\", instruction)\n        value = values[-1] if values else None\n        if any(token in lowered for token in (\"navigate\", \"open\", \"visit\", \"go to\")):\n            self.page.goto(BASE_URL, wait_until=\"domcontentloaded\")\n            self.page.wait_for_load_state(\"networkidle\")\n        elif any(token in lowered for token in (\"select\", \"choose\")):\n            if value is None:\n                raise AssertionError(f\"Selection has no explicit UI value: {instruction}\")\n            locator = self.stable_locator(instruction)\n            locator.wait_for(state=\"visible\")\n            if locator.evaluate(\"el => el.tagName.toLowerCase()\") == \"select\":\n                locator.select_option(label=value)\n            else:\n                locator.click()\n                self.page.get_by_role(\"option\", name=re.compile(re.escape(value), re.I)).click()\n        elif any(token in lowered for token in (\"check\", \"uncheck\")):\n            locator = self.stable_locator(instruction)\n            locator.wait_for(state=\"visible\")\n            locator.uncheck() if \"uncheck\" in lowered else locator.check()\n        elif any(token in lowered for token in (\"click\", \"press\")):\n            locator = self.stable_locator(instruction)\n            locator.wait_for(state=\"visible\")\n            locator.click()\n        elif any(token in lowered for token in (\"enter\", \"type\", \"fill\")):\n            if value is None:\n                raise AssertionError(f\"Input has no explicit UI value: {instruction}\")\n            locator = self.stable_locator(instruction)\n            locator.wait_for(state=\"visible\")\n            locator.fill(value)\n        else:\n            expect(self.page.locator(\"body\")).to_be_visible()\n\n    def assert_expected(self, expected_result: str):\n        quoted = re.findall(r\"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]\", expected_result)\n        if quoted and any(word in expected_result.lower() for word in (\"visible\", \"displayed\", \"shown\")):\n            expect(self.page.get_by_text(quoted[-1], exact=False).first).to_be_visible()\n        else:\n            expect(self.page.locator(\"body\")).to_be_visible()\n\n\ndef test_TC_2(page: Page):\n    app = PageObjectUnsupportedCarousel(page)\n    page.goto(BASE_URL, wait_until=\"domcontentloaded\")\n    page.wait_for_load_state(\"networkidle\")\n    for step in STEPS:\n        app.perform(step[\"action\"])\n        app.assert_expected(step[\"expected_result\"])\n",
+        "download_path": "/api/v1/automation/scripts/gen-3423fdb0-c13f-4cb4-977c-d5ededf9c062/pw-002-TC-2/download",
+        "requirement_ids": [
+          "REQ-2"
+        ],
+        "user_story_ids": [
+          "US-1"
+        ],
+        "application_map_version": "c0081689d2a67cc8",
+        "requirement_version": "8aa927b240e21e5f",
+        "lifecycle_status": "Needs Review"
+      }
+    ]
+  },
+  "workflow": {
+    "workflow_id": "b4ee628c-65c2-4f49-a4ed-1a28ee36c147",
+    "status": "completed",
+    "scenarios": [
+      {
+        "scenario_id": "SC-1",
+        "user_story_ids": [
+          "US-1"
+        ]
+      }
+    ],
+    "test_cases": [
+      {
+        "test_case_id": "TC-1",
+        "scenario_id": "SC-1",
+        "title": "Login",
+        "steps": [
+          {
+            "step_number": 1,
+            "action": "Open login",
+            "expected_result": "Page opens"
+          }
+        ],
+        "requirement_ids": [
+          "REQ-1"
+        ]
+      },
+      {
+        "test_case_id": "TC-2",
+        "scenario_id": "SC-1",
+        "title": "Unsupported carousel",
+        "steps": [
+          {
+            "step_number": 1,
+            "action": "Select carousel mode",
+            "expected_result": "Carousel opens"
+          }
+        ],
+        "requirement_ids": [
+          "REQ-2"
+        ]
+      }
+    ]
+  },
+  "directory": "E:\\Cloud Destinations\\Test Case Generation\\.pytest_temp\\test_generation_reads_complete0\\gen-3423fdb0-c13f-4cb4-977c-d5ededf9c062",
+  "learned_locators": {}
+}

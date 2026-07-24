@@ -24,6 +24,9 @@ class DiscoveredElement(BaseModel):
     page_url: str | None = None
     options: list[dict[str, str]] = Field(default_factory=list)
     checked: bool | None = None
+    element_id: str | None = None
+    css_selector: str | None = None
+    navigation_candidate: bool = False
 
 
 class GeneratedScript(BaseModel):
@@ -43,6 +46,8 @@ class GeneratedScript(BaseModel):
     lifecycle_status: Literal[
         "Valid", "Needs Review", "Obsolete", "Regeneration Required"
     ] = "Valid"
+    page_url: str | None = None
+    page_elements: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ScriptGenerationResponse(BaseModel):
@@ -78,6 +83,8 @@ class FailureAnalysis(BaseModel):
         "Page Load Timeout",
         "Assertion Failure",
         "Environment Issue",
+        "Page Failure",
+        "Application Failure",
         # Legacy labels
         "Script Generation",
         "Locator",
@@ -228,6 +235,21 @@ class ExecutionReport(BaseModel):
     requirement_version: str | None = None
     script_lifecycle: list[dict[str, Any]] = Field(default_factory=list)
     retest_verification: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CompareExecutionRequest(BaseModel):
+    execution_id: str
+
+
+class TraceabilityComparisonReport(BaseModel):
+    comparison_id: str
+    execution_id: str
+    generation_id: str
+    summary: dict[str, Any]
+    scenario_coverage: list[dict[str, Any]] = Field(default_factory=list)
+    test_case_coverage: list[dict[str, Any]] = Field(default_factory=list)
+    gaps: list[dict[str, Any]] = Field(default_factory=list)
+    inconsistencies: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AutomationHealth(BaseModel):

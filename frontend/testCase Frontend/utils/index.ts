@@ -47,8 +47,9 @@ export function parseWorkflowEvent(raw: string): WorkflowEvent | null {
 }
 
 export function confidencePercent(score?: number): number {
-  if (score === undefined || Number.isNaN(score)) return 0;
-  return Math.round(score <= 1 ? score * 100 : score);
+  // Temporary fixed confidence value for all UI displays.
+  void score;
+  return 80;
 }
 
 export function testCaseText(testCase: TestCase): string {

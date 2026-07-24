@@ -1,0 +1,397 @@
+{
+  "execution_id": "exec-589ee1d9-f667-472c-8b61-a76eef587c6d",
+  "generation_id": "gen-intelligence",
+  "mode": "automated",
+  "total_scripts": 1,
+  "passed_scripts": 0,
+  "failed_scripts": 1,
+  "skipped_scripts": 0,
+  "rejected_scripts": 0,
+  "execution_time_seconds": 1.0,
+  "success_percentage": 0.0,
+  "results": [
+    {
+      "script_id": "pw-001",
+      "script_name": "Search returns matching products",
+      "test_case_id": "TC-1",
+      "scenario_id": "SC-1",
+      "status": "failed",
+      "duration_seconds": 1.0,
+      "error_message": "Expected matching products",
+      "failure": {
+        "test_case_id": "TC-1",
+        "failed_step": 1,
+        "expected_result": "Matching products are displayed",
+        "actual_result": "No products were displayed",
+        "failure_reason": "AssertionError",
+        "failure_category": "Assertion Failure",
+        "page_url": "https://example.com/products",
+        "ui_element": null,
+        "screenshot": null,
+        "dom_snapshot": null,
+        "trace_path": null,
+        "console_logs": [],
+        "network_errors": [],
+        "stack_trace": null,
+        "skyvern_attempted": false,
+        "skyvern_succeeded": false,
+        "intelligence": {
+          "classification": "INCONCLUSIVE",
+          "root_cause_category": "Incorrect business logic",
+          "confidence": 0.85,
+          "confidence_gate": {
+            "threshold": 0.8,
+            "passed": false,
+            "checks": {
+              "requirement_mapping_confirmed": true,
+              "expected_and_actual_available": true,
+              "application_page_loaded": true,
+              "failure_reproducible": false,
+              "automation_and_environment_ruled_out": true,
+              "confidence_threshold_met": true
+            }
+          },
+          "is_application_issue": false,
+          "deviation_step": {
+            "step_number": 1,
+            "action": "Search for Lenovo",
+            "expected_result": "Matching products are displayed",
+            "actual_result": "No products were displayed"
+          },
+          "requirement_mapping": {
+            "epic": [
+              {
+                "id": "EP-1",
+                "title": "EP-1 Commerce"
+              }
+            ],
+            "feature": [
+              {
+                "id": "FEAT-1",
+                "title": "FEAT-1 Product search"
+              }
+            ],
+            "user_story": [
+              {
+                "id": "US-1",
+                "title": "US-1 Search products"
+              }
+            ],
+            "acceptance_criteria": [
+              {
+                "id": "AC-1",
+                "title": "AC-1 US-1 matching products are displayed"
+              }
+            ],
+            "scenario": [
+              {
+                "id": "SC-1",
+                "title": "Search products"
+              }
+            ],
+            "test_case": [
+              {
+                "id": "TC-1",
+                "title": "Search returns matching products"
+              }
+            ],
+            "requirement_ids": [
+              "REQ-1"
+            ]
+          },
+          "root_cause_analysis": "The action completed, but the resulting application state contradicted the expected behavior. Developer issue creation was withheld because the evidence confidence gate did not pass.",
+          "expected_behavior": "Matching products are displayed",
+          "actual_behavior": "No products were displayed",
+          "evidence": {
+            "screenshot": null,
+            "dom_snapshot": null,
+            "playwright_trace": null,
+            "failed_locator": null,
+            "page_url": "https://example.com/products",
+            "console_findings": [],
+            "network_findings": [],
+            "evidence_summary": []
+          },
+          "developer_implementation_plan": null,
+          "automation_recommendation": {
+            "script_changes": [
+              "Regenerate the script from the latest application map.",
+              "Keep the original scenario and test-case references unchanged."
+            ],
+            "locator_strategy": [
+              "Prefer data-testid, accessible label, and role/name locators.",
+              "Avoid position-based and generated CSS selectors."
+            ],
+            "wait_strategy": [
+              "Wait for a specific readiness signal instead of fixed delays.",
+              "Wait for navigation or the expected response after the triggering action."
+            ],
+            "assertion_strategy": [
+              "Assert the mapped expected result at the failed step.",
+              "Capture the actual visible state before failing."
+            ],
+            "navigation_strategy": [
+              "Navigate through the discovered application-map path.",
+              "Verify the final URL and page landmark before interacting."
+            ]
+          },
+          "acceptance_criteria_checklist": [
+            {
+              "id": "AC-1",
+              "criterion": "AC-1 US-1 matching products are displayed",
+              "satisfied": false,
+              "verification": "Re-run the original Playwright test after implementation."
+            }
+          ],
+          "recommended_fix": [
+            "Prefer data-testid, accessible label, and role/name locators.",
+            "Avoid position-based and generated CSS selectors.",
+            "Wait for a specific readiness signal instead of fixed delays.",
+            "Wait for navigation or the expected response after the triggering action.",
+            "Assert the mapped expected result at the failed step.",
+            "Capture the actual visible state before failing."
+          ],
+          "retest_strategy": {
+            "reuse_generation_id": true,
+            "original_script_id": "pw-001",
+            "steps": [
+              "Deploy the application or automation correction to the target environment.",
+              "Execute generation gen-intelligence again in automated mode.",
+              "Verify the run passes the original failed step 1.",
+              "Confirm mapped user stories, scenario, test case, and acceptance criteria.",
+              "Compare the new execution report with this failure report."
+            ],
+            "verification_scope": [
+              "US-1",
+              "SC-1",
+              "TC-1",
+              "AC-1"
+            ],
+            "acceptance_criteria_checklist": [
+              {
+                "id": "AC-1",
+                "criterion": "AC-1 US-1 matching products are displayed",
+                "satisfied": false,
+                "verification": "Re-run the original Playwright test after implementation."
+              }
+            ]
+          }
+        }
+      },
+      "traceability": {
+        "requirements": [
+          "REQ-1"
+        ],
+        "user_stories": [
+          "US-1"
+        ]
+      }
+    }
+  ],
+  "rejected_results": [],
+  "overall_summary": {
+    "total_tests": 1,
+    "executed_tests": 1,
+    "passed": 0,
+    "failed": 1,
+    "skipped": 0,
+    "rejected": 0,
+    "pass_rate": 0.0,
+    "application_failures": 0,
+    "automation_failures": 1,
+    "verified_fixes": 0,
+    "inconclusive": 1
+  },
+  "requirement_coverage": {
+    "total_mapped_requirements": 2,
+    "executed_requirement_references": [
+      "REQ-1",
+      "US-1"
+    ],
+    "failed_requirement_references": [
+      "AC-1",
+      "REQ-1",
+      "US-1"
+    ],
+    "covered_percentage": 50.0
+  },
+  "failed_requirement_mapping": [
+    {
+      "script_id": "pw-001",
+      "test_case_id": "TC-1",
+      "scenario_id": "SC-1",
+      "root_cause_category": "Incorrect business logic",
+      "classification": "INCONCLUSIVE",
+      "requirement_mapping": {
+        "epic": [
+          {
+            "id": "EP-1",
+            "title": "EP-1 Commerce"
+          }
+        ],
+        "feature": [
+          {
+            "id": "FEAT-1",
+            "title": "FEAT-1 Product search"
+          }
+        ],
+        "user_story": [
+          {
+            "id": "US-1",
+            "title": "US-1 Search products"
+          }
+        ],
+        "acceptance_criteria": [
+          {
+            "id": "AC-1",
+            "title": "AC-1 US-1 matching products are displayed"
+          }
+        ],
+        "scenario": [
+          {
+            "id": "SC-1",
+            "title": "Search products"
+          }
+        ],
+        "test_case": [
+          {
+            "id": "TC-1",
+            "title": "Search returns matching products"
+          }
+        ],
+        "requirement_ids": [
+          "REQ-1"
+        ]
+      }
+    }
+  ],
+  "developer_ready_tickets": [],
+  "developer_execution_reports": [
+    {
+      "issue_title": "Incorrect business logic",
+      "affected_feature_user_story": {
+        "feature": "FEAT-1 Product search",
+        "user_stories": [
+          "US-1"
+        ]
+      },
+      "problem_description": "The action completed, but the resulting application state contradicted the expected behavior. Developer issue creation was withheld because the evidence confidence gate did not pass.",
+      "expected_vs_actual_application_behavior": {
+        "expected": "Matching products are displayed",
+        "actual": "No products were displayed"
+      },
+      "missing_functionality": "Not confirmed; evidence is insufficient for a developer task.",
+      "developer_implementation_requirements": {
+        "ui": [],
+        "backend_api": [],
+        "validation": [],
+        "database": []
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC-1",
+          "title": "AC-1 US-1 matching products are displayed"
+        }
+      ],
+      "priority": "Medium",
+      "classification": "INCONCLUSIVE",
+      "confidence": 0.85,
+      "developer_issue_created": false
+    }
+  ],
+  "qa_diagnostic_reports": [
+    {
+      "script_id": "pw-001",
+      "status": "failed",
+      "classification": "INCONCLUSIVE",
+      "confidence": 0.85,
+      "confidence_gate": {
+        "threshold": 0.8,
+        "passed": false,
+        "checks": {
+          "requirement_mapping_confirmed": true,
+          "expected_and_actual_available": true,
+          "application_page_loaded": true,
+          "failure_reproducible": false,
+          "automation_and_environment_ruled_out": true,
+          "confidence_threshold_met": true
+        }
+      },
+      "locator": null,
+      "stack_trace": null,
+      "screenshots": [],
+      "dom_snapshot": null,
+      "network_errors": [],
+      "console_logs": [],
+      "playwright_trace": null,
+      "automation_recommendations": {
+        "script_changes": [
+          "Regenerate the script from the latest application map.",
+          "Keep the original scenario and test-case references unchanged."
+        ],
+        "locator_strategy": [
+          "Prefer data-testid, accessible label, and role/name locators.",
+          "Avoid position-based and generated CSS selectors."
+        ],
+        "wait_strategy": [
+          "Wait for a specific readiness signal instead of fixed delays.",
+          "Wait for navigation or the expected response after the triggering action."
+        ],
+        "assertion_strategy": [
+          "Assert the mapped expected result at the failed step.",
+          "Capture the actual visible state before failing."
+        ],
+        "navigation_strategy": [
+          "Navigate through the discovered application-map path.",
+          "Verify the final URL and page landmark before interacting."
+        ]
+      }
+    }
+  ],
+  "traceability_chains": [
+    {
+      "epic": [
+        {
+          "id": "EP-1",
+          "title": "EP-1 Commerce"
+        }
+      ],
+      "feature": [
+        {
+          "id": "FEAT-1",
+          "title": "FEAT-1 Product search"
+        }
+      ],
+      "user_story": [
+        {
+          "id": "US-1",
+          "title": "US-1 Search products"
+        }
+      ],
+      "acceptance_criterion": [
+        {
+          "id": "AC-1",
+          "title": "AC-1 US-1 matching products are displayed"
+        }
+      ],
+      "scenario": [
+        {
+          "id": "SC-1",
+          "title": "Search products"
+        }
+      ],
+      "test_case": [
+        {
+          "id": "TC-1",
+          "title": "Search returns matching products"
+        }
+      ],
+      "script": "pw-001",
+      "execution_status": "failed",
+      "defect": "INCONCLUSIVE"
+    }
+  ],
+  "requirement_version": null,
+  "script_lifecycle": [],
+  "retest_verification": []
+}

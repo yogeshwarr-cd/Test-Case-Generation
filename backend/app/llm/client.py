@@ -91,6 +91,41 @@ def _salvage_valid_collection(
         return None
 
 
+def _repair_incomplete_test_case_steps(
+    content: str, response_model: type[T], error: ValidationError
+) -> tuple[T, list[str]] | None:
+    payload = parse_json(content)
+    cases = payload.get("test_cases")
+    if not isinstance(cases, list):
+        return None
+    repaired: list[str] = []
+    for problem in error.errors():
+        loc, kind = problem["loc"], problem["type"]
+        if len(loc) == 3 and loc[0] == "test_cases" and loc[2] == "steps" and kind in {"missing", "too_short"}:
+            case = cases[loc[1]]
+            title = str(case.get("title") or "the described functionality")
+            case["steps"] = [{"step_number": 1, "action": f"Verify {title}", "expected_result": f"{title} behaves as described"}]
+        elif (
+            len(loc) == 5 and loc[0] == "test_cases" and loc[2] == "steps"
+            and loc[4] in {"step_number", "action", "expected_result"}
+            and kind in {"missing", "string_too_short", "greater_than_equal", "int_parsing"}
+        ):
+            case, step = cases[loc[1]], cases[loc[1]]["steps"][loc[3]]
+            title = str(case.get("title") or "the described functionality")
+            step.setdefault("step_number", loc[3] + 1)
+            if not str(step.get("action") or "").strip():
+                step["action"] = f"Verify {title}"
+            if not str(step.get("expected_result") or "").strip():
+                step["expected_result"] = f"{title} behaves as described"
+        else:
+            return None
+        repaired.append(_field_path(loc))
+    try:
+        return response_model.model_validate(payload), repaired
+    except (ValidationError, IndexError, KeyError, TypeError):
+        return None
+
+
 def _provider_semaphore(provider: str, concurrency: int) -> asyncio.Semaphore:
     key = (id(asyncio.get_running_loop()), _provider_lane(provider), max(1, concurrency))
     if key not in _provider_semaphores:
@@ -271,6 +306,17 @@ class LLMClient:
                             provider.name, provider.model, request_id,
                             failure_type, len(response.content), missing_fields, validation_summary,
                         )
+                        local_repair = _repair_incomplete_test_case_steps(
+                            response.content, response_model, validation_error
+                        )
+                        if local_repair is not None:
+                            result, repaired_fields = local_repair
+                            self._record_metadata(result, response.provider, response.model)
+                            logger.warning(
+                                "LLM incomplete test-case steps repaired locally provider=%s model=%s request_id=%s repaired_fields=%s",
+                                response.provider, response.model, request_id, repaired_fields,
+                            )
+                            return result
                         salvaged = _salvage_valid_collection(
                             response.content, response_model, validation_error
                         )

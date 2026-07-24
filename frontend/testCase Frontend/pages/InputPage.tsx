@@ -11,7 +11,7 @@ import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { ManualInputPayload } from '../types';
 import { cleanPayload, friendlyError } from '../utils';
 
-const VISIBLE_INPUT_FIELDS = ['user_stories', 'acceptance_criteria', 'epics', 'features'] as const;
+const VISIBLE_INPUT_FIELDS = ['user_stories', 'acceptance_criteria'] as const;
 const IMAGE_MAX_SIZE_MB = Number(process.env.NEXT_PUBLIC_IMAGE_MAX_SIZE_MB ?? 10);
 
 export function InputPage() {
@@ -80,7 +80,7 @@ export function InputPage() {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">AI workflow</p>
             <h1 className="mt-2 text-2xl font-bold sm:text-3xl">Generate test scenarios and test cases</h1>
-            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">Provide user stories and acceptance criteria, plus any epics and features, to generate stronger test coverage and traceability.</p>
+            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">Provide user stories and acceptance criteria to generate test coverage and traceability.</p>
           </div>
         </div>
       </div>

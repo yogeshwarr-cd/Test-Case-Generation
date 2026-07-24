@@ -167,6 +167,8 @@ export interface GeneratedScript {
   application_map_version?: string;
   requirement_version?: string;
   lifecycle_status: 'Valid' | 'Needs Review' | 'Obsolete' | 'Regeneration Required';
+  page_url?: string;
+  page_elements: Array<Record<string, unknown>>;
 }
 
 export interface ScriptGeneration {
@@ -187,6 +189,17 @@ export interface ScriptGeneration {
   scripts: GeneratedScript[];
 }
 
+export interface TraceabilityComparisonReport {
+  comparison_id: string;
+  execution_id: string;
+  generation_id: string;
+  summary: { total_artifacts: number; covered: number; partial: number; missing: number; coverage_percentage: number };
+  scenario_coverage: Array<Record<string, unknown>>;
+  test_case_coverage: Array<Record<string, unknown>>;
+  gaps: Array<{ artifact_id: string; artifact_title: string; gap_type: string; details: string }>;
+  inconsistencies: Array<{ script_id: string; type: string; details: string }>;
+}
+
 export interface FailureAnalysis {
   test_case_id: string;
   failed_step?: number;
@@ -204,6 +217,8 @@ export interface FailureAnalysis {
     | 'Page Load Timeout'
     | 'Assertion Failure'
     | 'Environment Issue'
+    | 'Page Failure'
+    | 'Application Failure'
     // legacy
     | 'Script Generation'
     | 'Locator'
@@ -400,6 +415,10 @@ export interface ExecutionReport {
     automation_failures?: number;
     verified_fixes?: number;
     inconclusive?: number;
+    pages_discovered?: number;
+    page_failures?: number;
+    locator_failures?: number;
+    environment_failures?: number;
   };
   requirement_coverage: {
     total_mapped_requirements: number;

@@ -5,7 +5,7 @@ import { CheckCircle2, Download, LoaderCircle, Play } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
-import type { DeveloperExecutionReport, ExecutionReport, QaDiagnosticReport, ScriptGeneration } from '../types';
+import type { DeveloperExecutionReport, ExecutionReport, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
 export function AutomationPage() {
@@ -18,12 +18,13 @@ export function AutomationPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [showTestReport, setShowTestReport] = useState(false);
+  const [comparison, setComparison] = useState<TraceabilityComparisonReport | null>(null);
 
   useEffect(() => hydrate(), [hydrate]);
 
   const generate = async () => {
     if (!workflowId || !applicationUrl.trim()) return;
-    setBusy(true); setError(''); setReport(null); setShowTestReport(false);
+    setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false);
     try {
       setGeneration(await testCaseApi.generateScripts(workflowId, applicationUrl.trim()));
       setSelectedScript(0);
@@ -45,6 +46,14 @@ export function AutomationPage() {
         } catch (retryError) { setError(friendlyError(retryError)); }
       } else { setError(friendlyError(requestError)); }
     }
+    finally { setBusy(false); }
+  };
+
+  const compare = async () => {
+    if (!report) return;
+    setBusy(true); setError('');
+    try { setComparison(await testCaseApi.compareExecution(report.execution_id)); }
+    catch (requestError) { setError(friendlyError(requestError)); }
     finally { setBusy(false); }
   };
 
@@ -96,7 +105,7 @@ export function AutomationPage() {
         </>
       )}
 
-      {report && <><ExecutionDashboard report={report} /><div className="flex justify-end"><button onClick={() => setShowTestReport(true)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><Download className="h-4 w-4" /> Generate Test Report</button></div>{showTestReport && <DetailedTestReport report={report} />}</>}
+      {report && <><ExecutionDashboard report={report} /><div className="flex flex-wrap justify-end gap-3">{report.mode === 'automated' && <button disabled={busy} onClick={compare} className="rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">Compare with Test Cases &amp; Scenarios</button>}<button onClick={() => setShowTestReport(true)} className="inline-flex items-center gap-2 rounded-lg border border-border px-5 py-3 text-sm font-bold"><Download className="h-4 w-4" /> Generate Test Report</button></div>{comparison && <section className="space-y-3 rounded-2xl border border-primary/30 bg-card p-5"><h2 className="text-xl font-bold">Post-execution traceability</h2><p className="text-sm">Coverage: {comparison.summary.coverage_percentage}% · Covered {comparison.summary.covered} · Partial {comparison.summary.partial} · Missing {comparison.summary.missing}</p>{comparison.gaps.map((gap) => <article key={gap.artifact_id} className="rounded-lg border border-border p-4 text-sm"><strong>{gap.artifact_id} · {gap.artifact_title}</strong><p className="mt-2 text-muted-foreground">{gap.details}</p></article>)}</section>}{showTestReport && <DetailedTestReport report={report} />}</>}
     </div>
   );
 }

@@ -302,10 +302,11 @@ async def test_generation_reads_completed_workflow_without_mutating_it(monkeypat
         GenerateScriptsRequest(workflow_id=workflow_id, application_url="https://example.com")
     )
     assert response.reachable is True
-    assert response.scripts[0].requirement_ids == ["REQ-1"]
-    assert response.scripts[0].user_story_ids == ["US-1"]
-    assert len(response.scripts) == 2
-    assert response.scripts[1].lifecycle_status == "Needs Review"
+    assert response.scripts[0].requirement_ids == []
+    assert response.scripts[0].user_story_ids == []
+    assert response.scripts[0].page_url == "https://example.com/"
+    assert len(response.scripts) == 1
+    assert response.scripts[0].lifecycle_status == "Valid"
     assert repr(state) == original
     assert (tmp_path / response.generation_id / f"{response.scripts[0].script_id}{SCRIPT_ARTIFACT_SUFFIX}").is_file()
     assert not list((tmp_path / response.generation_id).glob("*.py"))
@@ -345,7 +346,7 @@ async def test_manual_mode_skips_execution_and_produces_report(monkeypatch, tmp_
     )
     assert report.total_scripts == 1
     assert report.skipped_scripts == 1
-    assert report.results[0].traceability["test_case_id"] == "TC-1"
+    assert report.results[0].traceability["test_case_id"] == "PAGE-001"
     reloaded_report = AutomationService().report(report.execution_id)
     assert reloaded_report.execution_id == report.execution_id
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
-from app.schemas.automation_schema import ExecuteScriptsRequest, GenerateScriptsRequest
+from app.schemas.automation_schema import CompareExecutionRequest, ExecuteScriptsRequest, GenerateScriptsRequest
 from app.services.automation_service import automation_service
 
 router = APIRouter(prefix="/automation", tags=["Test automation"])
@@ -26,6 +26,11 @@ async def download_script(generation_id: str, script_id: str):
 @router.post("/executions", summary="Run scripts automatically or prepare a manual report")
 async def execute_scripts(request: ExecuteScriptsRequest):
     return await automation_service.execute(request)
+
+
+@router.post("/executions/compare", summary="Compare an execution with scenarios and test cases")
+async def compare_execution(request: CompareExecutionRequest):
+    return await automation_service.compare(request.execution_id)
 
 
 @router.get("/executions/{execution_id}", summary="Get execution dashboard data")

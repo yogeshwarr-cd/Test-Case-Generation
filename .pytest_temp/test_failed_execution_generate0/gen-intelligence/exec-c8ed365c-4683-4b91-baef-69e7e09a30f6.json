@@ -1,0 +1,159 @@
+{
+  "execution_id": "exec-c8ed365c-4683-4b91-baef-69e7e09a30f6",
+  "generation_id": "gen-intelligence",
+  "mode": "automated",
+  "total_scripts": 1,
+  "passed_scripts": 1,
+  "failed_scripts": 0,
+  "skipped_scripts": 0,
+  "rejected_scripts": 0,
+  "execution_time_seconds": 1.0,
+  "success_percentage": 100.0,
+  "results": [
+    {
+      "script_id": "pw-001",
+      "script_name": "Search returns matching products",
+      "test_case_id": "TC-1",
+      "scenario_id": "SC-1",
+      "status": "passed",
+      "duration_seconds": 1.0,
+      "error_message": null,
+      "failure": null,
+      "traceability": {}
+    }
+  ],
+  "rejected_results": [],
+  "overall_summary": {
+    "total_tests": 1,
+    "executed_tests": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "rejected": 0,
+    "pass_rate": 100.0,
+    "application_failures": 0,
+    "automation_failures": 0,
+    "verified_fixes": 1,
+    "inconclusive": 0
+  },
+  "requirement_coverage": {
+    "total_mapped_requirements": 2,
+    "executed_requirement_references": [],
+    "failed_requirement_references": [],
+    "covered_percentage": 0.0
+  },
+  "failed_requirement_mapping": [],
+  "developer_ready_tickets": [],
+  "developer_execution_reports": [
+    {
+      "issue_title": "No application issue detected: FEAT-1 Product search",
+      "affected_feature_user_story": {
+        "feature": "FEAT-1 Product search",
+        "user_stories": [
+          "US-1"
+        ]
+      },
+      "problem_description": "The application completed the mapped scenario and test case without detecting missing or incorrect functionality.",
+      "expected_vs_actual_application_behavior": {
+        "expected": "Matching products are displayed",
+        "actual": "All executed steps and expected-result checks completed successfully."
+      },
+      "missing_functionality": "None identified.",
+      "developer_implementation_requirements": {
+        "ui": [
+          "No UI changes required."
+        ],
+        "backend_api": [
+          "No backend or API changes required."
+        ],
+        "validation": [
+          "No validation changes required."
+        ],
+        "database": [
+          "No database changes required."
+        ]
+      },
+      "acceptance_criteria": [
+        {
+          "id": "AC-1",
+          "title": "AC-1 US-1 matching products are displayed"
+        }
+      ],
+      "priority": "Low",
+      "classification": null,
+      "confidence": 1.0,
+      "developer_issue_created": false
+    }
+  ],
+  "qa_diagnostic_reports": [
+    {
+      "script_id": "pw-001",
+      "status": "passed",
+      "classification": null,
+      "confidence": null,
+      "confidence_gate": {},
+      "locator": null,
+      "stack_trace": null,
+      "screenshots": [],
+      "dom_snapshot": null,
+      "network_errors": [],
+      "console_logs": [],
+      "playwright_trace": null,
+      "automation_recommendations": {}
+    }
+  ],
+  "traceability_chains": [
+    {
+      "epic": [
+        {
+          "id": "EP-1",
+          "title": "EP-1 Commerce"
+        }
+      ],
+      "feature": [
+        {
+          "id": "FEAT-1",
+          "title": "FEAT-1 Product search"
+        }
+      ],
+      "user_story": [
+        {
+          "id": "US-1",
+          "title": "US-1 Search products"
+        }
+      ],
+      "acceptance_criterion": [
+        {
+          "id": "AC-1",
+          "title": "AC-1 US-1 matching products are displayed"
+        }
+      ],
+      "scenario": [
+        {
+          "id": "SC-1",
+          "title": "Search products"
+        }
+      ],
+      "test_case": [
+        {
+          "id": "TC-1",
+          "title": "Search returns matching products"
+        }
+      ],
+      "script": "pw-001",
+      "execution_status": "passed",
+      "defect": null
+    }
+  ],
+  "requirement_version": null,
+  "script_lifecycle": [],
+  "retest_verification": [
+    {
+      "script_id": "pw-001",
+      "previous_status": "failed",
+      "current_status": "passed",
+      "verified": true,
+      "message": "The original script now passes. Its mapped test case, scenario, user story, and acceptance criteria should be reviewed in the current evidence before closing the implementation ticket."
+    }
+  ]
+}

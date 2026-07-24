@@ -35,6 +35,7 @@ from app.schemas.automation_schema import (
     ScriptGenerationResponse,
     RequirementMapping,
     RetestStrategy,
+    TraceabilityComparisonReport,
 )
 from app.services.skyvern_service import SkyvernAdapter
 from app.services.cache_service import cache
@@ -115,11 +116,15 @@ def _stable_version(value: Any) -> str:
 def _application_map(
     base_url: str, title: str | None, elements: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    pages: dict[str, dict[str, Any]] = {}
+    base_url = _canonical_page_url(base_url)
+    pages: dict[str, dict[str, Any]] = {
+        base_url: {"url": base_url, "title": title, "elements": []}
+    }
     relationships: list[dict[str, str]] = []
     origin = urlsplit(base_url)
     for element in elements:
-        page_url = str(element.get("page_url") or base_url)
+        page_url = _canonical_page_url(str(element.get("page_url") or base_url))
+        element = {**element, "page_url": page_url}
         page = pages.setdefault(
             page_url, {"url": page_url, "title": title if page_url == base_url else None, "elements": []}
         )
@@ -149,6 +154,51 @@ def _application_map(
         "discovery_engine": "Skyvern + Playwright" if settings.skyvern_fallback_enabled else "Playwright",
         "capture_engine": "Playwright",
     }
+
+
+def _canonical_page_url(value: str) -> str:
+    parsed = urlsplit(value)
+    return (
+        f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path or '/'}"
+        f"{'?' + parsed.query if parsed.query else ''}"
+    )
+
+
+def _page_script_source(name: str, page_url: str, elements: list[dict[str, Any]]) -> str:
+    test_name = _safe_name(name).replace("-", "_")
+    catalogue = pformat(elements, width=100, sort_dicts=False)
+    return f'''"""Generated from a fresh DOM capture of {page_url}."""
+from playwright.sync_api import Page, expect
+
+PAGE_URL = {page_url!r}
+ELEMENTS = {catalogue}
+
+
+def locator_for(page: Page, element: dict):
+    if element.get("test_id"):
+        return page.get_by_test_id(element["test_id"])
+    if element.get("element_id"):
+        return page.locator("[id=" + repr(element["element_id"]) + "]")
+    if element.get("name"):
+        named = page.locator("[name=" + repr(element["name"]) + "]")
+        if named.count():
+            return named.first
+    if element.get("label"):
+        return page.get_by_label(element["label"], exact=True)
+    if element.get("placeholder"):
+        return page.get_by_placeholder(element["placeholder"], exact=True)
+    if element.get("role") and element.get("name"):
+        return page.get_by_role(element["role"], name=element["name"], exact=True)
+    return page.locator(element.get("css_selector") or element["tag"]).first
+
+
+def test_{test_name}(page: Page):
+    page.goto(PAGE_URL, wait_until="domcontentloaded")
+    page.wait_for_load_state("networkidle")
+    expect(page.locator("body")).to_be_visible()
+    for element in ELEMENTS:
+        expect(locator_for(page, element)).to_be_visible()
+'''
 
 
 def _test_case_supported(
@@ -437,6 +487,47 @@ class AutomationService:
         except httpx.HTTPError as exc:
             raise AutomationError("Application URL is not reachable") from exc
 
+    @staticmethod
+    async def _crawl_wait(page: Any) -> None:
+        timeout = int(settings.automation_navigation_timeout_seconds * 1000)
+        await page.wait_for_load_state("domcontentloaded", timeout=timeout)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=timeout)
+        except Exception:
+            logger.debug("Network remained active after DOM readiness url=%s", page.url)
+        await page.locator("body").wait_for(state="visible", timeout=timeout)
+
+    @staticmethod
+    async def _capture_interactive_elements(page: Any) -> list[dict[str, Any]]:
+        return await page.locator(
+            "a,button,input,select,textarea,[role='link'],[role='button'],"
+            "[role='tab'],[role='menuitem'],[data-testid]"
+        ).evaluate_all(
+            """els => els.slice(0, 500).filter(el => {
+              const s=getComputedStyle(el), b=el.getBoundingClientRect();
+              return s.visibility!=='hidden' && s.display!=='none' && b.width>0 && b.height>0 && !el.disabled;
+            }).map(el => {
+              const tag=el.tagName.toLowerCase();
+              const role=el.getAttribute('role') || ({a:'link',button:'button',select:'combobox',textarea:'textbox'}[tag]
+                || (tag==='input' ? ({checkbox:'checkbox',radio:'radio',submit:'button',button:'button'}[el.type] || 'textbox') : null));
+              const text=(el.innerText || el.textContent || '').trim();
+              const name=el.getAttribute('aria-label') || el.getAttribute('name') || text || null;
+              const testId=el.getAttribute('data-testid'), id=el.id || null;
+              const css=testId ? `[data-testid="${CSS.escape(testId)}"]` : id ? `#${CSS.escape(id)}`
+                : el.getAttribute('name') ? `${tag}[name="${CSS.escape(el.getAttribute('name'))}"]`
+                : `${tag}:nth-of-type(${[...el.parentElement.children].filter(x=>x.tagName===el.tagName).indexOf(el)+1})`;
+              const nav=`${text} ${name || ''}`.toLowerCase();
+              const unsafe=/delete|remove|logout|log out|sign out|submit|save|pay|purchase|checkout|confirm|cancel account/.test(nav);
+              return {tag,role,name,element_id:id,css_selector:css,test_id:testId,
+                label:el.labels?.[0]?.innerText?.trim() || el.getAttribute('aria-labelledby') || null,
+                placeholder:el.getAttribute('placeholder'),visible_text:text || null,href:el.href || null,
+                input_type:el.getAttribute('type'),checked:typeof el.checked==='boolean' ? el.checked : null,
+                options:tag==='select' ? [...el.options].map(o=>({label:o.text.trim(),value:o.value})) : [],
+                navigation_candidate:!unsafe && (tag==='a' || ['link','tab','menuitem'].includes(role)
+                  || (role==='button' && /menu|next|previous|back|home|dashboard|view|open|details/.test(nav)))};
+            })"""
+        )
+
     async def _discover(self, url: str) -> tuple[str | None, list[DiscoveredElement]]:
         if settings.app_mock_mode:
             return "Mock Application", [
@@ -463,49 +554,82 @@ class AutomationService:
                 ]
                 pending = [(url, 0), *[(candidate, 1) for candidate in verified_candidates]]
                 visited: set[str] = set()
+                queued: set[str] = {_canonical_page_url(candidate) for candidate, _ in pending}
                 raw: list[dict[str, Any]] = []
                 title = None
                 while pending and len(visited) < settings.automation_crawl_page_limit:
                     page_url, depth = pending.pop(0)
-                    if page_url in visited:
+                    canonical_requested = _canonical_page_url(page_url)
+                    if canonical_requested in visited:
                         continue
                     await page.goto(page_url, wait_until="domcontentloaded", timeout=int(settings.automation_navigation_timeout_seconds * 1000))
-                    visited.add(page.url)
+                    await self._crawl_wait(page)
+                    current_url = _canonical_page_url(page.url)
+                    if urlsplit(current_url).netloc != origin.netloc:
+                        continue
+                    visited.add(canonical_requested)
+                    visited.add(current_url)
                     title = title or await page.title()
-                    discovered = await page.locator("button,input,select,textarea,a,[role],[data-testid]").evaluate_all(
-                        """els => els.slice(0, 300).filter(el => {
-                          const style = getComputedStyle(el); const box = el.getBoundingClientRect();
-                          return style.visibility !== 'hidden' && style.display !== 'none' && box.width > 0 && box.height > 0;
-                        }).map(el => ({
-                          role: el.getAttribute('role') || (el.tagName.toLowerCase() === 'input'
-                            ? ({checkbox:'checkbox',radio:'radio',number:'spinbutton',submit:'button',button:'button'}[el.type] || 'textbox')
-                            : ({button:'button',a:'link',select:'combobox',textarea:'textbox'}[el.tagName.toLowerCase()] ?? null)),
-                          name: el.getAttribute('aria-label') || el.getAttribute('name') || el.innerText?.trim() || null,
-                          label: el.labels?.[0]?.innerText?.trim() || el.getAttribute('aria-labelledby') || null,
-                          placeholder: el.getAttribute('placeholder'), test_id: el.getAttribute('data-testid'),
-                          visible_text: el.innerText?.trim() || null, href: el.href || null,
-                          tag: el.tagName.toLowerCase(), input_type: el.getAttribute('type'),
-                          checked: typeof el.checked === 'boolean' ? el.checked : null,
-                          options: el.tagName.toLowerCase() === 'select' ? [...el.options].map(o => ({label:o.text.trim(), value:o.value})) : []
-                        }))"""
-                    )
+                    discovered = await self._capture_interactive_elements(page)
                     for item in discovered:
-                        item["page_url"] = page.url
+                        item["page_url"] = current_url
                     raw.extend(discovered)
                     for item in discovered:
                         href = item.get("href")
                         parsed = urlsplit(href) if href else None
                         if parsed and parsed.scheme in {"http", "https"} and parsed.netloc == origin.netloc:
-                            clean_href = href.split("#", 1)[0]
-                            queued_urls = {queued_url for queued_url, _ in pending}
+                            clean_href = _canonical_page_url(href)
                             if (
                                 depth < settings.automation_crawl_depth_limit
                                 and clean_href not in visited
-                                and clean_href not in queued_urls
+                                and clean_href not in queued
                             ):
                                 pending.append((clean_href, depth + 1))
+                                queued.add(clean_href)
+                    if depth < settings.automation_crawl_depth_limit:
+                        controls = [
+                            item for item in discovered
+                            if item.get("navigation_candidate") and not item.get("href")
+                            and item.get("css_selector")
+                        ][:40]
+                        for control in controls:
+                            try:
+                                await page.goto(current_url, wait_until="domcontentloaded")
+                                await self._crawl_wait(page)
+                                before = _canonical_page_url(page.url)
+                                locator = page.locator(control["css_selector"]).first
+                                if not await locator.is_visible():
+                                    continue
+                                await locator.click(timeout=int(settings.automation_action_timeout_seconds * 1000))
+                                try:
+                                    await page.wait_for_url(
+                                        lambda value: _canonical_page_url(str(value)) != before,
+                                        timeout=int(settings.automation_navigation_settle_timeout_seconds * 1000),
+                                    )
+                                except Exception:
+                                    pass
+                                await self._crawl_wait(page)
+                                after = _canonical_page_url(page.url)
+                                if urlsplit(after).netloc != origin.netloc:
+                                    continue
+                                refreshed = await self._capture_interactive_elements(page)
+                                for item in refreshed:
+                                    item["page_url"] = after
+                                raw.extend(refreshed)
+                                if after != before and after not in visited and after not in queued:
+                                    pending.append((after, depth + 1))
+                                    queued.add(after)
+                            except Exception:
+                                logger.debug("Safe navigation exploration failed", exc_info=True)
                 await browser.close()
-            elements = [DiscoveredElement.model_validate(item) for item in raw]
+            unique = {
+                (
+                    str(item.get("page_url") or url),
+                    str(item.get("test_id") or item.get("element_id") or item.get("css_selector")),
+                ): item
+                for item in raw
+            }
+            elements = [DiscoveredElement.model_validate(item) for item in unique.values()]
             logger.info(
                 "DOM discovery complete url=%s pages_visited=%d elements_found=%d",
                 url, len(visited), len(elements),
@@ -553,17 +677,8 @@ class AutomationService:
         script_cache_key = cache.fingerprint(
             "scripts",
             {
-                "generator_version": 5,  # bump when generation logic changes
+                "generator_version": 7,
                 "application_url": url,
-                "scenarios": [
-                    {key:value for key,value in item.items() if key != "project_id"}
-                    for item in state.get("scenarios", [])
-                ],
-                "test_cases": [
-                    {key:value for key,value in item.items() if key != "project_id"}
-                    for item in state.get("test_cases", [])
-                ],
-                "review_decisions": state.get("review_decisions", {}),
             },
         )
         cached = await cache.get_json(script_cache_key)
@@ -620,7 +735,6 @@ class AutomationService:
         generation_id = f"gen-{uuid.uuid4()}"
         directory = self.artifact_root / generation_id
         directory.mkdir(parents=True, exist_ok=False)
-        scenarios = {str(item["scenario_id"]): item for item in state.get("scenarios", [])}
         element_dicts = [element.model_dump(mode="json") for element in elements]
         application_map = _application_map(url, title, element_dicts)
         application_map_version = _stable_version(application_map)
@@ -632,10 +746,16 @@ class AutomationService:
         )
         scripts = []
         skipped_count = 0
-        for index, test_case in enumerate(state.get("test_cases", []), start=1):
-            if state.get("review_decisions", {}).get(f"testCase:{test_case['test_case_id']}") == "rejected":
-                continue
-            dom_supported = _test_case_supported(test_case, element_dicts)
+        for index, page_info in enumerate(application_map.get("pages", []), start=1):
+            page_url = str(page_info.get("url") or url)
+            page_elements = list(page_info.get("elements") or [])
+            page_name = urlsplit(page_url).path.strip("/") or title or "home"
+            test_case = {
+                "test_case_id": f"PAGE-{index:03d}",
+                "scenario_id": "UI-CRAWL",
+                "title": f"Page: {page_name}",
+            }
+            dom_supported = True
             if not dom_supported:
                 logger.info(
                     "Script marked Needs Review because one or more actions are not "
@@ -646,14 +766,10 @@ class AutomationService:
 
 
 
-            script_id = f"pw-{index:03d}-{_safe_name(str(test_case['test_case_id']))}"
+            script_id = f"pw-page-{index:03d}-{_safe_name(page_name)}"
             path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
             try:
-                source = _python_source(
-                    test_case,
-                    _best_page_url(test_case, url, element_dicts),
-                    element_dicts,
-                )
+                source = _page_script_source(test_case["title"], page_url, page_elements)
                 # Bug 6 fix: catch per-script validation errors so one bad script
                 # doesn't abort generation of all remaining scripts.
                 _validate_generated_source(source)
@@ -666,7 +782,6 @@ class AutomationService:
                 skipped_count += 1
                 continue
             path.write_text(source, encoding="utf-8")
-            scenario = scenarios.get(str(test_case.get("scenario_id")), {})
             scripts.append(
                 GeneratedScript(
                     script_id=script_id,
@@ -677,11 +792,11 @@ class AutomationService:
                     application_url=url,
                     source=source,
                     download_path=f"/api/v1/automation/scripts/{generation_id}/{script_id}/download",
-                    requirement_ids=test_case.get("requirement_ids", []),
-                    user_story_ids=scenario.get("user_story_ids", []),
                     application_map_version=application_map_version,
                     requirement_version=requirement_version,
                     lifecycle_status="Valid" if dom_supported else "Needs Review",
+                    page_url=page_url,
+                    page_elements=page_elements,
                 )
             )
         logger.info(
@@ -851,20 +966,22 @@ class AutomationService:
         for _, element in sorted(ranked, key=lambda item: item[0], reverse=True):
             if element.get("test_id"):
                 candidates.append(page.get_by_test_id(element["test_id"]))
+            if element.get("element_id") and hasattr(page, "locator"):
+                candidates.append(page.locator(f"[id={json.dumps(str(element['element_id']))}]"))
+            if element.get("name") and hasattr(page, "locator"):
+                candidates.append(page.locator(f"[name={json.dumps(str(element['name']))}]"))
             if element.get("label"):
                 candidates.append(page.get_by_label(element["label"], exact=True))
-            if element.get("role") and element.get("name"):
-                candidates.append(
-                    page.get_by_role(element["role"], name=element["name"], exact=True)
-                )
             if element.get("placeholder"):
                 candidates.append(
                     page.get_by_placeholder(element["placeholder"], exact=True)
                 )
-            if element.get("visible_text"):
+            if element.get("role") and element.get("name"):
                 candidates.append(
-                    page.get_by_text(element["visible_text"], exact=False)
+                    page.get_by_role(element["role"], name=element["name"], exact=True)
                 )
+            if element.get("css_selector") and hasattr(page, "locator"):
+                candidates.append(page.locator(element["css_selector"]))
         return candidates
 
     async def _resolve_locators(
@@ -1409,8 +1526,8 @@ class AutomationService:
                 skyvern_succeeded = False
                 failure_category = "Script Generation"
                 try:
-                    test_case = cases[script.test_case_id]
-                    target_url = _best_page_url(
+                    test_case = cases.get(script.test_case_id, {"steps": []})
+                    target_url = script.page_url or _best_page_url(
                         test_case, response.application_url, disc_dicts
                     )
                     # ---- Navigation with explicit wait + validation (req 4, 7) ----
@@ -1424,10 +1541,38 @@ class AutomationService:
                     except PlaywrightTimeoutError as nav_timeout:
                         failure_category = "Page Load Timeout"
                         raise nav_timeout
-                    await self._wait_for_page_stable(page)
+                    if script.page_url:
+                        await self._crawl_wait(page)
+                    else:
+                        await self._wait_for_page_stable(page)
                     await self._validate_navigation(page, target_url)
                     # ---- Auto-dismiss overlays once after landing (req 8) ----
                     await self._dismiss_overlays(page)
+
+                    if script.page_url:
+                        failure_category = "Page Failure"
+                        fresh_elements = await self._capture_interactive_elements(page)
+                        for captured in script.page_elements:
+                            identity = str(
+                                captured.get("test_id") or captured.get("element_id")
+                                or captured.get("name") or captured.get("label")
+                                or captured.get("placeholder") or captured.get("tag")
+                            )
+                            failure_category = "Locator Failure"
+                            found = False
+                            for locator in self._discovered_locator_candidates(page, identity, [captured]):
+                                try:
+                                    if await locator.count() and await locator.first.is_visible():
+                                        found = True
+                                        break
+                                except Exception:
+                                    continue
+                            if not found:
+                                raise LookupError(f"Fresh DOM does not contain: {identity}")
+                        disc_dicts = [
+                            {**item, "page_url": _canonical_page_url(page.url)}
+                            for item in fresh_elements
+                        ]
 
                     per_test_calls = 0
                     for step in test_case.get("steps", []):
@@ -1439,7 +1584,6 @@ class AutomationService:
 
                         # ---- Pre-step overlay dismissal (req 8) ----
                         await self._dismiss_overlays(page)
-                        lowered = action.lower()
                         failure_category = "Locator Failure"
                         try:
                             page_elements = [
@@ -1530,7 +1674,7 @@ class AutomationService:
                     if isinstance(exc, (ImportError, OSError, PermissionError, EnvironmentError)):
                         failure_category = "Environment Issue"
                     elif isinstance(exc, AssertionError):
-                        failure_category = "Assertion Failure"
+                        failure_category = "Application Failure"
 
                     # ---- Screenshot (req 11) ----
                     screenshot_path: Path | None = None
@@ -1608,6 +1752,7 @@ class AutomationService:
             "scenario_id": script.scenario_id,
             "test_case_id": script.test_case_id,
             "script_id": script.script_id,
+            "page_url": script.page_url,
         }
 
     @staticmethod
@@ -1634,7 +1779,8 @@ class AutomationService:
 
     @staticmethod
     def _id_matches(reference: str, candidate: str) -> bool:
-        normalize = lambda value: re.sub(r"[^a-z0-9]", "", value.lower()).lstrip("0")
+        def normalize(value: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", value.lower()).lstrip("0")
         left, right = normalize(reference), normalize(candidate)
         if left == right:
             return True
@@ -1835,7 +1981,7 @@ class AutomationService:
                 True,
                 "Network or browser-console evidence shows a failed application request.",
             )
-        if failure.failure_category in {"Environment Issue", "Page Load Timeout"}:
+        if failure.failure_category in {"Environment Issue", "Page Load Timeout", "Page Failure"}:
             return (
                 "ENVIRONMENT_FAILURE",
                 "Environment or configuration issue",
@@ -1893,7 +2039,7 @@ class AutomationService:
                 True,
                 "The application validation response did not satisfy the expected rule.",
             )
-        if failure.failure_category in {"Assertion Failure", "Application"}:
+        if failure.failure_category in {"Assertion Failure", "Application", "Application Failure"}:
             return (
                 "APPLICATION_DEFECT",
                 "Incorrect business logic",
@@ -2495,6 +2641,22 @@ class AutomationService:
                 "skipped": skipped,
                 "rejected": rejected,
                 "pass_rate": round((passed / overall_total * 100) if overall_total else 0, 2),
+                "pages_discovered": len(
+                    (generation.get("response").application_map or {}).get("pages", [])
+                ) if generation.get("response") else 0,
+                "page_failures": sum(
+                    bool(result.failure and result.failure.failure_category in {
+                        "Page Failure", "Navigation Failure", "Page Load Timeout"
+                    }) for result in results
+                ),
+                "locator_failures": sum(
+                    bool(result.failure and result.failure.failure_category == "Locator Failure")
+                    for result in results
+                ),
+                "environment_failures": sum(
+                    bool(result.failure and result.failure.failure_category == "Environment Issue")
+                    for result in results
+                ),
                 "application_failures": sum(
                     bool(
                         result.failure
@@ -2561,6 +2723,70 @@ class AutomationService:
                 except ValueError:
                     logger.warning("Automation report file is invalid execution_id=%s", execution_id)
         raise AutomationNotFound("Execution report was not found")
+
+    async def compare(self, execution_id: str) -> TraceabilityComparisonReport:
+        execution = self.report(execution_id)
+        generation = await self.generation(execution.generation_id)
+        workflow = generation["workflow"]
+        response: ScriptGenerationResponse = generation["response"]
+        statuses = {result.script_id: result.status for result in execution.results}
+        evidence: dict[str, set[str]] = {}
+        executed_words: set[str] = set()
+        for script in response.scripts:
+            words = _meaningful_words(" ".join([
+                script.name, script.page_url or "",
+                *[" ".join(str(element.get(key) or "") for key in (
+                    "name", "label", "placeholder", "visible_text", "href", "role"
+                )) for element in script.page_elements],
+            ]))
+            evidence[script.script_id] = words
+            if statuses.get(script.script_id) in {"passed", "failed"}:
+                executed_words |= words
+
+        def coverage(item: dict[str, Any], id_key: str) -> dict[str, Any]:
+            text = " ".join([
+                str(item.get("title") or ""), str(item.get("description") or ""),
+                *[f"{step.get('action', '')} {step.get('expected_result', '')}"
+                  for step in item.get("steps", [])],
+            ])
+            expected = _meaningful_words(text)
+            overlap = expected & executed_words
+            percentage = round(len(overlap) / len(expected) * 100, 2) if expected else 0
+            return {
+                "id": str(item.get(id_key) or ""), "title": str(item.get("title") or ""),
+                "status": "covered" if percentage >= 60 else "partial" if percentage else "missing",
+                "coverage_percentage": percentage,
+                "matched_scripts": [sid for sid, words in evidence.items() if expected & words],
+                "missing_terms": sorted(expected - executed_words),
+            }
+
+        scenarios = [coverage(item, "scenario_id") for item in workflow.get("scenarios", [])]
+        cases = [coverage(item, "test_case_id") for item in workflow.get("test_cases", [])]
+        artifacts = scenarios + cases
+        gaps = [{
+            "artifact_id": item["id"], "artifact_title": item["title"],
+            "gap_type": "uncovered" if item["status"] == "missing" else "partially covered",
+            "details": f"Missing UI evidence: {', '.join(item['missing_terms'][:12])}",
+        } for item in artifacts if item["status"] != "covered"]
+        inconsistencies = [{
+            "script_id": result.script_id, "type": "execution_failure",
+            "details": result.error_message or "Page execution failed.",
+        } for result in execution.results if result.status == "failed"]
+        covered = sum(item["status"] == "covered" for item in artifacts)
+        report = TraceabilityComparisonReport(
+            comparison_id=f"cmp-{uuid.uuid4()}", execution_id=execution_id,
+            generation_id=execution.generation_id,
+            summary={"total_artifacts": len(artifacts), "covered": covered,
+                     "partial": sum(item["status"] == "partial" for item in artifacts),
+                     "missing": sum(item["status"] == "missing" for item in artifacts),
+                     "coverage_percentage": round(covered / len(artifacts) * 100, 2) if artifacts else 0},
+            scenario_coverage=scenarios, test_case_coverage=cases,
+            gaps=gaps, inconsistencies=inconsistencies,
+        )
+        (generation["directory"] / f"{report.comparison_id}.json").write_text(
+            json.dumps(report.model_dump(mode="json"), indent=2), encoding="utf-8"
+        )
+        return report
 
     async def health(self, *, _dedicated_loop: bool = False) -> AutomationHealth:
         if settings.app_mock_mode:

@@ -1,0 +1,136 @@
+{
+  "execution_id": "exec-0c5166bb-d728-425f-8f65-38e32462920d",
+  "generation_id": "gen-9c59c139-a879-4307-91ba-d763518cdb7b",
+  "mode": "manual",
+  "total_scripts": 1,
+  "passed_scripts": 0,
+  "failed_scripts": 0,
+  "skipped_scripts": 1,
+  "rejected_scripts": 0,
+  "execution_time_seconds": 0.0,
+  "success_percentage": 0.0,
+  "results": [
+    {
+      "script_id": "pw-001-TC-1",
+      "script_name": "Login",
+      "test_case_id": "TC-1",
+      "scenario_id": "SC-1",
+      "status": "skipped",
+      "duration_seconds": 0.0,
+      "error_message": null,
+      "failure": null,
+      "traceability": {
+        "requirements": [],
+        "user_stories": [],
+        "scenario_id": "SC-1",
+        "test_case_id": "TC-1"
+      }
+    }
+  ],
+  "rejected_results": [],
+  "overall_summary": {
+    "total_tests": 1,
+    "executed_tests": 1,
+    "passed": 0,
+    "failed": 0,
+    "skipped": 1,
+    "rejected": 0,
+    "pass_rate": 0.0,
+    "application_failures": 0,
+    "automation_failures": 0,
+    "verified_fixes": 0,
+    "inconclusive": 0
+  },
+  "requirement_coverage": {
+    "total_mapped_requirements": 0,
+    "executed_requirement_references": [],
+    "failed_requirement_references": [],
+    "covered_percentage": 0
+  },
+  "failed_requirement_mapping": [],
+  "developer_ready_tickets": [],
+  "developer_execution_reports": [
+    {
+      "issue_title": "Application behavior not executed: Login",
+      "affected_feature_user_story": {
+        "feature": "Login",
+        "user_stories": []
+      },
+      "problem_description": "This test was not executed, so application functionality was not evaluated.",
+      "expected_vs_actual_application_behavior": {
+        "expected": "Open",
+        "actual": "No application behavior was observed because execution was skipped."
+      },
+      "missing_functionality": "Not evaluated.",
+      "developer_implementation_requirements": {
+        "ui": [
+          "No UI changes required."
+        ],
+        "backend_api": [
+          "No backend or API changes required."
+        ],
+        "validation": [
+          "No validation changes required."
+        ],
+        "database": [
+          "No database changes required."
+        ]
+      },
+      "acceptance_criteria": [],
+      "priority": "Low",
+      "classification": null,
+      "confidence": 0.0,
+      "developer_issue_created": false
+    }
+  ],
+  "qa_diagnostic_reports": [
+    {
+      "script_id": "pw-001-TC-1",
+      "status": "skipped",
+      "classification": null,
+      "confidence": null,
+      "confidence_gate": {},
+      "locator": null,
+      "stack_trace": null,
+      "screenshots": [],
+      "dom_snapshot": null,
+      "network_errors": [],
+      "console_logs": [],
+      "playwright_trace": null,
+      "automation_recommendations": {}
+    }
+  ],
+  "traceability_chains": [
+    {
+      "epic": [],
+      "feature": [],
+      "user_story": [],
+      "acceptance_criterion": [],
+      "scenario": [
+        {
+          "id": "SC-1",
+          "title": "SC-1"
+        }
+      ],
+      "test_case": [
+        {
+          "id": "TC-1",
+          "title": "Login"
+        }
+      ],
+      "script": "pw-001-TC-1",
+      "execution_status": "skipped",
+      "defect": null
+    }
+  ],
+  "requirement_version": "b744a577a100327d",
+  "script_lifecycle": [
+    {
+      "script_id": "pw-001-TC-1",
+      "status": "Valid",
+      "requirement_version": "b744a577a100327d",
+      "application_map_version": "4071de546af11281"
+    }
+  ],
+  "retest_verification": []
+}
