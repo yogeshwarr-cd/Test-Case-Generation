@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import ast
@@ -21,6 +21,8 @@ from app.core.config import settings
 from app.core.exceptions import AppError
 from app.schemas.automation_schema import (
     AutomationHealth,
+    CrawlAndGenerateRequest,
+    CrawlGenerationResponse,
     DiscoveredElement,
     AutomationRecommendation,
     DeveloperImplementationPlan,
@@ -863,6 +865,129 @@ class AutomationService:
             manifest,
             settings.redis_script_ttl_seconds,
         )
+
+    async def crawl_and_generate(
+        self, request: CrawlAndGenerateRequest, *, _dedicated_loop: bool = False
+    ) -> CrawlGenerationResponse:
+        """Standalone URL crawl → Playwright script generation.
+
+        Validates the URL, uses Playwright to crawl all same-origin pages up to
+        the configured limits, then generates one verified test script per page.
+        No workflow_id or pre-existing test cases are required.
+        """
+        if sys.platform == "win32" and not settings.app_mock_mode and not _dedicated_loop:
+            return await _on_playwright_loop(
+                lambda: self.crawl_and_generate(request, _dedicated_loop=True)
+            )
+
+        url = str(request.url)
+        page_limit = request.page_limit
+        depth_limit = request.depth_limit
+
+        logger.info("crawl_and_generate() start url=%s page_limit=%d depth_limit=%d", url, page_limit, depth_limit)
+
+        await self._validate_url(url)
+
+        # Temporarily override crawl limits for this request
+        original_page_limit = settings.automation_crawl_page_limit
+        original_depth_limit = settings.automation_crawl_depth_limit
+        settings.automation_crawl_page_limit = page_limit
+        settings.automation_crawl_depth_limit = depth_limit
+        try:
+            title, elements = await self._discover(url)
+        finally:
+            settings.automation_crawl_page_limit = original_page_limit
+            settings.automation_crawl_depth_limit = original_depth_limit
+
+        crawl_id = f"crawl-{uuid.uuid4()}"
+        directory = self.artifact_root / crawl_id
+        directory.mkdir(parents=True, exist_ok=True)
+
+        element_dicts = [element.model_dump(mode="json") for element in elements]
+        application_map = _application_map(url, title, element_dicts)
+
+        scripts: list[GeneratedScript] = []
+        skipped_count = 0
+
+        for index, page_info in enumerate(application_map.get("pages", []), start=1):
+            page_url = str(page_info.get("url") or url)
+            page_elements = list(page_info.get("elements") or [])
+            page_name = urlsplit(page_url).path.strip("/") or title or "home"
+            script_id = f"crawl-page-{index:03d}-{_safe_name(page_name)}"
+            path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
+            test_case_label = f"Page: {page_name}"
+            try:
+                source = _page_script_source(test_case_label, page_url, page_elements)
+                _validate_generated_source(source)
+            except (SyntaxError, ValueError) as source_err:
+                logger.warning(
+                    "Crawl script skipped – validation failed script_id=%s error=%s: %s",
+                    script_id, type(source_err).__name__, source_err,
+                )
+                skipped_count += 1
+                continue
+            path.write_text(source, encoding="utf-8")
+            scripts.append(
+                GeneratedScript(
+                    script_id=script_id,
+                    workflow_id=uuid.UUID(int=0),  # sentinel — no workflow
+                    test_case_id=f"CRAWL-{index:03d}",
+                    scenario_id="URL-CRAWL",
+                    name=test_case_label,
+                    application_url=url,
+                    source=source,
+                    download_path=f"/api/v1/automation/url-crawl/{crawl_id}/{script_id}/download",
+                    page_url=page_url,
+                    page_elements=page_elements,
+                )
+            )
+
+        logger.info(
+            "crawl_and_generate() complete crawl_id=%s scripts=%d skipped=%d",
+            crawl_id, len(scripts), skipped_count,
+        )
+
+        if not scripts:
+            raise AutomationError(
+                "No scripts could be generated from the crawled URL. "
+                "Ensure the URL loads a real UI and is not behind a login wall."
+            )
+
+        response = CrawlGenerationResponse(
+            crawl_id=crawl_id,
+            url=url,
+            page_title=title,
+            pages_crawled=len(application_map.get("pages", [])),
+            elements_found=len(elements),
+            scripts=scripts,
+            discovered_elements=elements,
+            application_map=application_map,
+        )
+
+        # Persist manifest for download route
+        (directory / "crawl.json").write_text(
+            json.dumps(response.model_dump(mode="json"), default=str, indent=2),
+            encoding="utf-8",
+        )
+
+        # Cache the crawl generation keyed by crawl_id
+        self._generations[crawl_id] = {
+            "response": response,
+            "workflow": {},
+            "directory": directory,
+            "learned_locators": {},
+        }
+
+        return response
+
+    async def crawl_script_path(self, crawl_id: str, script_id: str) -> Path:
+        """Resolve the .pwscript file for a URL-crawl download."""
+        safe_crawl = _safe_name(crawl_id)
+        safe_script = _safe_name(script_id)
+        path = self.artifact_root / safe_crawl / f"{safe_script}{SCRIPT_ARTIFACT_SUFFIX}"
+        if not path.is_file():
+            raise AutomationNotFound(f"Crawl script not found: {crawl_id}/{script_id}")
+        return path
 
     async def generation(self, generation_id: str) -> dict[str, Any]:
         if generation_id in self._generations:
@@ -2764,9 +2889,12 @@ class AutomationService:
         cases = [coverage(item, "test_case_id") for item in workflow.get("test_cases", [])]
         artifacts = scenarios + cases
         gaps = [{
-            "artifact_id": item["id"], "artifact_title": item["title"],
+            "artifact_id": item["id"],
+            "artifact_title": item["title"],
+            "status": item["status"],
             "gap_type": "uncovered" if item["status"] == "missing" else "partially covered",
-            "details": f"Missing UI evidence: {', '.join(item['missing_terms'][:12])}",
+            "coverage_percentage": item["coverage_percentage"],
+            "details": f"Missing UI evidence: {', '.join(item['missing_terms'][:12])}" if item["missing_terms"] else "No missing terms",
         } for item in artifacts if item["status"] != "covered"]
         inconsistencies = [{
             "script_id": result.script_id, "type": "execution_failure",

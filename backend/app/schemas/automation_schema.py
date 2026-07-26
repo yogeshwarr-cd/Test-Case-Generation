@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Literal
 from uuid import UUID
@@ -260,3 +260,27 @@ class AutomationHealth(BaseModel):
     seacrawl_api_reachable: bool | None = None
     seacrawl_configuration_valid: bool
     details: dict[str, str] = Field(default_factory=dict)
+
+
+class CrawlAndGenerateRequest(BaseModel):
+    """Standalone request: crawl a URL and generate Playwright scripts per page.
+
+    No workflow or pre-existing test cases are required.
+    """
+
+    url: HttpUrl
+    page_limit: int = Field(default=20, ge=1, le=100)
+    depth_limit: int = Field(default=5, ge=1, le=10)
+
+
+class CrawlGenerationResponse(BaseModel):
+    """Result of a standalone URL crawl + script generation."""
+
+    crawl_id: str
+    url: str
+    page_title: str | None = None
+    pages_crawled: int
+    elements_found: int
+    scripts: list[GeneratedScript]
+    discovered_elements: list[DiscoveredElement] = Field(default_factory=list)
+    application_map: dict[str, Any] = Field(default_factory=dict)
