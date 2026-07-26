@@ -1,4 +1,4 @@
-export type WorkflowStatus =
+﻿export type WorkflowStatus =
   | 'pending'
   | 'preparing_context'
   | 'generating_scenarios'
@@ -234,8 +234,8 @@ export interface FailureAnalysis {
   console_logs: string[];
   network_errors: string[];
   stack_trace?: string;
-  skyvern_attempted: boolean;
-  skyvern_succeeded: boolean;
+  seacrawl_attempted: boolean;
+  seacrawl_succeeded: boolean;
   intelligence?: FailureIntelligence;
 }
 

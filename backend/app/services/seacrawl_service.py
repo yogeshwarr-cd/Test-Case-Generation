@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
@@ -10,45 +10,45 @@ from app.core.config import settings
 
 
 @dataclass
-class SkyvernRecovery:
+class SeacrawlRecovery:
     attempted: bool
     succeeded: bool
     locator: str | None = None
     message: str | None = None
 
 
-class SkyvernAdapter:
+class SeacrawlAdapter:
     """Bounded discovery/navigation and failed-locator recovery client.
 
     Playwright remains the only source of verified DOM elements and the execution
-    engine. Skyvern may suggest navigation targets, but never authors selectors or
+    engine. Seacrawl may suggest navigation targets, but never authors selectors or
     assertions used without Playwright verification.
     """
 
     def __init__(self) -> None:
-        self.enabled = settings.skyvern_fallback_enabled and not settings.app_mock_mode
-        self.base_url = settings.skyvern_base_url.rstrip("/")
+        self.enabled = settings.seacrawl_fallback_enabled and not settings.app_mock_mode
+        self.base_url = settings.seacrawl_base_url.rstrip("/")
 
     @property
     def configuration_valid(self) -> bool:
-        return not self.enabled or bool(self.base_url and settings.skyvern_integration_mode)
+        return not self.enabled or bool(self.base_url and settings.seacrawl_integration_mode)
 
     async def health(self) -> bool:
         if not self.enabled:
             return False
         try:
-            async with httpx.AsyncClient(timeout=settings.skyvern_timeout_seconds) as client:
+            async with httpx.AsyncClient(timeout=settings.seacrawl_timeout_seconds) as client:
                 response = await client.get(f"{self.base_url}/health")
             return response.is_success
         except httpx.HTTPError:
             return False
 
-    async def recover(self, *, url: str, action: str, expected_result: str) -> SkyvernRecovery:
+    async def recover(self, *, url: str, action: str, expected_result: str) -> SeacrawlRecovery:
         if not self.enabled:
-            return SkyvernRecovery(False, False, message="Skyvern fallback is disabled")
+            return SeacrawlRecovery(False, False, message="Seacrawl fallback is disabled")
         headers = {}
-        if settings.skyvern_api_key:
-            headers["x-api-key"] = settings.skyvern_api_key
+        if settings.seacrawl_api_key:
+            headers["x-api-key"] = settings.seacrawl_api_key
         payload = {
             "url": url,
             "prompt": (
@@ -63,20 +63,20 @@ class SkyvernAdapter:
             "max_steps": 5,
         }
         last_message = None
-        for _ in range(max(1, settings.skyvern_max_attempts)):
+        for _ in range(max(1, settings.seacrawl_max_attempts)):
             try:
-                async with httpx.AsyncClient(timeout=settings.skyvern_timeout_seconds) as client:
+                async with httpx.AsyncClient(timeout=settings.seacrawl_timeout_seconds) as client:
                     response = await client.post(f"{self.base_url}/v1/run/tasks", json=payload, headers=headers)
                 if response.is_success:
                     data = response.json()
                     run_id = data.get("run_id")
-                    deadline = time.monotonic() + settings.skyvern_timeout_seconds
+                    deadline = time.monotonic() + settings.seacrawl_timeout_seconds
                     while run_id and time.monotonic() < deadline:
                         status = str(data.get("status", "")).lower()
                         if status in {"completed", "failed", "terminated", "canceled", "timed_out"}:
                             break
                         await asyncio.sleep(0.5)
-                        async with httpx.AsyncClient(timeout=settings.skyvern_timeout_seconds) as client:
+                        async with httpx.AsyncClient(timeout=settings.seacrawl_timeout_seconds) as client:
                             poll = await client.get(
                                 f"{self.base_url}/v1/runs/{run_id}", headers=headers
                             )
@@ -85,22 +85,22 @@ class SkyvernAdapter:
                     output = data.get("output") or {}
                     locator = output.get("locator") if isinstance(output, dict) else None
                     status = str(data.get("status", "")).lower()
-                    return SkyvernRecovery(
+                    return SeacrawlRecovery(
                         True,
                         status == "completed" and bool(locator),
                         locator,
                         data.get("failure_reason"),
                     )
-                last_message = f"Skyvern returned HTTP {response.status_code}"
+                last_message = f"Seacrawl returned HTTP {response.status_code}"
             except (httpx.HTTPError, ValueError) as exc:
                 last_message = type(exc).__name__
-        return SkyvernRecovery(True, False, message=last_message)
+        return SeacrawlRecovery(True, False, message=last_message)
 
     async def discover_urls(self, *, url: str, page_limit: int, depth_limit: int) -> list[str]:
-        """Ask Skyvern to walk the application and return navigation candidates."""
+        """Ask Seacrawl to walk the application and return navigation candidates."""
         if not self.enabled:
             return []
-        headers = {"x-api-key": settings.skyvern_api_key} if settings.skyvern_api_key else {}
+        headers = {"x-api-key": settings.seacrawl_api_key} if settings.seacrawl_api_key else {}
         payload = {
             "url": url,
             "prompt": (
@@ -118,14 +118,14 @@ class SkyvernAdapter:
             "max_steps": max(1, min(page_limit * max(1, depth_limit), 100)),
         }
         try:
-            async with httpx.AsyncClient(timeout=settings.skyvern_timeout_seconds) as client:
+            async with httpx.AsyncClient(timeout=settings.seacrawl_timeout_seconds) as client:
                 response = await client.post(
                     f"{self.base_url}/v1/run/tasks", json=payload, headers=headers
                 )
                 response.raise_for_status()
                 data = response.json()
                 run_id = data.get("run_id")
-                deadline = time.monotonic() + settings.skyvern_timeout_seconds
+                deadline = time.monotonic() + settings.seacrawl_timeout_seconds
                 while run_id and time.monotonic() < deadline:
                     if str(data.get("status", "")).lower() in {
                         "completed", "failed", "terminated", "canceled", "timed_out"

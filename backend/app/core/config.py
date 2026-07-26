@@ -1,4 +1,4 @@
-import json
+﻿import json
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -102,14 +102,14 @@ class Settings(BaseSettings):
     automation_require_reproducible_failure: bool = True
     automation_crawl_page_limit: int = 20
     automation_crawl_depth_limit: int = 5
-    skyvern_fallback_enabled: bool = False
-    skyvern_integration_mode: str = "self_hosted"
-    skyvern_base_url: str = "http://localhost:8000"
-    skyvern_api_key: str = ""
-    skyvern_timeout_seconds: float = 30.0
-    skyvern_max_attempts: int = 1
-    skyvern_max_calls_per_test: int = 2
-    skyvern_max_calls_per_run: int = 20
+    seacrawl_fallback_enabled: bool = False
+    seacrawl_integration_mode: str = "self_hosted"
+    seacrawl_base_url: str = "http://localhost:8000"
+    seacrawl_api_key: str = ""
+    seacrawl_timeout_seconds: float = 30.0
+    seacrawl_max_attempts: int = 1
+    seacrawl_max_calls_per_test: int = 2
+    seacrawl_max_calls_per_run: int = 20
 
     @field_validator("database_url", "backend_1_database_url", mode="before")
     @classmethod

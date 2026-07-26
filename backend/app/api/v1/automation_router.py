@@ -7,7 +7,7 @@ from app.services.automation_service import automation_service
 router = APIRouter(prefix="/automation", tags=["Test automation"])
 
 
-@router.get("/health", summary="Check Playwright, browser, and optional Skyvern readiness")
+@router.get("/health", summary="Check Playwright, browser, and optional Seacrawl readiness")
 async def health():
     return await automation_service.health()
 

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { CheckCircle2, Download, LoaderCircle, Play } from 'lucide-react';
@@ -65,7 +65,7 @@ export function AutomationPage() {
       <div>
         <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Playwright automation</p>
         <h1 className="mt-2 text-2xl font-bold">Generate and execute test scripts</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Playwright remains the primary engine. Optional Skyvern recovery is limited to failed locator actions.</p>
+        <p className="mt-1 text-sm text-muted-foreground">Playwright remains the primary engine. Optional Seacrawl recovery is limited to failed locator actions.</p>
       </div>
 
       {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600">{error}</div>}
