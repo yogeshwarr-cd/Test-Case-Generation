@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 
 import pytest
 
@@ -169,7 +169,7 @@ async def test_action_retries_alternative_after_discovered_locator_fails():
 
 
 @pytest.mark.asyncio
-async def test_successful_skyvern_locator_is_saved_and_reused(monkeypatch, tmp_path):
+async def test_successful_seacrawl_locator_is_saved_and_reused(monkeypatch, tmp_path):
     service = AutomationService()
     generation_id = "gen-test"
     generation = {

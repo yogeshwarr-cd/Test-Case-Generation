@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import ast
@@ -37,7 +37,7 @@ from app.schemas.automation_schema import (
     RetestStrategy,
     TraceabilityComparisonReport,
 )
-from app.services.skyvern_service import SkyvernAdapter
+from app.services.seacrawl_service import SeacrawlAdapter
 from app.services.cache_service import cache
 from app.services.workflow_service import workflow_service
 
@@ -151,7 +151,7 @@ def _application_map(
         "relationships": relationships,
         "page_count": len(pages),
         "element_count": len(elements),
-        "discovery_engine": "Skyvern + Playwright" if settings.skyvern_fallback_enabled else "Playwright",
+        "discovery_engine": "Seacrawl + Playwright" if settings.seacrawl_fallback_enabled else "Playwright",
         "capture_engine": "Playwright",
     }
 
@@ -430,7 +430,7 @@ class AutomationService:
     def __init__(self) -> None:
         self._generations: dict[str, dict[str, Any]] = {}
         self._reports: dict[str, ExecutionReport] = {}
-        self.skyvern = SkyvernAdapter()
+        self.seacrawl = SeacrawlAdapter()
 
     @property
     def artifact_root(self) -> Path:
@@ -541,14 +541,14 @@ class AutomationService:
                 browser = await playwright.chromium.launch(headless=True)
                 page = await browser.new_page()
                 origin = urlsplit(url)
-                skyvern_urls = await self.skyvern.discover_urls(
+                seacrawl_urls = await self.seacrawl.discover_urls(
                     url=url,
                     page_limit=settings.automation_crawl_page_limit,
                     depth_limit=settings.automation_crawl_depth_limit,
                 )
                 verified_candidates = [
                     candidate
-                    for candidate in skyvern_urls
+                    for candidate in seacrawl_urls
                     if urlsplit(candidate).scheme in {"http", "https"}
                     and urlsplit(candidate).netloc == origin.netloc
                 ]
@@ -1193,7 +1193,7 @@ class AutomationService:
     def _learned_locator_key(url: str, action: str) -> str:
         parsed = urlsplit(url)
         return cache.fingerprint(
-            "skyvern-locator",
+            "seacrawl-locator",
             {
                 "origin": f"{parsed.scheme}://{parsed.netloc}",
                 "path": parsed.path,
@@ -1486,7 +1486,7 @@ class AutomationService:
         results: list[ScriptExecutionResult] = []
         state = generation["workflow"]
         cases = {str(item["test_case_id"]): item for item in state.get("test_cases", [])}
-        run_skyvern_calls = 0
+        run_seacrawl_calls = 0
         from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
         from playwright.async_api import async_playwright
@@ -1522,8 +1522,8 @@ class AutomationService:
                 failed_step = None
                 expected = None
                 element = None
-                skyvern_attempted = False
-                skyvern_succeeded = False
+                seacrawl_attempted = False
+                seacrawl_succeeded = False
                 failure_category = "Script Generation"
                 try:
                     test_case = cases.get(script.test_case_id, {"steps": []})
@@ -1607,22 +1607,22 @@ class AutomationService:
                                     action_recovered = True
                                 except (LookupError, ValueError, PlaywrightError):
                                     pass
-                            # ---- Skyvern fallback – only after all Playwright strategies fail (req 6) ----
+                            # ---- Seacrawl fallback – only after all Playwright strategies fail (req 6) ----
                             if (
                                 not action_recovered
-                                and self.skyvern.enabled
-                                and per_test_calls < settings.skyvern_max_calls_per_test
-                                and run_skyvern_calls < settings.skyvern_max_calls_per_run
+                                and self.seacrawl.enabled
+                                and per_test_calls < settings.seacrawl_max_calls_per_test
+                                and run_seacrawl_calls < settings.seacrawl_max_calls_per_run
                             ):
                                 per_test_calls += 1
-                                run_skyvern_calls += 1
-                                recovery = await self.skyvern.recover(
+                                run_seacrawl_calls += 1
+                                recovery = await self.seacrawl.recover(
                                     url=page.url,
                                     action=action,
                                     expected_result=expected or "",
                                 )
-                                skyvern_attempted = recovery.attempted
-                                skyvern_succeeded = recovery.succeeded
+                                seacrawl_attempted = recovery.attempted
+                                seacrawl_succeeded = recovery.succeeded
                                 if recovery.locator:
                                     try:
                                         await self._retry_recovered(
@@ -1635,11 +1635,11 @@ class AutomationService:
                                             action,
                                             recovery.locator,
                                         )
-                                        element = f"Skyvern locator: {recovery.locator}"
-                                        skyvern_succeeded = True
+                                        element = f"Seacrawl locator: {recovery.locator}"
+                                        seacrawl_succeeded = True
                                     except (LookupError, ValueError, PlaywrightError):
-                                        skyvern_succeeded = False
-                                action_recovered = skyvern_succeeded
+                                        seacrawl_succeeded = False
+                                action_recovered = seacrawl_succeeded
                             if not action_recovered:
                                 raise action_error
 
@@ -1716,8 +1716,8 @@ class AutomationService:
                         console_logs=console_logs,
                         network_errors=network_errors,
                         stack_trace=traceback.format_exc(),
-                        skyvern_attempted=skyvern_attempted,
-                        skyvern_succeeded=skyvern_succeeded,
+                        seacrawl_attempted=seacrawl_attempted,
+                        seacrawl_succeeded=seacrawl_succeeded,
                     )
                     results.append(
                         ScriptExecutionResult(
@@ -2794,9 +2794,9 @@ class AutomationService:
                 status="healthy",
                 playwright_available=True,
                 browser_available=True,
-                skyvern_enabled=False,
-                skyvern_api_reachable=None,
-                skyvern_configuration_valid=True,
+                seacrawl_enabled=False,
+                seacrawl_api_reachable=None,
+                seacrawl_configuration_valid=True,
                 details={"mode": "mock"},
             )
         if sys.platform == "win32" and not _dedicated_loop:
@@ -2816,15 +2816,15 @@ class AutomationService:
                 await browser.close()
         except Exception as exc:
             details["playwright"] = type(exc).__name__
-        skyvern_reachable = await self.skyvern.health() if self.skyvern.enabled else None
+        seacrawl_reachable = await self.seacrawl.health() if self.seacrawl.enabled else None
         healthy = playwright_available and browser_available
         return AutomationHealth(
             status="healthy" if healthy else "degraded",
             playwright_available=playwright_available,
             browser_available=browser_available,
-            skyvern_enabled=self.skyvern.enabled,
-            skyvern_api_reachable=skyvern_reachable,
-            skyvern_configuration_valid=self.skyvern.configuration_valid,
+            seacrawl_enabled=self.seacrawl.enabled,
+            seacrawl_api_reachable=seacrawl_reachable,
+            seacrawl_configuration_valid=self.seacrawl.configuration_valid,
             details=details,
         )
 

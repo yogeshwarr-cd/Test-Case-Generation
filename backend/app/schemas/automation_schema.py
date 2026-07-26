@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Literal
 from uuid import UUID
@@ -99,8 +99,8 @@ class FailureAnalysis(BaseModel):
     console_logs: list[str] = Field(default_factory=list)
     network_errors: list[str] = Field(default_factory=list)
     stack_trace: str | None = None
-    skyvern_attempted: bool = False
-    skyvern_succeeded: bool = False
+    seacrawl_attempted: bool = False
+    seacrawl_succeeded: bool = False
     intelligence: FailureIntelligence | None = None
 
 
@@ -256,7 +256,7 @@ class AutomationHealth(BaseModel):
     status: Literal["healthy", "degraded", "disabled"]
     playwright_available: bool
     browser_available: bool
-    skyvern_enabled: bool
-    skyvern_api_reachable: bool | None = None
-    skyvern_configuration_valid: bool
+    seacrawl_enabled: bool
+    seacrawl_api_reachable: bool | None = None
+    seacrawl_configuration_valid: bool
     details: dict[str, str] = Field(default_factory=dict)
