@@ -1,4 +1,4 @@
-﻿export type WorkflowStatus =
+export type WorkflowStatus =
   | 'pending'
   | 'preparing_context'
   | 'generating_scenarios'
@@ -194,9 +194,30 @@ export interface TraceabilityComparisonReport {
   execution_id: string;
   generation_id: string;
   summary: { total_artifacts: number; covered: number; partial: number; missing: number; coverage_percentage: number };
-  scenario_coverage: Array<Record<string, unknown>>;
-  test_case_coverage: Array<Record<string, unknown>>;
-  gaps: Array<{ artifact_id: string; artifact_title: string; gap_type: string; details: string }>;
+  scenario_coverage: Array<{
+    id: string;
+    title: string;
+    status: 'covered' | 'partial' | 'missing';
+    coverage_percentage: number;
+    matched_scripts: string[];
+    missing_terms: string[];
+  }>;
+  test_case_coverage: Array<{
+    id: string;
+    title: string;
+    status: 'covered' | 'partial' | 'missing';
+    coverage_percentage: number;
+    matched_scripts: string[];
+    missing_terms: string[];
+  }>;
+  gaps: Array<{
+    artifact_id: string;
+    artifact_title: string;
+    status?: 'covered' | 'partial' | 'missing';
+    gap_type: string;
+    coverage_percentage?: number;
+    details: string;
+  }>;
   inconsistencies: Array<{ script_id: string; type: string; details: string }>;
 }
 
@@ -439,4 +460,15 @@ export interface ExecutionReport {
     application_map_version?: string;
   }>;
   retest_verification: Array<{ script_id: string; previous_status: string; current_status: string; verified: boolean; message: string }>;
+}
+
+export interface CrawlGenerationResponse {
+  crawl_id: string;
+  url: string;
+  page_title: string | null;
+  pages_crawled: number;
+  elements_found: number;
+  scripts: GeneratedScript[];
+  discovered_elements: DiscoveredElement[];
+  application_map: Record<string, unknown>;
 }
