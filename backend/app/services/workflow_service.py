@@ -84,8 +84,8 @@ class WorkflowService:
             state=await nodes.generate_test_cases_node(state)
             while True:
                 state=await nodes.validate_test_cases_node(state)
-                if state["testcase_validation"].get("confidence_score",0)>=.95: state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);break
-                if state.get("testcase_attempt_count",0)>=3: state=await nodes.testcase_manual_review_node(state);break
+                if state["testcase_validation"].get("confidence_score",0)>=settings.validation_pass_threshold: state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);break
+                if state.get("testcase_attempt_count",0)>=settings.max_validation_attempts: state=await nodes.testcase_manual_review_node(state);break
                 state=await nodes.regenerate_test_cases_node(state)
         except Exception as exc:
             state.setdefault("errors",[]).append({"stage":"testcase_generation","message":str(exc),"type":type(exc).__name__})

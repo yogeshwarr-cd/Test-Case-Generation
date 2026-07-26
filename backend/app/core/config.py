@@ -40,8 +40,14 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=list)
     cerebras_api_key: str = ""
     cerebras_fallback_api_key: str = ""
+    cerebras_fallback_2_api_key: str = ""
+    cerebras_fallback_3_api_key: str = ""
+    cerebras_fallback_4_api_key: str = ""
     cerebras_model: str = "gpt-oss-120b"
     cerebras_fallback_model: str = ""
+    cerebras_fallback_2_model: str = ""
+    cerebras_fallback_3_model: str = ""
+    cerebras_fallback_4_model: str = ""
     cerebras_generation_model: str = ""
     cerebras_validation_model: str = ""
     cerebras_regeneration_model: str = ""
@@ -54,6 +60,8 @@ class Settings(BaseSettings):
     llm_structured_output_repair_enabled: bool = False
     llm_scenario_batch_size: int = 5
     llm_testcase_batch_size: int = 4
+    validation_pass_threshold: float = 0.95
+    max_validation_attempts: int = 1
     cerebras_max_concurrent_requests: int = 1
     cerebras_provider_retry_count: int = 0
     cerebras_initial_backoff_seconds: float = 2.0
