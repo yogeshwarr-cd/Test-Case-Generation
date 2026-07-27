@@ -8,6 +8,7 @@ import type {
   ExecutionReport,
   TraceabilityComparisonReport,
   CrawlGenerationResponse,
+  CrawlAnalysis,
 } from '../types';
 import { parseWorkflowEvent } from '../utils';
 
@@ -39,13 +40,26 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 30000): 
 }
 
 export const testCaseApi = {
-  generateScripts(workflowId: string, applicationUrl: string) {
+  crawlApplication(workflowId: string, applicationUrl: string) {
+    return request<CrawlAnalysis>('/api/v1/automation/scripts/crawl', {
+      method: 'POST',
+      body: JSON.stringify({ workflow_id: workflowId, application_url: applicationUrl }),
+    }, 600000);
+  },
+
+  generateScripts(workflowId: string, applicationUrl: string, crawlId: string) {
     return request<ScriptGeneration>('/api/v1/automation/scripts/generate', {
-      method: 'POST', body: JSON.stringify({ workflow_id: workflowId, application_url: applicationUrl }),
+      method: 'POST', body: JSON.stringify({
+        workflow_id: workflowId, application_url: applicationUrl, crawl_id: crawlId,
+      }),
     });
   },
 
-  crawlAndGenerate(url: string, options?: { page_limit?: number; depth_limit?: number }) {
+  crawlAndGenerate(url: string, options?: {
+    page_limit?: number;
+    depth_limit?: number;
+    max_execution_time_seconds?: number;
+  }) {
     return request<CrawlGenerationResponse>('/api/v1/automation/url-crawl', {
       method: 'POST',
       body: JSON.stringify({ url, ...options }),

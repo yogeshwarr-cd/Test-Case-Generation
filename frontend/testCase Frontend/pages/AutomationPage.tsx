@@ -5,13 +5,14 @@ import { CheckCircle2, Download, LoaderCircle, Play, XCircle } from 'lucide-reac
 import { StatePanel } from '../components/StatePanel';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
-import type { DeveloperExecutionReport, ExecutionReport, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport } from '../types';
+import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionReport, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
 export function AutomationPage() {
   const { workflowId, hydrate } = useTestCaseWorkflowStore();
   const [applicationUrl, setApplicationUrl] = useState('');
   const [generation, setGeneration] = useState<ScriptGeneration | null>(null);
+  const [crawl, setCrawl] = useState<CrawlAnalysis | null>(null);
   const [report, setReport] = useState<ExecutionReport | null>(null);
   const [mode, setMode] = useState<'automated' | 'manual'>('automated');
   const [selectedScript, setSelectedScript] = useState(0);
@@ -22,11 +23,23 @@ export function AutomationPage() {
 
   useEffect(() => hydrate(), [hydrate]);
 
-  const generate = async () => {
+  const crawlApplication = async () => {
     if (!workflowId || !applicationUrl.trim()) return;
     setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false);
     try {
-      setGeneration(await testCaseApi.generateScripts(workflowId, applicationUrl.trim()));
+      setGeneration(null);
+      setCrawl(await testCaseApi.crawlApplication(workflowId, applicationUrl.trim()));
+    } catch (requestError) { setError(friendlyError(requestError)); }
+    finally { setBusy(false); }
+  };
+
+  const generate = async () => {
+    if (!workflowId || !crawl || crawl.crawl_status !== 'crawl_completed') return;
+    setBusy(true); setError('');
+    try {
+      setGeneration(await testCaseApi.generateScripts(
+        workflowId, applicationUrl.trim(), crawl.crawl_id,
+      ));
       setSelectedScript(0);
     } catch (requestError) { setError(friendlyError(requestError)); }
     finally { setBusy(false); }
@@ -39,7 +52,12 @@ export function AutomationPage() {
     catch (requestError) {
       if (requestError instanceof Error && requestError.message.includes('(404)') && workflowId && applicationUrl.trim()) {
         try {
-          const refreshed = await testCaseApi.generateScripts(workflowId, applicationUrl.trim());
+          if (!crawl || crawl.crawl_status !== 'crawl_completed') {
+            throw new Error('A completed crawl is required before regenerating scripts.');
+          }
+          const refreshed = await testCaseApi.generateScripts(
+            workflowId, applicationUrl.trim(), crawl.crawl_id,
+          );
           setGeneration(refreshed);
           setSelectedScript(0);
           setReport(await testCaseApi.executeScripts(refreshed.generation_id, mode));
@@ -72,10 +90,24 @@ export function AutomationPage() {
       <section className="rounded-2xl border border-border bg-card p-5">
         <label htmlFor="application-url" className="text-sm font-semibold">Deployed application URL</label>
         <div className="mt-2 flex flex-col gap-3 sm:flex-row">
-          <input id="application-url" type="url" value={applicationUrl} onChange={(event) => setApplicationUrl(event.target.value)} placeholder="https://app.example.com" className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
-          <button disabled={busy || !applicationUrl.trim()} onClick={generate} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Validate URL &amp; generate</button>
+          <input id="application-url" type="url" value={applicationUrl} onChange={(event) => { setApplicationUrl(event.target.value); setCrawl(null); setGeneration(null); }} placeholder="https://app.example.com" className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
+          <button disabled={busy || !applicationUrl.trim()} onClick={crawlApplication} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Crawl application</button>
+          <button disabled={busy || crawl?.crawl_status !== 'crawl_completed'} onClick={generate} className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><Play className="h-4 w-4" /> Generate Test Scripts</button>
         </div>
       </section>
+
+      {crawl && (
+        <section className={`rounded-2xl border p-5 ${crawl.crawl_status === 'crawl_completed' ? 'border-green-500/30 bg-green-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
+          <div className={`flex items-center gap-2 font-semibold ${crawl.crawl_status === 'crawl_completed' ? 'text-green-600' : 'text-red-600'}`}>
+            {crawl.crawl_status === 'crawl_completed' ? <CheckCircle2 className="h-5 w-5" /> : <XCircle className="h-5 w-5" />}
+            {crawl.crawl_status.replaceAll('_', ' ')}
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">{crawl.pages_crawled} pages scanned · {crawl.elements_found} verified elements · {crawl.crawl_report.pages_skipped.length} pages skipped</p>
+          {crawl.crawl_report.failure_reason && <p className="mt-3 text-sm font-medium text-red-600">{crawl.crawl_report.failure_reason}</p>}
+          {crawl.crawl_report.blocked_url && <p className="mt-1 break-all text-xs text-muted-foreground">Blocked URL: {crawl.crawl_report.blocked_url}</p>}
+          {crawl.crawl_report.recommended_corrective_action && <p className="mt-2 text-sm text-muted-foreground">Recommended action: {crawl.crawl_report.recommended_corrective_action}</p>}
+        </section>
+      )}
 
       {generation && (
         <>
@@ -186,6 +218,7 @@ type ComparisonDisplayItem = {
   artifact_title?: string;
   status?: string;
   gap_type?: string;
+  classification?: string;
   coverage_percentage?: number;
   details?: string;
   missing_terms?: string[];
@@ -353,6 +386,11 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
                 <h3 className="mt-3 font-bold text-base">{title}</h3>
 
                 <div className="mt-2 text-xs text-muted-foreground">
+                  {(item.classification || item.gap_type) && status === 'missing' && (
+                    <p className="mb-1 font-semibold text-red-600">
+                      Classification: {(item.classification || item.gap_type || '').replaceAll('_', ' ')}
+                    </p>
+                  )}
                   <p className="font-medium">{details}</p>
                 </div>
               </article>

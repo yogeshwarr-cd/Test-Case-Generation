@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -9,11 +10,34 @@ from pydantic import BaseModel, Field, HttpUrl
 class GenerateScriptsRequest(BaseModel):
     workflow_id: UUID
     application_url: HttpUrl
+    crawl_id: str
+
+
+class CrawlApplicationRequest(BaseModel):
+    workflow_id: UUID
+    application_url: HttpUrl
+    page_limit: int = Field(default=250, ge=1, le=500)
+    depth_limit: int = Field(default=15, ge=1, le=20)
+    max_execution_time_seconds: int = Field(default=1800, ge=30, le=3600)
+    repeated_state_limit: int = Field(default=5, ge=1, le=20)
+
+
+class CrawlAnalysisResponse(BaseModel):
+    crawl_id: str
+    application_url: str
+    crawl_status: Literal["crawl_completed", "crawl_incomplete", "crawl_blocked"]
+    page_title: str | None = None
+    pages_crawled: int
+    elements_found: int
+    crawl_report: dict[str, Any] = Field(default_factory=dict)
+    application_map: dict[str, Any] = Field(default_factory=dict)
+    discovered_elements: list[DiscoveredElement] = Field(default_factory=list)
 
 
 class DiscoveredElement(BaseModel):
     role: str | None = None
     name: str | None = None
+    aria_label: str | None = None
     label: str | None = None
     test_id: str | None = None
     tag: str
@@ -22,11 +46,18 @@ class DiscoveredElement(BaseModel):
     visible_text: str | None = None
     href: str | None = None
     page_url: str | None = None
+    page_title: str | None = None
+    parent_page: str | None = None
+    navigation_path: list[str] = Field(default_factory=list)
+    dom_snapshot: str | None = None
+    application_state: dict[str, Any] = Field(default_factory=dict)
+    discovery_timestamp: datetime | None = None
     options: list[dict[str, str]] = Field(default_factory=list)
     checked: bool | None = None
     element_id: str | None = None
     css_selector: str | None = None
     navigation_candidate: bool = False
+    locator_validated: bool = False
 
 
 class GeneratedScript(BaseModel):
@@ -59,6 +90,12 @@ class ScriptGenerationResponse(BaseModel):
     application_map: dict[str, Any] = Field(default_factory=dict)
     application_map_version: str | None = None
     requirement_version: str | None = None
+    crawl_status: Literal[
+        "crawl_started", "crawl_in_progress", "challenge_detected",
+        "crawl_completed", "crawl_incomplete", "crawl_blocked",
+        "script_generation_started", "script_generation_completed",
+    ] = "script_generation_completed"
+    crawl_report: dict[str, Any] = Field(default_factory=dict)
     scripts: list[GeneratedScript]
 
 
@@ -215,6 +252,7 @@ class ScriptExecutionResult(BaseModel):
 class ExecutionReport(BaseModel):
     execution_id: str
     generation_id: str
+    execution_status: Literal["execution_started", "execution_completed"] = "execution_completed"
     mode: Literal["automated", "manual"]
     total_scripts: int
     passed_scripts: int
@@ -269,8 +307,10 @@ class CrawlAndGenerateRequest(BaseModel):
     """
 
     url: HttpUrl
-    page_limit: int = Field(default=20, ge=1, le=100)
-    depth_limit: int = Field(default=5, ge=1, le=10)
+    page_limit: int = Field(default=250, ge=1, le=500)
+    depth_limit: int = Field(default=15, ge=1, le=20)
+    max_execution_time_seconds: int = Field(default=1800, ge=30, le=3600)
+    repeated_state_limit: int = Field(default=5, ge=1, le=20)
 
 
 class CrawlGenerationResponse(BaseModel):
@@ -281,6 +321,11 @@ class CrawlGenerationResponse(BaseModel):
     page_title: str | None = None
     pages_crawled: int
     elements_found: int
+    crawl_status: Literal[
+        "crawl_completed", "crawl_incomplete", "crawl_blocked",
+        "script_generation_completed",
+    ] = "script_generation_completed"
+    crawl_report: dict[str, Any] = Field(default_factory=dict)
     scripts: list[GeneratedScript]
     discovered_elements: list[DiscoveredElement] = Field(default_factory=list)
     application_map: dict[str, Any] = Field(default_factory=dict)

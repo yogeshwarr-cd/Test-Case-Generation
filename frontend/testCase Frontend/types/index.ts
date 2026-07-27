@@ -171,12 +171,35 @@ export interface GeneratedScript {
   page_elements: Array<Record<string, unknown>>;
 }
 
+export interface DiscoveredElement {
+  role?: string;
+  name?: string;
+  aria_label?: string;
+  label?: string;
+  test_id?: string;
+  tag: string;
+  input_type?: string;
+  placeholder?: string;
+  visible_text?: string;
+  href?: string;
+  page_url?: string;
+  page_title?: string;
+  parent_page?: string;
+  navigation_path?: string[];
+  dom_snapshot?: string;
+  application_state?: Record<string, unknown>;
+  discovery_timestamp?: string;
+  element_id?: string;
+  css_selector?: string;
+  locator_validated?: boolean;
+}
+
 export interface ScriptGeneration {
   generation_id: string;
   application_url: string;
   reachable: boolean;
   page_title?: string;
-  discovered_elements: Array<{ role?: string; name?: string; label?: string; test_id?: string; tag: string }>;
+  discovered_elements: DiscoveredElement[];
   application_map: {
     page_count?: number;
     element_count?: number;
@@ -186,7 +209,45 @@ export interface ScriptGeneration {
   };
   application_map_version?: string;
   requirement_version?: string;
+  crawl_status: 'script_generation_completed';
+  crawl_report: CrawlReport;
   scripts: GeneratedScript[];
+}
+
+export interface CrawlReport {
+  status: 'crawl_completed' | 'crawl_incomplete' | 'crawl_blocked';
+  failure_reason?: string;
+  blocked_url?: string;
+  last_successfully_loaded_page?: string;
+  actual_application_reached: boolean;
+  pages_discovered: number;
+  pages_completed: number;
+  pages_skipped: Array<{ url: string; reason: string }>;
+  remaining_crawl_queue: string[];
+  unprocessed_navigation_states: Array<Record<string, unknown>>;
+  challenge_evidence?: Array<Record<string, unknown>>;
+  recommended_corrective_action?: string;
+  events?: string[];
+  progress?: {
+    pages_discovered: number;
+    pages_completed: number;
+    pages_remaining: number;
+    current_crawl_depth: number;
+    elapsed_seconds: number;
+    estimated_completion_seconds?: number | null;
+  };
+}
+
+export interface CrawlAnalysis {
+  crawl_id: string;
+  application_url: string;
+  crawl_status: 'crawl_completed' | 'crawl_incomplete' | 'crawl_blocked';
+  page_title?: string;
+  pages_crawled: number;
+  elements_found: number;
+  crawl_report: CrawlReport;
+  application_map: ScriptGeneration['application_map'];
+  discovered_elements: ScriptGeneration['discovered_elements'];
 }
 
 export interface TraceabilityComparisonReport {
@@ -396,6 +457,7 @@ export interface QaDiagnosticReport {
 export interface ExecutionReport {
   execution_id: string;
   generation_id: string;
+  execution_status: 'execution_started' | 'execution_completed';
   mode: 'automated' | 'manual';
   total_scripts: number;
   passed_scripts: number;
@@ -468,6 +530,8 @@ export interface CrawlGenerationResponse {
   page_title: string | null;
   pages_crawled: number;
   elements_found: number;
+  crawl_status: 'crawl_completed' | 'crawl_incomplete' | 'crawl_blocked' | 'script_generation_completed';
+  crawl_report: CrawlReport;
   scripts: GeneratedScript[];
   discovered_elements: DiscoveredElement[];
   application_map: Record<string, unknown>;

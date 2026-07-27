@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 
 from app.schemas.automation_schema import (
     CompareExecutionRequest,
+    CrawlApplicationRequest,
     CrawlAndGenerateRequest,
     ExecuteScriptsRequest,
     GenerateScriptsRequest,
@@ -39,6 +40,11 @@ async def download_crawl_script(crawl_id: str, script_id: str):
 @router.post("/scripts/generate", summary="Generate Playwright scripts from validated test cases")
 async def generate_scripts(request: GenerateScriptsRequest):
     return await automation_service.generate(request)
+
+
+@router.post("/scripts/crawl", summary="Crawl and validate an application before script generation")
+async def crawl_application(request: CrawlApplicationRequest):
+    return await automation_service.analyze_application(request)
 
 
 @router.get("/scripts/{generation_id}/{script_id}/download", summary="Download a script")

@@ -10,10 +10,11 @@ import sys
 import time
 import traceback
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from pprint import pformat
 from typing import Any, Awaitable, Callable, TypeVar
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import httpx
 
@@ -21,6 +22,8 @@ from app.core.config import settings
 from app.core.exceptions import AppError
 from app.schemas.automation_schema import (
     AutomationHealth,
+    CrawlAnalysisResponse,
+    CrawlApplicationRequest,
     CrawlAndGenerateRequest,
     CrawlGenerationResponse,
     DiscoveredElement,
@@ -160,10 +163,152 @@ def _application_map(
 
 def _canonical_page_url(value: str) -> str:
     parsed = urlsplit(value)
+    meaningful_query_keys = {
+        "page", "pagenumber", "category", "search", "q", "query",
+        "filter", "sort", "orderby", "view", "tab",
+    }
+    query = urlencode([
+        (key, query_value)
+        for key, query_value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() in meaningful_query_keys
+    ])
     return (
         f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path or '/'}"
-        f"{'?' + parsed.query if parsed.query else ''}"
+        f"{'?' + query if query else ''}"
     )
+
+
+_CHALLENGE_MARKERS = {
+    "just a moment": "Cloudflare challenge",
+    "verify you are human": "human-verification challenge",
+    "checking your browser": "browser-verification challenge",
+    "captcha": "CAPTCHA challenge",
+    "access denied": "access-denied page",
+    "request blocked": "access-denied page",
+    "sign in to continue": "login wall",
+    "authentication required": "login wall",
+    "temporarily unavailable": "maintenance page",
+    "under maintenance": "maintenance page",
+    "please wait while we": "loading/interstitial page",
+}
+
+
+def _challenge_evidence(
+    *, title: str, visible_text: str, status_code: int | None, elements: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    combined = f"{title}\n{visible_text[:12000]}".lower()
+    matched = [
+        {"marker": marker, "reason": reason}
+        for marker, reason in _CHALLENGE_MARKERS.items()
+        if marker in combined
+    ]
+    suspicious_status = status_code in {401, 403, 407, 429, 503}
+    application_controls = sum(
+        item.get("tag") in {"input", "select", "textarea", "button"}
+        for item in elements
+    )
+    privacy_only = (
+        0 < len(elements) <= 3
+        and application_controls == 0
+        and all(
+            any(token in str(item.get("name") or item.get("visible_text") or "").lower()
+                for token in ("privacy", "terms", "cookie"))
+            for item in elements
+        )
+    )
+    if not matched and not suspicious_status and not privacy_only:
+        return None
+    reason = (
+        matched[0]["reason"] if matched
+        else f"HTTP {status_code} access response" if suspicious_status
+        else "interstitial page exposed only privacy/challenge navigation"
+    )
+    return {
+        "reason": reason,
+        "http_status": status_code,
+        "page_title": title,
+        "matched_markers": matched,
+        "visible_text_excerpt": visible_text[:1000],
+        "element_names": sorted({
+            str(item.get("name") or item.get("visible_text"))
+            for item in elements if item.get("name") or item.get("visible_text")
+        })[:30],
+    }
+
+
+def _crawl_failure_message(report: dict[str, Any]) -> str:
+    status = report.get("status", "crawl_incomplete")
+    reason = report.get("failure_reason") or "The crawl did not complete."
+    corrective = report.get("recommended_corrective_action") or (
+        "Open the URL from the same environment, resolve access controls, then retry."
+    )
+    return (
+        f"Script generation stopped because {status}: {reason} "
+        f"Blocked URL: {report.get('blocked_url') or '-'}. "
+        f"Pages completed: {report.get('pages_completed', 0)}; "
+        f"remaining queue: {len(report.get('remaining_crawl_queue', []))}. "
+        f"Recommended action: {corrective}"
+    )
+
+
+def _link_skip_reason(href: str, origin_netloc: str) -> str | None:
+    parsed = urlsplit(href)
+    if parsed.scheme not in {"http", "https"}:
+        return "unsupported_link_scheme"
+    if parsed.netloc.lower() != origin_netloc.lower():
+        return "external_domain"
+    lowered = f"{parsed.path} {parsed.query}".lower()
+    if re.search(r"logout|log-out|signout|sign-out|delete|remove|unsubscribe", lowered):
+        return "destructive_or_session_ending_link"
+    if re.search(r"\.(pdf|zip|csv|xlsx?|docx?|png|jpe?g|gif|webp)$", parsed.path.lower()):
+        return "download_only_link"
+    return None
+
+
+def _attach_navigation_context(
+    start_url: str,
+    relationships: list[dict[str, Any]],
+    elements: list[dict[str, Any]],
+    page_inventory: list[dict[str, Any]] | None = None,
+) -> None:
+    start = _canonical_page_url(start_url)
+    adjacency: dict[str, list[str]] = {}
+    parent: dict[str, str | None] = {start: None}
+    paths: dict[str, list[str]] = {start: [start]}
+    for relationship in relationships:
+        source = _canonical_page_url(str(relationship.get("from") or start))
+        target = _canonical_page_url(str(relationship.get("to") or source))
+        adjacency.setdefault(source, []).append(target)
+    queue = [start]
+    while queue:
+        source = queue.pop(0)
+        for target in adjacency.get(source, []):
+            if target in paths:
+                continue
+            parent[target] = source
+            paths[target] = [*paths[source], target]
+            queue.append(target)
+    page_context = {
+        _canonical_page_url(str(item.get("final_url") or item.get("url") or start)): item
+        for item in (page_inventory or [])
+    }
+    for element in elements:
+        page_url = _canonical_page_url(str(element.get("page_url") or start))
+        context = page_context.get(page_url, {})
+        element["page_url"] = page_url
+        element["parent_page"] = parent.get(page_url)
+        element["navigation_path"] = paths.get(
+            page_url,
+            [start] if page_url == start else [start, page_url],
+        )
+        element.setdefault("page_title", context.get("title"))
+        element.setdefault("dom_snapshot", context.get("dom_snapshot"))
+        element.setdefault(
+            "application_state", context.get("application_state") or {}
+        )
+        element.setdefault(
+            "discovery_timestamp", context.get("discovery_timestamp")
+        )
 
 
 def _page_script_source(name: str, page_url: str, elements: list[dict[str, Any]]) -> str:
@@ -179,19 +324,23 @@ ELEMENTS = {catalogue}
 def locator_for(page: Page, element: dict):
     if element.get("test_id"):
         return page.get_by_test_id(element["test_id"])
-    if element.get("element_id"):
-        return page.locator("[id=" + repr(element["element_id"]) + "]")
-    if element.get("name"):
-        named = page.locator("[name=" + repr(element["name"]) + "]")
-        if named.count():
-            return named.first
+    if element.get("aria_label"):
+        return page.locator("[aria-label=" + repr(element["aria_label"]) + "]")
+    if element.get("role") and element.get("name"):
+        return page.get_by_role(element["role"], name=element["name"], exact=True)
     if element.get("label"):
         return page.get_by_label(element["label"], exact=True)
     if element.get("placeholder"):
         return page.get_by_placeholder(element["placeholder"], exact=True)
-    if element.get("role") and element.get("name"):
-        return page.get_by_role(element["role"], name=element["name"], exact=True)
-    return page.locator(element.get("css_selector") or element["tag"]).first
+    if element.get("element_id"):
+        return page.locator("[id=" + repr(element["element_id"]) + "]")
+    if element.get("name"):
+        return page.locator("[name=" + repr(element["name"]) + "]").first
+    if element.get("css_selector") and element.get("locator_validated"):
+        return page.locator(element["css_selector"]).first
+    if element.get("visible_text"):
+        return page.get_by_text(element["visible_text"], exact=True).first
+    raise AssertionError("Element has no verified stable locator")
 
 
 def test_{test_name}(page: Page):
@@ -199,7 +348,9 @@ def test_{test_name}(page: Page):
     page.wait_for_load_state("networkidle")
     expect(page.locator("body")).to_be_visible()
     for element in ELEMENTS:
-        expect(locator_for(page, element)).to_be_visible()
+        locator = locator_for(page, element)
+        locator.scroll_into_view_if_needed()
+        expect(locator).to_be_visible()
 '''
 
 
@@ -307,6 +458,7 @@ def _python_source(
     discovered = pformat(discovered_elements or [], width=100, sort_dicts=False)
     return f'''"""Generated from test case {test_case["test_case_id"]}."""
 import re
+from pathlib import Path
 from playwright.sync_api import Page, expect
 
 BASE_URL = {application_url!r}
@@ -317,6 +469,32 @@ DISCOVERED_ELEMENTS = {discovered}
 class {class_name}:
     def __init__(self, page: Page):
         self.page = page
+
+    def restore_context(self, element: dict):
+        expected_url = element.get("page_url") or BASE_URL
+        path = element.get("navigation_path") or [expected_url]
+        for url in path:
+            if self.page.url.rstrip("/") != url.rstrip("/"):
+                self.page.goto(url, wait_until="domcontentloaded")
+                self.page.wait_for_load_state("networkidle")
+        if self.page.url.rstrip("/") != expected_url.rstrip("/"):
+            self.page.goto(expected_url, wait_until="domcontentloaded")
+            self.page.wait_for_load_state("networkidle")
+        if self.page.url.rstrip("/") != expected_url.rstrip("/"):
+            raise AssertionError(
+                f"URL differs from crawl evidence: expected {{expected_url}}, got {{self.page.url}}"
+            )
+        expected_title = element.get("page_title")
+        if expected_title and self.page.title().strip().lower() != expected_title.strip().lower():
+            raise AssertionError(
+                f"Title differs from crawl evidence: expected {{expected_title!r}}, "
+                f"got {{self.page.title()!r}}"
+            )
+        for selector in (element.get("application_state") or {{}}).get("expanded_selectors", []):
+            control = self.page.locator(selector).first
+            if control.count() and control.is_visible() and control.get_attribute("aria-expanded") != "true":
+                control.scroll_into_view_if_needed()
+                control.click()
 
     # ------------------------------------------------------------------
     # stable_locator: resolves ONLY from the discovered element catalogue.
@@ -355,21 +533,36 @@ class {class_name}:
                 best_element = element
 
         if best_element:
+            self.restore_context(best_element)
             if best_element.get("test_id"):
                 return self.page.get_by_test_id(best_element["test_id"])
-            if best_element.get("label"):
-                return self.page.get_by_label(best_element["label"], exact=True)
+            if best_element.get("aria_label"):
+                return self.page.locator(
+                    "[aria-label=" + repr(best_element["aria_label"]) + "]"
+                )
             if best_element.get("role") and best_element.get("name"):
                 return self.page.get_by_role(
                     best_element["role"], name=best_element["name"], exact=True
                 )
+            if best_element.get("label"):
+                return self.page.get_by_label(best_element["label"], exact=True)
             if best_element.get("placeholder"):
                 return self.page.get_by_placeholder(
                     best_element["placeholder"], exact=True
                 )
+            if best_element.get("element_id"):
+                return self.page.locator(
+                    "[id=" + repr(best_element["element_id"]) + "]"
+                )
+            if best_element.get("name"):
+                return self.page.locator(
+                    "[name=" + repr(best_element["name"]) + "]"
+                ).first
+            if best_element.get("css_selector") and best_element.get("locator_validated"):
+                return self.page.locator(best_element["css_selector"]).first
             if best_element.get("visible_text"):
                 return self.page.get_by_text(
-                    best_element["visible_text"], exact=False
+                    best_element["visible_text"], exact=True
                 ).first
 
         raise AssertionError(
@@ -388,6 +581,7 @@ class {class_name}:
                 raise AssertionError(f"Selection has no explicit UI value: {{instruction}}")
             locator = self.stable_locator(instruction)
             locator.wait_for(state="visible")
+            locator.scroll_into_view_if_needed()
             if locator.evaluate("el => el.tagName.toLowerCase()") == "select":
                 locator.select_option(label=value)
             else:
@@ -396,35 +590,45 @@ class {class_name}:
         elif any(token in lowered for token in ("check", "uncheck")):
             locator = self.stable_locator(instruction)
             locator.wait_for(state="visible")
+            locator.scroll_into_view_if_needed()
             locator.uncheck() if "uncheck" in lowered else locator.check()
         elif any(token in lowered for token in ("click", "press")):
             locator = self.stable_locator(instruction)
             locator.wait_for(state="visible")
+            locator.scroll_into_view_if_needed()
             locator.click()
         elif any(token in lowered for token in ("enter", "type", "fill")):
             if value is None:
                 raise AssertionError(f"Input has no explicit UI value: {{instruction}}")
             locator = self.stable_locator(instruction)
             locator.wait_for(state="visible")
+            locator.scroll_into_view_if_needed()
             locator.fill(value)
         else:
-            expect(self.page.locator("body")).to_be_visible()
+            expect(self.page).to_have_url(re.compile(r"^https?://"))
 
     def assert_expected(self, expected_result: str):
         quoted = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", expected_result)
         if quoted and any(word in expected_result.lower() for word in ("visible", "displayed", "shown")):
             expect(self.page.get_by_text(quoted[-1], exact=False).first).to_be_visible()
         else:
-            expect(self.page.locator("body")).to_be_visible()
+            expect(self.page).to_have_url(re.compile(r"^https?://"))
 
 
 def test_{_safe_name(test_case["test_case_id"]).replace("-", "_")}(page: Page):
     app = {class_name}(page)
     page.goto(BASE_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle")
-    for step in STEPS:
-        app.perform(step["action"])
-        app.assert_expected(step["expected_result"])
+    try:
+        for step in STEPS:
+            app.perform(step["action"])
+            app.assert_expected(step["expected_result"])
+    except Exception:
+        page.screenshot(path="playwright-action-failure.png", full_page=True)
+        Path("playwright-action-failure.html").write_text(
+            page.content(), encoding="utf-8"
+        )
+        raise
 '''
 
 
@@ -432,7 +636,45 @@ class AutomationService:
     def __init__(self) -> None:
         self._generations: dict[str, dict[str, Any]] = {}
         self._reports: dict[str, ExecutionReport] = {}
+        self._crawl_reports: dict[str, dict[str, Any]] = {}
+        self._crawls: dict[str, dict[str, Any]] = {}
         self.seacrawl = SeacrawlAdapter()
+
+    def _completed_crawl_report(
+        self, url: str, title: str | None, elements: list[DiscoveredElement]
+    ) -> dict[str, Any]:
+        report = self._crawl_reports.get(_canonical_page_url(url))
+        if report is None:
+            # Compatibility for injected discovery adapters and existing tests.
+            pages = {
+                _canonical_page_url(str(item.page_url or url))
+                for item in elements
+            } or {_canonical_page_url(url)}
+            report = {
+                "status": "crawl_completed",
+                "start_url": url,
+                "actual_application_reached": True,
+                "pages_discovered": len(pages),
+                "pages_completed": len(pages),
+                "pages_skipped": [],
+                "remaining_crawl_queue": [],
+                "unprocessed_navigation_states": [],
+                "page_inventory": [],
+                "navigation_relationships": [],
+                "events": ["crawl_started", "crawl_completed"],
+                "page_title": title,
+            }
+        if report.get("status") != "crawl_completed":
+            raise AutomationError(_crawl_failure_message(report))
+        if not report.get("actual_application_reached"):
+            raise AutomationError(
+                "Script generation stopped because the actual application UI was not reached."
+            )
+        if report.get("remaining_crawl_queue"):
+            raise AutomationError(
+                "Script generation stopped because the crawl queue is not empty."
+            )
+        return report
 
     @property
     def artifact_root(self) -> Path:
@@ -493,11 +735,63 @@ class AutomationService:
     async def _crawl_wait(page: Any) -> None:
         timeout = int(settings.automation_navigation_timeout_seconds * 1000)
         await page.wait_for_load_state("domcontentloaded", timeout=timeout)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=timeout)
-        except Exception:
-            logger.debug("Network remained active after DOM readiness url=%s", page.url)
+        if settings.automation_wait_for_network_idle:
+            try:
+                await page.wait_for_load_state(
+                    "networkidle",
+                    timeout=int(
+                        settings.automation_crawl_network_idle_timeout_seconds * 1000
+                    ),
+                )
+            except Exception:
+                logger.debug("Network remained active after DOM readiness url=%s", page.url)
         await page.locator("body").wait_for(state="visible", timeout=timeout)
+
+    async def _navigate_with_retries(self, page: Any, url: str) -> Any:
+        last_error: Exception | None = None
+        for attempt in range(settings.automation_navigation_retry_limit + 1):
+            try:
+                response = await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=int(settings.automation_navigation_timeout_seconds * 1000),
+                )
+                await self._crawl_wait(page)
+                return response
+            except Exception as exc:
+                last_error = exc
+                if attempt >= settings.automation_navigation_retry_limit:
+                    break
+                await asyncio.sleep(min(0.5 * (2**attempt), 4.0))
+        assert last_error is not None
+        raise last_error
+
+    @staticmethod
+    def _alternate_locators(page: Any, element: dict[str, Any]) -> list[Any]:
+        locators: list[Any] = []
+        if element.get("test_id"):
+            locators.append(page.get_by_test_id(element["test_id"]))
+        if element.get("label"):
+            locators.append(page.get_by_label(element["label"], exact=True))
+        if element.get("role") and element.get("name"):
+            locators.append(
+                page.get_by_role(
+                    element["role"], name=element["name"], exact=True
+                )
+            )
+        if element.get("placeholder"):
+            locators.append(
+                page.get_by_placeholder(element["placeholder"], exact=True)
+            )
+        if element.get("element_id"):
+            locators.append(page.locator(f'[id="{element["element_id"]}"]'))
+        if element.get("name"):
+            locators.append(page.locator(f'[name="{element["name"]}"]'))
+        if element.get("css_selector"):
+            locators.append(page.locator(element["css_selector"]))
+        if element.get("visible_text"):
+            locators.append(page.get_by_text(element["visible_text"], exact=True))
+        return locators
 
     @staticmethod
     async def _capture_interactive_elements(page: Any) -> list[dict[str, Any]]:
@@ -520,11 +814,13 @@ class AutomationService:
                 : `${tag}:nth-of-type(${[...el.parentElement.children].filter(x=>x.tagName===el.tagName).indexOf(el)+1})`;
               const nav=`${text} ${name || ''}`.toLowerCase();
               const unsafe=/delete|remove|logout|log out|sign out|submit|save|pay|purchase|checkout|confirm|cancel account/.test(nav);
-              return {tag,role,name,element_id:id,css_selector:css,test_id:testId,
+              return {tag,role,name,aria_label:el.getAttribute('aria-label'),
+                element_id:id,css_selector:css,test_id:testId,
                 label:el.labels?.[0]?.innerText?.trim() || el.getAttribute('aria-labelledby') || null,
                 placeholder:el.getAttribute('placeholder'),visible_text:text || null,href:el.href || null,
                 input_type:el.getAttribute('type'),checked:typeof el.checked==='boolean' ? el.checked : null,
                 options:tag==='select' ? [...el.options].map(o=>({label:o.text.trim(),value:o.value})) : [],
+                locator_validated:true,
                 navigation_candidate:!unsafe && (tag==='a' || ['link','tab','menuitem'].includes(role)
                   || (role==='button' && /menu|next|previous|back|home|dashboard|view|open|details/.test(nav)))};
             })"""
@@ -532,17 +828,145 @@ class AutomationService:
 
     async def _discover(self, url: str) -> tuple[str | None, list[DiscoveredElement]]:
         if settings.app_mock_mode:
+            self._crawl_reports[_canonical_page_url(url)] = {
+                "status": "crawl_completed", "start_url": url,
+                "actual_application_reached": True, "pages_discovered": 1,
+                "pages_completed": 1, "pages_skipped": [],
+                "remaining_crawl_queue": [], "unprocessed_navigation_states": [],
+                "events": ["crawl_started", "page_discovered", "page_scanned", "crawl_completed"],
+            }
             return "Mock Application", [
                 DiscoveredElement(tag="button", role="button", name="Mock submit"),
                 DiscoveredElement(tag="input", label="Mock input", input_type="text"),
             ]
+        discovery_cache_key = cache.fingerprint(
+            "application-crawl",
+            {
+                "crawler_version": 3,
+                "url": _canonical_page_url(url),
+                "page_limit": settings.automation_crawl_page_limit,
+                "depth_limit": settings.automation_crawl_depth_limit,
+            },
+        )
+        cached_discovery = await cache.get_json(discovery_cache_key)
+        if (
+            cached_discovery
+            and cached_discovery.get("crawl_report", {}).get("status")
+            == "crawl_completed"
+        ):
+            cached_report = cached_discovery["crawl_report"]
+            cached_report["cache_hit"] = True
+            self._crawl_reports[_canonical_page_url(url)] = cached_report
+            return (
+                cached_discovery.get("page_title"),
+                [
+                    DiscoveredElement.model_validate(item)
+                    for item in cached_discovery.get("discovered_elements", [])
+                ],
+            )
+        report: dict[str, Any] = {
+            "status": "crawl_started",
+            "start_url": url,
+            "actual_application_reached": False,
+            "pages_discovered": 0,
+            "pages_completed": 0,
+            "pages_skipped": [],
+            "remaining_crawl_queue": [],
+            "unprocessed_navigation_states": [],
+            "navigation_relationships": [],
+            "page_inventory": [],
+            "challenge_evidence": [],
+            "console_errors": [],
+            "network_failures": [],
+            "events": ["crawl_started"],
+            "progress": {},
+            "progress_history": [],
+            "recommended_corrective_action": None,
+        }
+        report_key = _canonical_page_url(url)
+        started_at = time.monotonic()
+        deadline = started_at + settings.automation_crawl_timeout_seconds
         try:
             from playwright.async_api import async_playwright
 
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True)
-                page = await browser.new_page()
+                context = await browser.new_context()
+                page = await context.new_page()
+                page.on(
+                    "console",
+                    lambda message: report["console_errors"].append(message.text)
+                    if message.type == "error" else None,
+                )
+                page.on(
+                    "requestfailed",
+                    lambda request: report["network_failures"].append(
+                        {"url": request.url, "failure": request.failure}
+                    ),
+                )
                 origin = urlsplit(url)
+
+                async def explore_control(
+                    source_url: str, control: dict[str, Any]
+                ) -> dict[str, Any]:
+                    worker_page = await context.new_page()
+                    last_error: Exception | None = None
+                    try:
+                        for attempt in range(
+                            settings.automation_navigation_retry_limit + 1
+                        ):
+                            try:
+                                await self._navigate_with_retries(
+                                    worker_page, source_url
+                                )
+                                before = _canonical_page_url(worker_page.url)
+                                candidates = self._alternate_locators(
+                                    worker_page, control
+                                )
+                                if not candidates:
+                                    break
+                                locator = candidates[
+                                    min(attempt, len(candidates) - 1)
+                                ].first
+                                if not await locator.is_visible():
+                                    continue
+                                await locator.click(
+                                    timeout=int(
+                                        settings.automation_action_timeout_seconds
+                                        * 1000
+                                    )
+                                )
+                                try:
+                                    await worker_page.wait_for_url(
+                                        lambda value: _canonical_page_url(str(value))
+                                        != before,
+                                        timeout=int(
+                                            settings.automation_navigation_settle_timeout_seconds
+                                            * 1000
+                                        ),
+                                    )
+                                except Exception:
+                                    pass
+                                await self._crawl_wait(worker_page)
+                                after = _canonical_page_url(worker_page.url)
+                                refreshed = await self._capture_interactive_elements(
+                                    worker_page
+                                )
+                                return {
+                                    "success": True,
+                                    "before": before,
+                                    "after": after,
+                                    "elements": refreshed,
+                                }
+                            except Exception as exc:
+                                last_error = exc
+                        return {
+                            "success": False,
+                            "error": str(last_error or "no visible alternate locator"),
+                        }
+                    finally:
+                        await worker_page.close()
+
                 seacrawl_urls = await self.seacrawl.discover_urls(
                     url=url,
                     page_limit=settings.automation_crawl_page_limit,
@@ -559,27 +983,302 @@ class AutomationService:
                 queued: set[str] = {_canonical_page_url(candidate) for candidate, _ in pending}
                 raw: list[dict[str, Any]] = []
                 title = None
-                while pending and len(visited) < settings.automation_crawl_page_limit:
+                state_counts: dict[str, int] = {}
+                report["status"] = "crawl_in_progress"
+                report["events"].append("crawl_in_progress")
+                while pending and len(report["page_inventory"]) < settings.automation_crawl_page_limit:
+                    now = time.monotonic()
+                    elapsed = now - started_at
+                    completed = len(report["page_inventory"])
+                    average_page_seconds = elapsed / completed if completed else 0
+                    progress = {
+                        "pages_discovered": len(queued),
+                        "pages_completed": completed,
+                        "pages_remaining": len(pending),
+                        "current_crawl_depth": pending[0][1] if pending else 0,
+                        "elapsed_seconds": round(elapsed, 2),
+                        "estimated_completion_seconds": (
+                            round(average_page_seconds * len(pending), 2)
+                            if completed else None
+                        ),
+                    }
+                    report["progress"] = progress
+                    report["progress_history"].append(progress)
+                    logger.info(
+                        "Crawl progress url=%s discovered=%s completed=%s remaining=%s "
+                        "depth=%s elapsed_seconds=%s estimated_completion_seconds=%s",
+                        url,
+                        progress["pages_discovered"],
+                        progress["pages_completed"],
+                        progress["pages_remaining"],
+                        progress["current_crawl_depth"],
+                        progress["elapsed_seconds"],
+                        progress["estimated_completion_seconds"],
+                    )
+                    if now >= deadline:
+                        report["failure_reason"] = "Configurable hard crawl timeout was reached."
+                        break
                     page_url, depth = pending.pop(0)
                     canonical_requested = _canonical_page_url(page_url)
                     if canonical_requested in visited:
                         continue
-                    await page.goto(page_url, wait_until="domcontentloaded", timeout=int(settings.automation_navigation_timeout_seconds * 1000))
-                    await self._crawl_wait(page)
+                    report["events"].append("page_discovered")
+                    try:
+                        navigation_response = await self._navigate_with_retries(
+                            page, page_url
+                        )
+                    except Exception as navigation_error:
+                        report["pages_skipped"].append({
+                            "url": page_url,
+                            "reason": f"navigation_failed: {type(navigation_error).__name__}: {navigation_error}",
+                        })
+                        continue
                     current_url = _canonical_page_url(page.url)
                     if urlsplit(current_url).netloc != origin.netloc:
+                        report["pages_skipped"].append({
+                            "url": page_url, "reason": "redirected_to_external_domain",
+                        })
                         continue
+                    discovered = await self._capture_interactive_elements(page)
+                    page_title = await page.title()
+                    visible_text = await page.locator("body").inner_text(timeout=5000)
+                    challenge = _challenge_evidence(
+                        title=page_title,
+                        visible_text=visible_text,
+                        status_code=navigation_response.status if navigation_response else None,
+                        elements=discovered,
+                    )
+                    if challenge:
+                        screenshot_dir = self.artifact_root / "crawl-evidence"
+                        screenshot_dir.mkdir(parents=True, exist_ok=True)
+                        challenge_screenshot_path = (
+                            screenshot_dir / f"challenge-{uuid.uuid4()}.png"
+                        )
+                        try:
+                            await page.screenshot(
+                                path=str(challenge_screenshot_path), full_page=True
+                            )
+                            challenge["screenshot"] = str(challenge_screenshot_path)
+                        except Exception:
+                            challenge["screenshot"] = None
+                        report["remaining_crawl_queue"] = [
+                            current_url, *[item[0] for item in pending]
+                        ]
+                        report.update({
+                            "status": "crawl_blocked",
+                            "blocked_url": current_url,
+                            "failure_reason": challenge["reason"],
+                            "last_successfully_loaded_page": (
+                                report["page_inventory"][-1]["final_url"]
+                                if report["page_inventory"] else None
+                            ),
+                            "recommended_corrective_action": (
+                                "Resolve the challenge in the crawl environment, allow automated browser "
+                                "access, or provide an authenticated session before retrying."
+                            ),
+                        })
+                        report["challenge_evidence"].append(challenge)
+                        report["events"].append("challenge_detected")
+                        pending.clear()
+                        break
                     visited.add(canonical_requested)
                     visited.add(current_url)
-                    title = title or await page.title()
-                    discovered = await self._capture_interactive_elements(page)
+                    title = title or page_title
+                    report["actual_application_reached"] = True
+                    try:
+                        await page.evaluate(
+                            """async () => {
+                              const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+                              let previous = 0;
+                              for (let i = 0; i < 12; i++) {
+                                window.scrollTo(0, document.body.scrollHeight);
+                                await delay(150);
+                                const height = document.body.scrollHeight;
+                                if (height === previous) break;
+                                previous = height;
+                              }
+                              window.scrollTo(0, 0);
+                            }"""
+                        )
+                    except Exception:
+                        logger.debug("Lazy-content scrolling failed url=%s", current_url)
+                    expanded_selectors: list[str] = []
+                    for selector in (
+                        "[aria-expanded='false']",
+                        "[aria-haspopup='menu']",
+                        "[aria-haspopup='dialog']",
+                        "[data-bs-toggle='dropdown']",
+                        "[data-bs-toggle='collapse']",
+                        "[data-bs-toggle='modal']",
+                        "[data-toggle='dropdown']",
+                        "[data-toggle='collapse']",
+                        "[data-toggle='modal']",
+                        "details:not([open]) > summary",
+                        "[role='tab'][aria-selected='false']",
+                    ):
+                        for expandable in (await page.locator(selector).all())[:30]:
+                            try:
+                                if await expandable.is_visible():
+                                    await expandable.click(
+                                        timeout=int(settings.automation_action_timeout_seconds * 1000)
+                                    )
+                                    stable_expander = await expandable.evaluate(
+                                        """el => {
+                                          const q = value => JSON.stringify(value);
+                                          if (el.getAttribute('data-testid'))
+                                            return `[data-testid=${q(el.getAttribute('data-testid'))}]`;
+                                          if (el.id) return `[id=${q(el.id)}]`;
+                                          if (el.getAttribute('name'))
+                                            return `[name=${q(el.getAttribute('name'))}]`;
+                                          if (el.getAttribute('aria-label'))
+                                            return `[aria-label=${q(el.getAttribute('aria-label'))}]`;
+                                          return null;
+                                        }"""
+                                    )
+                                    if stable_expander:
+                                        expanded_selectors.append(stable_expander)
+                            except Exception:
+                                logger.debug(
+                                    "Non-destructive hidden-state expansion failed selector=%s",
+                                    selector,
+                                )
+                    expanded = await self._capture_interactive_elements(page)
+                    discovered.extend(
+                        item for item in expanded
+                        if (
+                            item.get("test_id"),
+                            item.get("element_id"),
+                            item.get("css_selector"),
+                        ) not in {
+                            (
+                                existing.get("test_id"),
+                                existing.get("element_id"),
+                                existing.get("css_selector"),
+                            )
+                            for existing in discovered
+                        }
+                    )
                     for item in discovered:
                         item["page_url"] = current_url
                     raw.extend(discovered)
+                    try:
+                        dom = await page.content()
+                    except Exception:
+                        dom = ""
+                    state_fingerprint = hashlib.sha256(
+                        re.sub(r"\s+", " ", dom).encode("utf-8", errors="ignore")
+                    ).hexdigest()[:16]
+                    state_counts[state_fingerprint] = state_counts.get(state_fingerprint, 0) + 1
+                    if state_counts[state_fingerprint] > settings.automation_crawl_repeated_state_limit:
+                        report["pages_skipped"].append({
+                            "url": current_url,
+                            "reason": "repeated_application_state_limit_reached",
+                            "state_fingerprint": state_fingerprint,
+                        })
+                        continue
+                    snapshot_dir = self.artifact_root / "crawl-evidence" / "dom"
+                    snapshot_dir.mkdir(parents=True, exist_ok=True)
+                    dom_snapshot_path = snapshot_dir / f"{state_fingerprint}.html"
+                    if not dom_snapshot_path.is_file():
+                        dom_snapshot_path.write_text(dom, encoding="utf-8")
+                    discovered_at = datetime.now(timezone.utc).isoformat()
+                    form_state = await page.locator(
+                        "input:not([type='password']),select,textarea"
+                    ).evaluate_all(
+                        """els => els.slice(0, 200).map(el => ({
+                          test_id: el.getAttribute('data-testid'),
+                          element_id: el.id || null,
+                          name: el.getAttribute('name'),
+                          value: el.value,
+                          checked: typeof el.checked === 'boolean' ? el.checked : null,
+                          selected_values: el.tagName.toLowerCase() === 'select'
+                            ? [...el.selectedOptions].map(option => option.value) : []
+                        })).filter(item => item.test_id || item.element_id || item.name)"""
+                    )
+                    for item in discovered:
+                        item.update({
+                            "page_title": page_title,
+                            "dom_snapshot": str(dom_snapshot_path),
+                            "application_state": {
+                                "route": urlsplit(current_url).path or "/",
+                                "state_fingerprint": state_fingerprint,
+                                "expanded_selectors": list(dict.fromkeys(expanded_selectors)),
+                                "form_values": form_state,
+                                "scroll_restoration": "top",
+                            },
+                            "discovery_timestamp": discovered_at,
+                        })
+                    try:
+                        accessibility_tree = await page.locator("body").aria_snapshot(timeout=5000)
+                    except Exception:
+                        accessibility_tree = ""
+                    try:
+                        structured_regions = await page.locator(
+                            "table,[role='table'],[role='list'],ul,ol,[role='tablist'],"
+                            "[role='dialog'],dialog,[role='alert'],.card,.validation-summary-errors,"
+                            ".field-validation-error"
+                        ).evaluate_all(
+                            """els => els.slice(0, 250).map(el => ({
+                              tag: el.tagName.toLowerCase(),
+                              role: el.getAttribute('role'),
+                              id: el.id || null,
+                              test_id: el.getAttribute('data-testid'),
+                              text: (el.innerText || el.textContent || '').trim().slice(0, 4000)
+                            }))"""
+                        )
+                    except Exception:
+                        structured_regions = []
+                    screenshot_dir = self.artifact_root / "crawl-evidence"
+                    screenshot = None
+                    if settings.automation_crawl_screenshot_mode == "all":
+                        screenshot_dir.mkdir(parents=True, exist_ok=True)
+                        screenshot_path = screenshot_dir / f"{uuid.uuid4()}.png"
+                        try:
+                            await page.screenshot(path=str(screenshot_path), full_page=True)
+                            screenshot = str(screenshot_path)
+                        except Exception:
+                            screenshot = None
+                    report["page_inventory"].append({
+                        "url": current_url,
+                        "requested_url": page_url,
+                        "final_url": current_url,
+                        "route": urlsplit(current_url).path or "/",
+                        "depth": depth,
+                        "state_fingerprint": state_fingerprint,
+                        "application_state": {
+                            "expanded_selectors": list(dict.fromkeys(expanded_selectors)),
+                            "scroll_restoration": "top",
+                        },
+                        "discovery_timestamp": discovered_at,
+                        "http_status": navigation_response.status if navigation_response else None,
+                        "title": page_title,
+                        "visible_text": visible_text[:50000],
+                        "dom": dom[:250000],
+                        "dom_snapshot": str(dom_snapshot_path),
+                        "accessibility_tree": accessibility_tree[:100000],
+                        "elements": discovered,
+                        "forms": [item for item in discovered if item.get("tag") in {"input", "select", "textarea"}],
+                        "links": [item for item in discovered if item.get("href")],
+                        "buttons": [item for item in discovered if item.get("role") == "button"],
+                        "structured_regions": structured_regions,
+                        "validation_messages": [
+                            item for item in structured_regions
+                            if item.get("role") == "alert"
+                            or "validation" in str(item.get("id") or "").lower()
+                        ],
+                        "screenshot": screenshot,
+                    })
+                    report["events"].append("page_scanned")
                     for item in discovered:
                         href = item.get("href")
                         parsed = urlsplit(href) if href else None
-                        if parsed and parsed.scheme in {"http", "https"} and parsed.netloc == origin.netloc:
+                        skip_reason = _link_skip_reason(str(href), origin.netloc) if href else None
+                        if href and skip_reason:
+                            report["pages_skipped"].append({
+                                "url": str(href), "reason": skip_reason,
+                                "discovered_from": current_url,
+                            })
+                        if parsed and not skip_reason:
                             clean_href = _canonical_page_url(href)
                             if (
                                 depth < settings.automation_crawl_depth_limit
@@ -588,42 +1287,157 @@ class AutomationService:
                             ):
                                 pending.append((clean_href, depth + 1))
                                 queued.add(clean_href)
+                                report["navigation_relationships"].append({
+                                    "from": current_url, "to": clean_href,
+                                    "via": item.get("name") or item.get("visible_text") or "link",
+                                })
+                            elif depth >= settings.automation_crawl_depth_limit:
+                                report["pages_skipped"].append({
+                                    "url": clean_href,
+                                    "reason": "maximum_crawl_depth_reached",
+                                    "discovered_from": current_url,
+                                })
                     if depth < settings.automation_crawl_depth_limit:
                         controls = [
                             item for item in discovered
                             if item.get("navigation_candidate") and not item.get("href")
                             and item.get("css_selector")
-                        ][:40]
-                        for control in controls:
-                            try:
-                                await page.goto(current_url, wait_until="domcontentloaded")
-                                await self._crawl_wait(page)
-                                before = _canonical_page_url(page.url)
-                                locator = page.locator(control["css_selector"]).first
-                                if not await locator.is_visible():
+                        ][:settings.automation_navigation_controls_per_page]
+                        crawl_concurrency = max(
+                            1, settings.automation_crawl_concurrency
+                        )
+                        for offset in range(0, len(controls), crawl_concurrency):
+                            control_batch = controls[
+                                offset : offset + crawl_concurrency
+                            ]
+                            results = await asyncio.gather(
+                                *[
+                                    explore_control(current_url, control)
+                                    for control in control_batch
+                                ]
+                            )
+                            for control, result in zip(control_batch, results):
+                                if not result["success"]:
+                                    report["unprocessed_navigation_states"].append({
+                                        "page_url": current_url,
+                                        "control": control.get("name") or control.get("css_selector"),
+                                        "reason": (
+                                            "safe_navigation_exploration_failed_after_"
+                                            f"{settings.automation_navigation_retry_limit + 1}_attempts"
+                                        ),
+                                        "error": result.get("error"),
+                                    })
                                     continue
-                                await locator.click(timeout=int(settings.automation_action_timeout_seconds * 1000))
-                                try:
-                                    await page.wait_for_url(
-                                        lambda value: _canonical_page_url(str(value)) != before,
-                                        timeout=int(settings.automation_navigation_settle_timeout_seconds * 1000),
-                                    )
-                                except Exception:
-                                    pass
-                                await self._crawl_wait(page)
-                                after = _canonical_page_url(page.url)
+                                before = result["before"]
+                                after = result["after"]
                                 if urlsplit(after).netloc != origin.netloc:
                                     continue
-                                refreshed = await self._capture_interactive_elements(page)
-                                for item in refreshed:
-                                    item["page_url"] = after
+                                refreshed = result["elements"]
+                                for refreshed_item in refreshed:
+                                    refreshed_item["page_url"] = after
                                 raw.extend(refreshed)
+                                for refreshed_item in refreshed:
+                                    refreshed_href = refreshed_item.get("href")
+                                    if not refreshed_href:
+                                        continue
+                                    skip_reason = _link_skip_reason(
+                                        str(refreshed_href), origin.netloc
+                                    )
+                                    if skip_reason:
+                                        report["pages_skipped"].append({
+                                            "url": str(refreshed_href),
+                                            "reason": skip_reason,
+                                            "discovered_from": after,
+                                        })
+                                        continue
+                                    clean_refreshed_href = _canonical_page_url(
+                                        str(refreshed_href)
+                                    )
+                                    if (
+                                        clean_refreshed_href not in visited
+                                        and clean_refreshed_href not in queued
+                                    ):
+                                        pending.append((clean_refreshed_href, depth + 1))
+                                        queued.add(clean_refreshed_href)
+                                        report["navigation_relationships"].append({
+                                            "from": after,
+                                            "to": clean_refreshed_href,
+                                            "via": (
+                                                refreshed_item.get("name")
+                                                or refreshed_item.get("visible_text")
+                                                or "dynamic_navigation"
+                                            ),
+                                        })
                                 if after != before and after not in visited and after not in queued:
                                     pending.append((after, depth + 1))
                                     queued.add(after)
-                            except Exception:
-                                logger.debug("Safe navigation exploration failed", exc_info=True)
                 await browser.close()
+            report["pages_discovered"] = len(queued)
+            report["pages_completed"] = len(report["page_inventory"])
+            report["remaining_crawl_queue"] = (
+                report.get("remaining_crawl_queue") or [item[0] for item in pending]
+            )
+            elapsed = time.monotonic() - started_at
+            report["progress"] = {
+                "pages_discovered": len(queued),
+                "pages_completed": len(report["page_inventory"]),
+                "pages_remaining": len(report["remaining_crawl_queue"]),
+                "current_crawl_depth": max(
+                    (item.get("depth", 0) for item in report["page_inventory"]),
+                    default=0,
+                ),
+                "elapsed_seconds": round(elapsed, 2),
+                "estimated_completion_seconds": (
+                    0 if not report["remaining_crawl_queue"] else report["progress"].get(
+                        "estimated_completion_seconds"
+                    )
+                ),
+            }
+            report["progress_history"].append(report["progress"])
+            limit_reached = (
+                bool(pending)
+                and len(report["page_inventory"]) >= settings.automation_crawl_page_limit
+            )
+            blocking_skips = [
+                item for item in report["pages_skipped"]
+                if str(item.get("reason", "")).startswith("navigation_failed")
+                or item.get("reason") == "maximum_crawl_depth_reached"
+            ]
+            if report["status"] != "crawl_blocked":
+                if (
+                    report["actual_application_reached"]
+                    and not pending
+                    and not limit_reached
+                    and not report.get("failure_reason")
+                    and not report["unprocessed_navigation_states"]
+                    and not blocking_skips
+                ):
+                    report["status"] = "crawl_completed"
+                    report["events"].append("crawl_completed")
+                else:
+                    report["status"] = "crawl_incomplete"
+                    report["failure_reason"] = report.get("failure_reason") or (
+                        "The page limit was reached before the crawl queue was empty."
+                        if limit_reached else
+                        "One or more discovered navigation states could not be processed."
+                        if report["unprocessed_navigation_states"] else
+                        "One or more reachable pages could not be processed within the configured limits."
+                        if blocking_skips else
+                        "The application crawl did not reach a complete state."
+                    )
+                    report["recommended_corrective_action"] = (
+                        "Increase crawl page/depth/time limits or fix skipped navigation failures, then retry."
+                    )
+                    report["events"].append("crawl_incomplete")
+            self._crawl_reports[report_key] = report
+            if report["status"] != "crawl_completed":
+                raise AutomationError(_crawl_failure_message(report))
+            _attach_navigation_context(
+                url,
+                report["navigation_relationships"],
+                raw,
+                report["page_inventory"],
+            )
             unique = {
                 (
                     str(item.get("page_url") or url),
@@ -632,17 +1446,43 @@ class AutomationService:
                 for item in raw
             }
             elements = [DiscoveredElement.model_validate(item) for item in unique.values()]
+            await cache.set_json(
+                discovery_cache_key,
+                {
+                    "page_title": title,
+                    "crawl_report": report,
+                    "discovered_elements": [
+                        item.model_dump(mode="json") for item in elements
+                    ],
+                },
+                settings.redis_script_ttl_seconds,
+            )
             logger.info(
                 "DOM discovery complete url=%s pages_visited=%d elements_found=%d",
                 url, len(visited), len(elements),
             )
             return title, elements
         except Exception as exc:
+            if report_key not in self._crawl_reports:
+                report["status"] = (
+                    report["status"] if report["status"] in {"crawl_blocked", "crawl_incomplete"}
+                    else "crawl_incomplete"
+                )
+                report["failure_reason"] = report.get("failure_reason") or (
+                    f"{type(exc).__name__}: {exc}"
+                )
+                report["remaining_crawl_queue"] = report.get("remaining_crawl_queue", [])
+                report["recommended_corrective_action"] = report.get(
+                    "recommended_corrective_action"
+                ) or "Verify Playwright browser availability and application access, then retry."
+                self._crawl_reports[report_key] = report
             # Bug 1 fix: log the real exception so it appears in uvicorn console
             logger.error(
                 "DOM discovery failed url=%s  error=%s: %s",
                 url, type(exc).__name__, exc, exc_info=exc,
             )
+            if isinstance(exc, AutomationError):
+                raise
             raise AutomationError(
                 f"The URL responded, but Chromium could not inspect it: {type(exc).__name__}: {exc}. "
                 "Run `playwright install chromium` if Playwright is not installed."
@@ -676,11 +1516,40 @@ class AutomationService:
         }
         requirement_version = _stable_version(requirement_payload)
         logger.info("generate() start workflow_id=%s url=%s", request.workflow_id, url)
+        crawl = self._crawls.get(request.crawl_id)
+        if crawl is None:
+            crawl_path = self.artifact_root / _safe_name(request.crawl_id) / "crawl-analysis.json"
+            if crawl_path.is_file():
+                crawl = json.loads(crawl_path.read_text(encoding="utf-8"))
+                self._crawls[request.crawl_id] = crawl
+        if crawl is None:
+            crawl = await cache.get_json(cache.key("crawl", request.crawl_id))
+            if crawl:
+                self._crawls[request.crawl_id] = crawl
+        if crawl is None:
+            raise AutomationError(
+                "A completed application crawl is required before script generation."
+            )
+        if str(crawl.get("workflow_id")) != str(request.workflow_id):
+            raise AutomationError("The selected crawl belongs to a different workflow.")
+        if _canonical_page_url(str(crawl.get("application_url"))) != _canonical_page_url(url):
+            raise AutomationError("The selected crawl belongs to a different application URL.")
+        crawl_report = dict(crawl.get("crawl_report") or {})
+        if crawl_report.get("status") != "crawl_completed":
+            raise AutomationError(_crawl_failure_message(crawl_report))
+        title = crawl.get("page_title")
+        elements = [
+            DiscoveredElement.model_validate(item)
+            for item in crawl.get("discovered_elements", [])
+        ]
+        self._completed_crawl_report(url, title, elements)
         script_cache_key = cache.fingerprint(
             "scripts",
             {
-                "generator_version": 7,
+                "generator_version": 8,
                 "application_url": url,
+                "requirement_version": requirement_version,
+                "crawl_id": request.crawl_id,
             },
         )
         cached = await cache.get_json(script_cache_key)
@@ -710,6 +1579,12 @@ class AutomationService:
                 application_map=cached.get("application_map", {}),
                 application_map_version=cached.get("application_map_version"),
                 requirement_version=cached.get("requirement_version") or requirement_version,
+                crawl_status="script_generation_completed",
+                crawl_report=cached.get("crawl_report", {
+                    "status": "crawl_completed",
+                    "actual_application_reached": True,
+                    "remaining_crawl_queue": [],
+                }),
                 scripts=scripts,
             )
             self._mark_prior_script_lifecycle(
@@ -726,10 +1601,6 @@ class AutomationService:
             }
             await self._cache_generation(generation_id)
             return response
-        logger.info("Validating URL url=%s", url)
-        await self._validate_url(url)
-        logger.info("Starting DOM discovery url=%s", url)
-        title, elements = await self._discover(url)
         logger.info(
             "Discovery complete: %d elements found. Building scripts for %d test cases.",
             len(elements), len(state.get("test_cases", [])),
@@ -739,6 +1610,17 @@ class AutomationService:
         directory.mkdir(parents=True, exist_ok=False)
         element_dicts = [element.model_dump(mode="json") for element in elements]
         application_map = _application_map(url, title, element_dicts)
+        application_map.update({
+            "crawl_status": crawl_report["status"],
+            "pages": crawl_report.get("page_inventory") or application_map["pages"],
+            "relationships": (
+                crawl_report.get("navigation_relationships")
+                or application_map["relationships"]
+            ),
+            "page_count": crawl_report.get("pages_completed", application_map["page_count"]),
+            "pages_skipped": crawl_report.get("pages_skipped", []),
+            "crawl_events": crawl_report.get("events", []),
+        })
         application_map_version = _stable_version(application_map)
         self._mark_prior_script_lifecycle(
             request.workflow_id,
@@ -746,32 +1628,71 @@ class AutomationService:
             application_map_version,
             {str(item.get("test_case_id")) for item in state.get("test_cases", [])},
         )
+        crawl_report["events"].append("script_generation_started")
         scripts = []
         skipped_count = 0
-        for index, page_info in enumerate(application_map.get("pages", []), start=1):
-            page_url = str(page_info.get("url") or url)
-            page_elements = list(page_info.get("elements") or [])
-            page_name = urlsplit(page_url).path.strip("/") or title or "home"
-            test_case = {
-                "test_case_id": f"PAGE-{index:03d}",
-                "scenario_id": "UI-CRAWL",
-                "title": f"Page: {page_name}",
-            }
-            dom_supported = True
-            if not dom_supported:
-                logger.info(
-                    "Script marked Needs Review because one or more actions are not "
-                    "backed by verified DOM elements "
-                    "test_case_id=%s",
-                    test_case["test_case_id"],
-                )
-
-
-
-            script_id = f"pw-page-{index:03d}-{_safe_name(page_name)}"
+        unsupported_requirements: list[dict[str, Any]] = []
+        scenarios_by_id = {
+            str(item.get("scenario_id")): item for item in state.get("scenarios", [])
+        }
+        configuration_terms = {
+            "discount": "discount codes depend on configured promotions",
+            "guest checkout": "guest checkout depends on store configuration",
+            "review": "product reviews may be disabled or moderated",
+            "filter": "product filters depend on catalog attributes",
+            "email": "email delivery requires an external mailbox",
+            "breadcrumb": "breadcrumbs depend on the active theme",
+        }
+        destructive_terms = {"delete account", "place order", "pay", "purchase", "logout"}
+        for index, test_case in enumerate(state.get("test_cases", []), start=1):
+            test_text = " ".join([
+                str(test_case.get("title") or ""),
+                str(test_case.get("description") or ""),
+                *[
+                    f"{step.get('action', '')} {step.get('expected_result', '')}"
+                    for step in test_case.get("steps", [])
+                ],
+            ]).lower()
+            page_url = _best_page_url(test_case, url, element_dicts)
+            page_elements = [
+                item for item in element_dicts
+                if _canonical_page_url(str(item.get("page_url") or url)) == page_url
+            ]
+            evidence_elements = page_elements or element_dicts
+            dependency = next(
+                (reason for term, reason in configuration_terms.items() if term in test_text),
+                None,
+            )
+            destructive = next(
+                (term for term in destructive_terms if term in test_text),
+                None,
+            )
+            if destructive:
+                unsupported_requirements.append({
+                    "test_case_id": str(test_case.get("test_case_id")),
+                    "classification": "unsupported_or_destructive_workflow",
+                    "reason": f"Workflow contains destructive action: {destructive}",
+                })
+                skipped_count += 1
+                continue
+            if not _test_case_supported(test_case, element_dicts):
+                unsupported_requirements.append({
+                    "test_case_id": str(test_case.get("test_case_id")),
+                    "classification": (
+                        "not_testable_due_to_configuration"
+                        if dependency else "missing_from_application"
+                    ),
+                    "reason": dependency or (
+                        "Required actions could not be mapped to elements observed during "
+                        "the completed crawl."
+                    ),
+                })
+                skipped_count += 1
+                continue
+            script_id = f"pw-{index:03d}-{_safe_name(str(test_case.get('test_case_id')))}"
             path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
             try:
-                source = _page_script_source(test_case["title"], page_url, page_elements)
+                source = _python_source(test_case, page_url, evidence_elements)
                 # Bug 6 fix: catch per-script validation errors so one bad script
                 # doesn't abort generation of all remaining scripts.
                 _validate_generated_source(source)
@@ -796,11 +1717,25 @@ class AutomationService:
                     download_path=f"/api/v1/automation/scripts/{generation_id}/{script_id}/download",
                     application_map_version=application_map_version,
                     requirement_version=requirement_version,
-                    lifecycle_status="Valid" if dom_supported else "Needs Review",
+                    lifecycle_status="Valid",
                     page_url=page_url,
-                    page_elements=page_elements,
+                    page_elements=evidence_elements,
+                    requirement_ids=[
+                        str(item) for item in test_case.get("requirement_ids", [])
+                    ],
+                    user_story_ids=[
+                        str(item)
+                        for item in scenarios_by_id.get(
+                            str(test_case.get("scenario_id")), {}
+                        ).get("user_story_ids", [])
+                    ],
                 )
             )
+        crawl_report["requirement_evidence"] = {
+            "supported_test_cases": [script.test_case_id for script in scripts],
+            "unsupported_test_cases": unsupported_requirements,
+        }
+        crawl_report["events"].append("script_generation_completed")
         logger.info(
             "generate() complete: %d scripts built, %d skipped. generation_id=%s",
             len(scripts), skipped_count, generation_id,
@@ -826,6 +1761,8 @@ class AutomationService:
             application_map=application_map,
             application_map_version=application_map_version,
             requirement_version=requirement_version,
+            crawl_status="script_generation_completed",
+            crawl_report=crawl_report,
             scripts=scripts,
         )
         self._generations[generation_id] = {
@@ -843,11 +1780,106 @@ class AutomationService:
                 "application_map": application_map,
                 "application_map_version": application_map_version,
                 "requirement_version": requirement_version,
+                "crawl_status": "crawl_completed",
+                "crawl_report": crawl_report,
                 "scripts": [item.model_dump(mode="json") for item in scripts],
             },
             settings.redis_script_ttl_seconds,
         )
         return response
+
+    async def analyze_application(
+        self, request: CrawlApplicationRequest, *, _dedicated_loop: bool = False
+    ) -> CrawlAnalysisResponse:
+        if sys.platform == "win32" and not settings.app_mock_mode and not _dedicated_loop:
+            return await _on_playwright_loop(
+                lambda: self.analyze_application(request, _dedicated_loop=True)
+            )
+        state = workflow_service.get(request.workflow_id)
+        if state.get("status") != "completed":
+            raise AutomationError("Application crawling requires a completed workflow.")
+        url = str(request.application_url)
+        await self._validate_url(url)
+        original_limits = (
+            settings.automation_crawl_page_limit,
+            settings.automation_crawl_depth_limit,
+            settings.automation_crawl_timeout_seconds,
+            settings.automation_crawl_repeated_state_limit,
+        )
+        settings.automation_crawl_page_limit = request.page_limit
+        settings.automation_crawl_depth_limit = request.depth_limit
+        settings.automation_crawl_timeout_seconds = request.max_execution_time_seconds
+        settings.automation_crawl_repeated_state_limit = request.repeated_state_limit
+        title: str | None = None
+        elements: list[DiscoveredElement] = []
+        try:
+            try:
+                title, elements = await self._discover(url)
+                report = self._completed_crawl_report(url, title, elements)
+            except AutomationError:
+                report = self._crawl_reports.get(_canonical_page_url(url), {})
+                for page_info in report.get("page_inventory", []):
+                    elements.extend(
+                        DiscoveredElement.model_validate(item)
+                        for item in page_info.get("elements", [])
+                    )
+                title = (
+                    report.get("page_inventory", [{}])[0].get("title")
+                    if report.get("page_inventory") else None
+                )
+            report = report or self._crawl_reports.get(_canonical_page_url(url), {})
+        finally:
+            (
+                settings.automation_crawl_page_limit,
+                settings.automation_crawl_depth_limit,
+                settings.automation_crawl_timeout_seconds,
+                settings.automation_crawl_repeated_state_limit,
+            ) = original_limits
+        crawl_id = f"crawl-{uuid.uuid4()}"
+        directory = self.artifact_root / crawl_id
+        directory.mkdir(parents=True, exist_ok=False)
+        element_dicts = [item.model_dump(mode="json") for item in elements]
+        application_map = _application_map(url, title, element_dicts)
+        application_map.update({
+            "crawl_status": report.get("status", "crawl_incomplete"),
+            "pages": report.get("page_inventory") or application_map["pages"],
+            "relationships": (
+                report.get("navigation_relationships")
+                or application_map["relationships"]
+            ),
+            "page_count": report.get("pages_completed", application_map["page_count"]),
+            "pages_skipped": report.get("pages_skipped", []),
+            "crawl_events": report.get("events", []),
+        })
+        stored = {
+            "crawl_id": crawl_id,
+            "workflow_id": str(request.workflow_id),
+            "application_url": url,
+            "page_title": title,
+            "crawl_report": report,
+            "application_map": application_map,
+            "discovered_elements": element_dicts,
+        }
+        self._crawls[crawl_id] = stored
+        (directory / "crawl-analysis.json").write_text(
+            json.dumps(stored, default=str, indent=2), encoding="utf-8"
+        )
+        await cache.set_json(
+            cache.key("crawl", crawl_id),
+            stored,
+            settings.redis_crawl_ttl_seconds,
+        )
+        return CrawlAnalysisResponse(
+            crawl_id=crawl_id,
+            application_url=url,
+            crawl_status=report.get("status", "crawl_incomplete"),
+            page_title=title,
+            pages_crawled=int(report.get("pages_completed", 0)),
+            elements_found=len(elements),
+            crawl_report=report,
+            application_map=application_map,
+            discovered_elements=elements,
+        )
 
     async def _cache_generation(self, generation_id: str) -> None:
         generation = self._generations[generation_id]
@@ -891,13 +1923,49 @@ class AutomationService:
         # Temporarily override crawl limits for this request
         original_page_limit = settings.automation_crawl_page_limit
         original_depth_limit = settings.automation_crawl_depth_limit
+        original_timeout = settings.automation_crawl_timeout_seconds
+        original_repeated_state_limit = settings.automation_crawl_repeated_state_limit
         settings.automation_crawl_page_limit = page_limit
         settings.automation_crawl_depth_limit = depth_limit
+        settings.automation_crawl_timeout_seconds = request.max_execution_time_seconds
+        settings.automation_crawl_repeated_state_limit = request.repeated_state_limit
+        title: str | None = None
+        elements: list[DiscoveredElement] = []
         try:
-            title, elements = await self._discover(url)
+            try:
+                title, elements = await self._discover(url)
+                crawl_report = self._completed_crawl_report(url, title, elements)
+            except AutomationError:
+                crawl_report = self._crawl_reports.get(_canonical_page_url(url), {})
+                if not crawl_report:
+                    raise
+                inventory = crawl_report.get("page_inventory", [])
+                title = inventory[0].get("title") if inventory else None
+                captured_elements = [
+                    item
+                    for page_info in inventory
+                    for item in page_info.get("elements", [])
+                ]
+                unique_elements = {
+                    (
+                        str(item.get("page_url") or url),
+                        str(
+                            item.get("test_id")
+                            or item.get("element_id")
+                            or item.get("css_selector")
+                        ),
+                    ): item
+                    for item in captured_elements
+                }
+                elements = [
+                    DiscoveredElement.model_validate(item)
+                    for item in unique_elements.values()
+                ]
         finally:
             settings.automation_crawl_page_limit = original_page_limit
             settings.automation_crawl_depth_limit = original_depth_limit
+            settings.automation_crawl_timeout_seconds = original_timeout
+            settings.automation_crawl_repeated_state_limit = original_repeated_state_limit
 
         crawl_id = f"crawl-{uuid.uuid4()}"
         directory = self.artifact_root / crawl_id
@@ -905,6 +1973,41 @@ class AutomationService:
 
         element_dicts = [element.model_dump(mode="json") for element in elements]
         application_map = _application_map(url, title, element_dicts)
+        application_map.update({
+            "crawl_status": crawl_report["status"],
+            "pages": crawl_report.get("page_inventory") or application_map["pages"],
+            "relationships": (
+                crawl_report.get("navigation_relationships")
+                or application_map["relationships"]
+            ),
+            "page_count": crawl_report.get("pages_completed", application_map["page_count"]),
+            "pages_skipped": crawl_report.get("pages_skipped", []),
+            "crawl_events": crawl_report.get("events", []),
+        })
+        if crawl_report.get("status") != "crawl_completed":
+            response = CrawlGenerationResponse(
+                crawl_id=crawl_id,
+                url=url,
+                page_title=title,
+                pages_crawled=int(crawl_report.get("pages_completed", 0)),
+                elements_found=len(elements),
+                crawl_status=crawl_report.get("status", "crawl_incomplete"),
+                crawl_report=crawl_report,
+                scripts=[],
+                discovered_elements=elements,
+                application_map=application_map,
+            )
+            (directory / "crawl.json").write_text(
+                json.dumps(response.model_dump(mode="json"), default=str, indent=2),
+                encoding="utf-8",
+            )
+            await cache.set_json(
+                cache.key("crawl-generation", crawl_id),
+                {"response": response.model_dump(mode="json")},
+                settings.redis_crawl_ttl_seconds,
+            )
+            return response
+        crawl_report["events"].append("script_generation_started")
 
         scripts: list[GeneratedScript] = []
         skipped_count = 0
@@ -952,6 +2055,7 @@ class AutomationService:
                 "No scripts could be generated from the crawled URL. "
                 "Ensure the URL loads a real UI and is not behind a login wall."
             )
+        crawl_report["events"].append("script_generation_completed")
 
         response = CrawlGenerationResponse(
             crawl_id=crawl_id,
@@ -959,6 +2063,8 @@ class AutomationService:
             page_title=title,
             pages_crawled=len(application_map.get("pages", [])),
             elements_found=len(elements),
+            crawl_status=crawl_report["status"],
+            crawl_report=crawl_report,
             scripts=scripts,
             discovered_elements=elements,
             application_map=application_map,
@@ -977,6 +2083,11 @@ class AutomationService:
             "directory": directory,
             "learned_locators": {},
         }
+        await cache.set_json(
+            cache.key("crawl-generation", crawl_id),
+            {"response": response.model_dump(mode="json")},
+            settings.redis_crawl_ttl_seconds,
+        )
 
         return response
 
@@ -986,7 +2097,16 @@ class AutomationService:
         safe_script = _safe_name(script_id)
         path = self.artifact_root / safe_crawl / f"{safe_script}{SCRIPT_ARTIFACT_SUFFIX}"
         if not path.is_file():
-            raise AutomationNotFound(f"Crawl script not found: {crawl_id}/{script_id}")
+            cached = await cache.get_json(cache.key("crawl-generation", crawl_id))
+            scripts = (cached or {}).get("response", {}).get("scripts", [])
+            stored = next(
+                (item for item in scripts if item.get("script_id") == script_id),
+                None,
+            )
+            if not stored or not stored.get("source"):
+                raise AutomationNotFound(f"Crawl script not found: {crawl_id}/{script_id}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(stored["source"]), encoding="utf-8")
         return path
 
     async def generation(self, generation_id: str) -> dict[str, Any]:
@@ -1038,7 +2158,11 @@ class AutomationService:
         legacy_path = generation["directory"] / f"{script_id}.py"
         if legacy_path.is_file():
             return legacy_path
-        raise AutomationNotFound("Generated script artifact was not found")
+        # The full source is stored in the Redis generation manifest. Rebuild
+        # the download artifact after a restart or local artifact cleanup.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(script.source, encoding="utf-8")
+        return path
 
     @staticmethod
     def _locator_phrase(action: str) -> str:
@@ -1091,22 +2215,36 @@ class AutomationService:
         for _, element in sorted(ranked, key=lambda item: item[0], reverse=True):
             if element.get("test_id"):
                 candidates.append(page.get_by_test_id(element["test_id"]))
-            if element.get("element_id") and hasattr(page, "locator"):
-                candidates.append(page.locator(f"[id={json.dumps(str(element['element_id']))}]"))
-            if element.get("name") and hasattr(page, "locator"):
-                candidates.append(page.locator(f"[name={json.dumps(str(element['name']))}]"))
+            if element.get("aria_label") and hasattr(page, "locator"):
+                candidates.append(
+                    page.locator(
+                        f"[aria-label={json.dumps(str(element['aria_label']))}]"
+                    )
+                )
+            if element.get("role") and element.get("name"):
+                candidates.append(
+                    page.get_by_role(element["role"], name=element["name"], exact=True)
+                )
             if element.get("label"):
                 candidates.append(page.get_by_label(element["label"], exact=True))
             if element.get("placeholder"):
                 candidates.append(
                     page.get_by_placeholder(element["placeholder"], exact=True)
                 )
-            if element.get("role") and element.get("name"):
-                candidates.append(
-                    page.get_by_role(element["role"], name=element["name"], exact=True)
-                )
-            if element.get("css_selector") and hasattr(page, "locator"):
+            if element.get("element_id") and hasattr(page, "locator"):
+                candidates.append(page.locator(f"[id={json.dumps(str(element['element_id']))}]"))
+            if element.get("name") and hasattr(page, "locator"):
+                candidates.append(page.locator(f"[name={json.dumps(str(element['name']))}]"))
+            if (
+                element.get("css_selector")
+                and element.get("locator_validated")
+                and hasattr(page, "locator")
+            ):
                 candidates.append(page.locator(element["css_selector"]))
+            if element.get("visible_text"):
+                candidates.append(
+                    page.get_by_text(element["visible_text"], exact=True)
+                )
         return candidates
 
     async def _resolve_locators(
@@ -1120,25 +2258,22 @@ class AutomationService:
         candidates = self._discovered_locator_candidates(
             page, phrase, discovered_elements or []
         )
-        for role in roles:
-            candidates.append(page.get_by_role(role, name=pattern))
-        candidates.extend([
-            page.get_by_label(pattern),
-            page.get_by_placeholder(pattern),
-            page.get_by_test_id(phrase),
-            page.get_by_text(pattern, exact=False),
-        ])
-        # Word-level fallback for individual key terms
-        words = [w for w in re.findall(r"[A-Za-z0-9]+", phrase) if len(w) > 2]
-        for word in words:
-            word_pat = re.compile(re.escape(word), re.I)
+        # With crawl evidence, never invent broad selectors. Every candidate
+        # must be one of the alternate locators verified during discovery.
+        if not discovered_elements or not any(
+            element.get("locator_validated") for element in discovered_elements
+        ):
+            # Compatibility for legacy/injected catalogues created before
+            # crawl-time locator verification was recorded. New crawls never
+            # enter this branch.
             for role in roles:
-                candidates.append(page.get_by_role(role, name=word_pat))
-            candidates.append(page.get_by_text(word_pat, exact=False))
-            if hasattr(page, "locator"):
-                candidates.append(page.locator(f"[id*='{word.lower()}']"))
-                candidates.append(page.locator(f"[class*='{word.lower()}']"))
-                candidates.append(page.locator(f"[title*='{word.lower()}']"))
+                candidates.append(page.get_by_role(role, name=pattern))
+            candidates.extend([
+                page.get_by_label(pattern),
+                page.get_by_placeholder(pattern),
+                page.get_by_test_id(phrase),
+                page.get_by_text(phrase, exact=True),
+            ])
         resolved = []
         for candidate in candidates:
             try:
@@ -1155,6 +2290,132 @@ class AutomationService:
         if resolved:
             return resolved
         raise LookupError(f"No visible role, label, placeholder, test-id, or text locator matched '{phrase}'")
+
+    @staticmethod
+    def _context_element(
+        action: str, elements: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        words = _meaningful_words(AutomationService._locator_phrase(action))
+        ranked: list[tuple[int, dict[str, Any]]] = []
+        for element in elements:
+            identity = " ".join(
+                str(element.get(key) or "")
+                for key in (
+                    "test_id", "aria_label", "role", "name", "label",
+                    "placeholder", "element_id", "visible_text", "href",
+                )
+            )
+            score = len(words & _meaningful_words(identity))
+            if score:
+                ranked.append((score, element))
+        return max(ranked, key=lambda item: item[0])[1] if ranked else None
+
+    async def _restore_crawl_context(
+        self, page: Any, element: dict[str, Any], fallback_url: str
+    ) -> list[dict[str, Any]]:
+        expected_url = _canonical_page_url(
+            str(element.get("page_url") or fallback_url)
+        )
+        path = [
+            _canonical_page_url(str(url))
+            for url in (element.get("navigation_path") or [expected_url])
+            if url
+        ]
+        if expected_url not in path:
+            path.append(expected_url)
+
+        # Replay the recorded route in order. Direct navigation is used because
+        # every URL was already verified as reachable by the crawler.
+        for target in path:
+            if _canonical_page_url(page.url) == target:
+                continue
+            await page.goto(
+                target,
+                wait_until="domcontentloaded",
+                timeout=int(settings.automation_navigation_timeout_seconds * 1000),
+            )
+            await self._crawl_wait(page)
+        if _canonical_page_url(page.url) != expected_url:
+            await page.goto(
+                expected_url,
+                wait_until="domcontentloaded",
+                timeout=int(settings.automation_navigation_timeout_seconds * 1000),
+            )
+            await self._crawl_wait(page)
+        await self._validate_navigation(page, expected_url)
+
+        expected_title = str(element.get("page_title") or "").strip()
+        if expected_title:
+            current_title = (await page.title()).strip()
+            if current_title.casefold() != expected_title.casefold():
+                raise LookupError(
+                    f"Page title differs from crawl evidence: expected "
+                    f"{expected_title!r}, got {current_title!r}"
+                )
+
+        state = element.get("application_state") or {}
+        for field in state.get("form_values", []):
+            selector = None
+            if field.get("test_id"):
+                selector = f"[data-testid={json.dumps(str(field['test_id']))}]"
+            elif field.get("element_id"):
+                selector = f"[id={json.dumps(str(field['element_id']))}]"
+            elif field.get("name"):
+                selector = f"[name={json.dumps(str(field['name']))}]"
+            if not selector:
+                continue
+            try:
+                control = page.locator(selector).first
+                if not await control.count() or not await control.is_visible():
+                    continue
+                tag = await control.evaluate("el => el.tagName.toLowerCase()")
+                input_type = await control.get_attribute("type")
+                if tag == "select":
+                    values = field.get("selected_values") or []
+                    if values:
+                        await control.select_option(values)
+                elif input_type in {"checkbox", "radio"}:
+                    await control.set_checked(bool(field.get("checked")))
+                elif field.get("value") is not None:
+                    await control.fill(str(field["value"]))
+            except Exception:
+                continue
+        for selector in state.get("expanded_selectors", []):
+            try:
+                control = page.locator(selector).first
+                if await control.count() and await control.is_visible():
+                    expanded = await control.get_attribute("aria-expanded")
+                    if expanded != "true":
+                        await control.scroll_into_view_if_needed()
+                        await control.click()
+            except Exception:
+                # A recorded expansion is best-effort; alternate verified
+                # locators for the actual action are still attempted below.
+                continue
+        await page.evaluate(
+            """async () => {
+              const step = Math.max(300, Math.floor(innerHeight * .8));
+              for (let y=0; y<document.body.scrollHeight; y+=step) {
+                scrollTo(0, y); await new Promise(r => setTimeout(r, 30));
+              }
+              scrollTo(0, 0);
+            }"""
+        )
+        await self._crawl_wait(page)
+        title = await page.title()
+        now = datetime.now(timezone.utc).isoformat()
+        return [
+            {
+                **item,
+                "page_url": _canonical_page_url(page.url),
+                "page_title": title,
+                "parent_page": element.get("parent_page"),
+                "navigation_path": path,
+                "application_state": state,
+                "discovery_timestamp": now,
+            }
+            for item in await self._capture_interactive_elements(page)
+        ]
 
     async def _perform(
         self,
@@ -1213,6 +2474,10 @@ class AutomationService:
         last_error: Exception | None = None
         for locator, description in locators:
             try:
+                if hasattr(locator, "scroll_into_view_if_needed"):
+                    await locator.scroll_into_view_if_needed(
+                        timeout=int(settings.automation_action_timeout_seconds * 1000)
+                    )
                 if any(token in lowered for token in ("select", "choose")):
                     tag = await locator.evaluate("el => el.tagName.toLowerCase()")
                     if tag == "select":
@@ -1618,10 +2883,14 @@ class AutomationService:
 
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
-            disc_dicts = [
+            all_discovered = [
                 item.model_dump(mode="json") for item in response.discovered_elements
             ]
             for script in response.scripts:
+                disc_dicts = [
+                    dict(item)
+                    for item in (script.page_elements or all_discovered)
+                ]
                 test_started = time.perf_counter()
                 console_logs: list[str] = []
                 network_errors: list[str] = []
@@ -1674,31 +2943,6 @@ class AutomationService:
                     # ---- Auto-dismiss overlays once after landing (req 8) ----
                     await self._dismiss_overlays(page)
 
-                    if script.page_url:
-                        failure_category = "Page Failure"
-                        fresh_elements = await self._capture_interactive_elements(page)
-                        for captured in script.page_elements:
-                            identity = str(
-                                captured.get("test_id") or captured.get("element_id")
-                                or captured.get("name") or captured.get("label")
-                                or captured.get("placeholder") or captured.get("tag")
-                            )
-                            failure_category = "Locator Failure"
-                            found = False
-                            for locator in self._discovered_locator_candidates(page, identity, [captured]):
-                                try:
-                                    if await locator.count() and await locator.first.is_visible():
-                                        found = True
-                                        break
-                                except Exception:
-                                    continue
-                            if not found:
-                                raise LookupError(f"Fresh DOM does not contain: {identity}")
-                        disc_dicts = [
-                            {**item, "page_url": _canonical_page_url(page.url)}
-                            for item in fresh_elements
-                        ]
-
                     per_test_calls = 0
                     for step in test_case.get("steps", []):
                         failed_step = step.get("step_number")
@@ -1711,10 +2955,36 @@ class AutomationService:
                         await self._dismiss_overlays(page)
                         failure_category = "Locator Failure"
                         try:
-                            page_elements = [
-                                el for el in disc_dicts
-                                if not el.get("page_url") or el.get("page_url") == page.url
-                            ]
+                            context_element = self._context_element(action, disc_dicts)
+                            if context_element:
+                                fresh_elements = await self._restore_crawl_context(
+                                    page,
+                                    context_element,
+                                    script.page_url or response.application_url,
+                                )
+                                expected_page = _canonical_page_url(
+                                    str(
+                                        context_element.get("page_url")
+                                        or script.page_url
+                                        or response.application_url
+                                    )
+                                )
+                                recorded = [
+                                    item
+                                    for item in disc_dicts
+                                    if _canonical_page_url(
+                                        str(item.get("page_url") or expected_page)
+                                    )
+                                    == expected_page
+                                ]
+                                page_elements = [*recorded, *fresh_elements]
+                            else:
+                                page_elements = [
+                                    el for el in disc_dicts
+                                    if not el.get("page_url")
+                                    or _canonical_page_url(str(el["page_url"]))
+                                    == _canonical_page_url(page.url)
+                                ]
                             element = await self._perform(page, action, page_elements)
                         except (LookupError, PlaywrightError, PlaywrightTimeoutError) as action_error:
                             # Classify timeout separately
@@ -2854,6 +4124,16 @@ class AutomationService:
         generation = await self.generation(execution.generation_id)
         workflow = generation["workflow"]
         response: ScriptGenerationResponse = generation["response"]
+        crawl_report = response.crawl_report or {}
+        unsupported = {
+            str(item.get("test_case_id")): item
+            for item in crawl_report.get("requirement_evidence", {}).get(
+                "unsupported_test_cases", []
+            )
+        }
+        generated_test_case_ids = {
+            str(script.test_case_id) for script in response.scripts
+        }
         statuses = {result.script_id: result.status for result in execution.results}
         evidence: dict[str, set[str]] = {}
         executed_words: set[str] = set()
@@ -2877,9 +4157,24 @@ class AutomationService:
             expected = _meaningful_words(text)
             overlap = expected & executed_words
             percentage = round(len(overlap) / len(expected) * 100, 2) if expected else 0
+            item_id = str(item.get(id_key) or "")
+            unsupported_item = unsupported.get(item_id)
+            if crawl_report.get("status") == "crawl_blocked":
+                classification = "crawl_blocked"
+            elif crawl_report.get("status") != "crawl_completed":
+                classification = "crawl_incomplete"
+            elif unsupported_item:
+                classification = unsupported_item["classification"]
+            elif id_key == "test_case_id" and item_id not in generated_test_case_ids:
+                classification = "missing_from_generated_script"
+            elif percentage == 0:
+                classification = "missing_from_generated_script"
+            else:
+                classification = "covered"
             return {
-                "id": str(item.get(id_key) or ""), "title": str(item.get("title") or ""),
+                "id": item_id, "title": str(item.get("title") or ""),
                 "status": "covered" if percentage > 0 else "missing",
+                "classification": classification,
                 "coverage_percentage": percentage,
                 "matched_scripts": [sid for sid, words in evidence.items() if expected & words],
                 "missing_terms": sorted(expected - executed_words),
@@ -2892,7 +4187,7 @@ class AutomationService:
             "artifact_id": item["id"],
             "artifact_title": item["title"],
             "status": item["status"],
-            "gap_type": "uncovered",
+            "gap_type": item["classification"],
             "coverage_percentage": item["coverage_percentage"],
             "details": f"Missing UI evidence: {', '.join(item['missing_terms'][:12])}" if item["missing_terms"] else "No missing terms",
         } for item in artifacts if item["status"] == "missing"]

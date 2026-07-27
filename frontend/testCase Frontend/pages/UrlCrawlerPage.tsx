@@ -27,8 +27,9 @@ function downloadAllAsZip(result: CrawlGenerationResponse) {
 
 export function UrlCrawlerPage() {
   const [url, setUrl] = useState('');
-  const [pageLimit, setPageLimit] = useState(20);
-  const [depthLimit, setDepthLimit] = useState(5);
+  const [pageLimit, setPageLimit] = useState(250);
+  const [depthLimit, setDepthLimit] = useState(15);
+  const [maxExecutionTime, setMaxExecutionTime] = useState(1800);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -47,6 +48,7 @@ export function UrlCrawlerPage() {
       const response = await testCaseApi.crawlAndGenerate(trimmed, {
         page_limit: pageLimit,
         depth_limit: depthLimit,
+        max_execution_time_seconds: maxExecutionTime,
       });
       setResult(response);
     } catch (err) {
@@ -57,6 +59,7 @@ export function UrlCrawlerPage() {
   };
 
   const script = result?.scripts[selectedScript];
+  const partialResult = result?.crawl_status === 'crawl_incomplete';
 
   return (
     <div className="space-y-6">
@@ -137,16 +140,16 @@ export function UrlCrawlerPage() {
           </button>
 
           {showAdvanced && (
-            <div className="grid gap-4 rounded-xl border border-border bg-muted/30 p-4 sm:grid-cols-2">
+            <div className="grid gap-4 rounded-xl border border-border bg-muted/30 p-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <label htmlFor="page-limit" className="text-sm font-semibold">
-                  Page limit <span className="text-muted-foreground font-normal">(1-100)</span>
+                  Page limit <span className="text-muted-foreground font-normal">(1-500)</span>
                 </label>
                 <input
                   id="page-limit"
                   type="number"
                   min={1}
-                  max={100}
+                  max={500}
                   value={pageLimit}
                   onChange={(e) => setPageLimit(Number(e.target.value))}
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary transition"
@@ -155,18 +158,33 @@ export function UrlCrawlerPage() {
               </div>
               <div className="space-y-2">
                 <label htmlFor="depth-limit" className="text-sm font-semibold">
-                  Depth limit <span className="text-muted-foreground font-normal">(1-10)</span>
+                  Depth limit <span className="text-muted-foreground font-normal">(1-20)</span>
                 </label>
                 <input
                   id="depth-limit"
                   type="number"
                   min={1}
-                  max={10}
+                  max={20}
                   value={depthLimit}
                   onChange={(e) => setDepthLimit(Number(e.target.value))}
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary transition"
                 />
                 <p className="text-xs text-muted-foreground">How many navigation levels deep</p>
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="crawl-timeout" className="text-sm font-semibold">
+                  Hard timeout <span className="text-muted-foreground font-normal">(30-3600 seconds)</span>
+                </label>
+                <input
+                  id="crawl-timeout"
+                  type="number"
+                  min={30}
+                  max={3600}
+                  value={maxExecutionTime}
+                  onChange={(e) => setMaxExecutionTime(Number(e.target.value))}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary transition"
+                />
+                <p className="text-xs text-muted-foreground">Crawler stops only when this hard limit is reached</p>
               </div>
             </div>
           )}
@@ -193,27 +211,42 @@ export function UrlCrawlerPage() {
 
       {result && !busy && (
         <div className="space-y-6">
-          <div className="rounded-2xl border border-green-500/30 bg-green-500/5 p-5">
+          <div className={`rounded-2xl border p-5 ${partialResult ? 'border-amber-500/30 bg-amber-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                <CheckCircle2 className={`h-5 w-5 ${partialResult ? 'text-amber-600' : 'text-green-600'}`} />
                 <div>
-                  <p className="font-semibold text-green-700 dark:text-green-400">
-                    Crawl complete &mdash; {result.scripts.length} scripts generated
+                  <p className={`font-semibold ${partialResult ? 'text-amber-700 dark:text-amber-400' : 'text-green-700 dark:text-green-400'}`}>
+                    {partialResult ? 'Crawl time limit reached' : 'Crawl complete'} &mdash; {result.scripts.length} scripts generated
                   </p>
                   <p className="mt-0.5 text-sm text-muted-foreground">
                     {result.page_title ?? result.url} &middot; {result.pages_crawled} pages &middot; {result.elements_found} elements discovered
                   </p>
+                  {partialResult && (
+                    <div className="mt-2 space-y-1 text-sm text-amber-700 dark:text-amber-300">
+                      <p>No scripts were generated because the crawl did not complete.</p>
+                      <p>
+                        {result.crawl_report.progress?.pages_discovered ?? result.pages_crawled} discovered ·{' '}
+                        {result.crawl_report.progress?.pages_completed ?? result.pages_crawled} completed ·{' '}
+                        {result.crawl_report.progress?.pages_remaining ?? result.crawl_report.remaining_crawl_queue.length} remaining ·{' '}
+                        depth {result.crawl_report.progress?.current_crawl_depth ?? 0} ·{' '}
+                        elapsed {result.crawl_report.progress?.elapsed_seconds ?? 0}s
+                        {result.crawl_report.progress?.estimated_completion_seconds != null
+                          ? ` · estimated ${result.crawl_report.progress.estimated_completion_seconds}s remaining`
+                          : ''}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
-              <button
+              {result.scripts.length > 0 && <button
                 onClick={() => downloadAllAsZip(result)}
                 id="download-all-btn"
                 className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm font-semibold shadow-sm hover:bg-muted transition"
               >
                 <Download className="h-4 w-4" />
                 Download all scripts
-              </button>
+              </button>}
             </div>
           </div>
 

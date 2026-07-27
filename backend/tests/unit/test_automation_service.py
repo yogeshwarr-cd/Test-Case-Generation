@@ -3,6 +3,8 @@
 import pytest
 
 from app.schemas.automation_schema import (
+    CrawlAndGenerateRequest,
+    CrawlApplicationRequest,
     DiscoveredElement,
     ExecuteScriptsRequest,
     FailureAnalysis,
@@ -11,13 +13,105 @@ from app.schemas.automation_schema import (
 )
 from app.services.automation_service import (
     SCRIPT_ARTIFACT_SUFFIX,
+    AutomationError,
     AutomationService,
     _best_page_url,
+    _canonical_page_url,
+    _challenge_evidence,
+    _link_skip_reason,
     _python_source,
     _test_case_supported,
     _validate_css_selector,
     _validate_generated_source,
 )
+
+
+def test_cloudflare_challenge_is_rejected_before_generation():
+    evidence = _challenge_evidence(
+        title="Just a moment...",
+        visible_text="Verify you are human",
+        status_code=403,
+        elements=[{"tag": "a", "name": "Privacy"}],
+    )
+    assert evidence is not None
+    assert evidence["reason"] == "Cloudflare challenge"
+
+
+def test_url_normalization_drops_tracking_but_keeps_meaningful_state():
+    assert _canonical_page_url(
+        "HTTPS://Example.com/products?utm_source=x&page=2#top"
+    ) == "https://example.com/products?page=2"
+
+
+def test_destructive_and_download_links_are_skipped():
+    assert _link_skip_reason("https://example.com/logout", "example.com") == (
+        "destructive_or_session_ending_link"
+    )
+    assert _link_skip_reason("https://example.com/report.pdf", "example.com") == (
+        "download_only_link"
+    )
+
+
+@pytest.mark.asyncio
+async def test_incomplete_crawl_does_not_generate_partial_scripts(monkeypatch, tmp_path):
+    service = AutomationService()
+    url = "https://example.com/"
+    monkeypatch.setattr(
+        "app.services.automation_service.settings.automation_artifacts_path",
+        str(tmp_path),
+    )
+
+    async def validate_url(_: str):
+        return None
+
+    async def discover(_: str):
+        service._crawl_reports[_canonical_page_url(url)] = {
+            "status": "crawl_incomplete",
+            "start_url": url,
+            "actual_application_reached": True,
+            "failure_reason": "Maximum crawl execution time was reached.",
+            "pages_discovered": 3,
+            "pages_completed": 1,
+            "pages_skipped": [],
+            "remaining_crawl_queue": ["https://example.com/two"],
+            "unprocessed_navigation_states": [],
+            "navigation_relationships": [],
+            "events": ["crawl_started", "crawl_in_progress", "crawl_incomplete"],
+            "progress": {
+                "pages_discovered": 3,
+                "pages_completed": 1,
+                "pages_remaining": 1,
+                "current_crawl_depth": 1,
+                "elapsed_seconds": 30,
+                "estimated_completion_seconds": 30,
+            },
+            "page_inventory": [{
+                "url": url,
+                "final_url": url,
+                "title": "Example",
+                "elements": [{
+                    "tag": "button",
+                    "role": "button",
+                    "name": "Continue",
+                    "page_url": url,
+                    "css_selector": "button:nth-of-type(1)",
+                    "locator_validated": True,
+                }],
+            }],
+        }
+        raise AutomationError("crawl timed out")
+
+    monkeypatch.setattr(service, "_validate_url", validate_url)
+    monkeypatch.setattr(service, "_discover", discover)
+
+    response = await service.crawl_and_generate(
+        CrawlAndGenerateRequest(url=url),
+        _dedicated_loop=True,
+    )
+    assert response.crawl_status == "crawl_incomplete"
+    assert response.scripts == []
+    assert response.crawl_report["progress"]["pages_remaining"] == 1
+    assert not list(tmp_path.glob("crawl-*/*.pwscript"))
 
 
 def test_dom_coverage_gate_ignores_non_interactive_verification_steps():
@@ -298,12 +392,19 @@ async def test_generation_reads_completed_workflow_without_mutating_it(monkeypat
 
     monkeypatch.setattr(service, "_validate_url", validate_url)
     monkeypatch.setattr(service, "_discover", discover)
+    crawl = await service.analyze_application(
+        CrawlApplicationRequest(workflow_id=workflow_id, application_url="https://example.com")
+    )
     response = await service.generate(
-        GenerateScriptsRequest(workflow_id=workflow_id, application_url="https://example.com")
+        GenerateScriptsRequest(
+            workflow_id=workflow_id,
+            application_url="https://example.com",
+            crawl_id=crawl.crawl_id,
+        )
     )
     assert response.reachable is True
-    assert response.scripts[0].requirement_ids == []
-    assert response.scripts[0].user_story_ids == []
+    assert response.scripts[0].requirement_ids == ["REQ-1"]
+    assert response.scripts[0].user_story_ids == ["US-1"]
     assert response.scripts[0].page_url == "https://example.com/"
     assert len(response.scripts) == 1
     assert response.scripts[0].lifecycle_status == "Valid"
@@ -336,8 +437,15 @@ async def test_manual_mode_skips_execution_and_produces_report(monkeypatch, tmp_
 
     monkeypatch.setattr(service, "_validate_url", validate_url)
     monkeypatch.setattr(service, "_discover", discover)
+    crawl = await service.analyze_application(
+        CrawlApplicationRequest(workflow_id=workflow_id, application_url="https://example.com")
+    )
     generated = await service.generate(
-        GenerateScriptsRequest(workflow_id=workflow_id, application_url="https://example.com")
+        GenerateScriptsRequest(
+            workflow_id=workflow_id,
+            application_url="https://example.com",
+            crawl_id=crawl.crawl_id,
+        )
     )
     # A new service instance simulates a Uvicorn reload between generation and execution.
     restarted_service = AutomationService()
@@ -346,7 +454,7 @@ async def test_manual_mode_skips_execution_and_produces_report(monkeypatch, tmp_
     )
     assert report.total_scripts == 1
     assert report.skipped_scripts == 1
-    assert report.results[0].traceability["test_case_id"] == "PAGE-001"
+    assert report.results[0].traceability["test_case_id"] == "TC-1"
     reloaded_report = AutomationService().report(report.execution_id)
     assert reloaded_report.execution_id == report.execution_id
 

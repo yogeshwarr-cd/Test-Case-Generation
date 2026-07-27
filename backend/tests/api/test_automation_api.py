@@ -27,13 +27,25 @@ async def test_automation_routes_are_registered_and_execute_end_to_end(monkeypat
     monkeypatch.setattr("app.services.automation_service.settings.app_mock_mode", True)
     automation_service._generations.clear()
     automation_service._reports.clear()
+    automation_service._crawls.clear()
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
+        crawl_response = await client.post(
+            "/api/v1/automation/scripts/crawl",
+            json={"workflow_id": str(workflow_id), "application_url": "https://example.com"},
+        )
+        assert crawl_response.status_code == 200
+        assert crawl_response.json()["crawl_status"] == "crawl_completed"
+
         generated_response = await client.post(
             "/api/v1/automation/scripts/generate",
-            json={"workflow_id": str(workflow_id), "application_url": "https://example.com"},
+            json={
+                "workflow_id": str(workflow_id),
+                "application_url": "https://example.com",
+                "crawl_id": crawl_response.json()["crawl_id"],
+            },
         )
         assert generated_response.status_code == 200
         generation_id = generated_response.json()["generation_id"]
