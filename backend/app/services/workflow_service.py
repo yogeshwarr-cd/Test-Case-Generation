@@ -1,4 +1,4 @@
-import asyncio,uuid
+import asyncio,uuid,logging
 from datetime import datetime,timezone
 from app.core.config import settings
 from app.core.exceptions import WorkflowNotFound,ManualReviewRequired
@@ -12,6 +12,7 @@ from app.agents.testcase_generation_agent import TestCaseGenerationAgent
 from app.agents.testcase_validation_agent import TestCaseValidationAgent
 from app.orchestrator import nodes
 from app.services.cache_service import cache
+logger = logging.getLogger(__name__)
 class WorkflowService:
     """Coordinates agents; persistence adapters can subscribe to state transitions."""
     def __init__(self): self._states={};self._tasks={};self.orchestrator=WorkflowOrchestrator()
@@ -20,6 +21,7 @@ class WorkflowService:
         payload=(request.input_payload.model_dump() if request.input_payload else await DatabaseInputSource().load(project_id))
         cache_key=cache.fingerprint("workflow",{"input":payload,"mock_mode":request.mock_mode,"models":{"generation":settings.cerebras_generation_model or settings.cerebras_model,"regeneration":settings.cerebras_regeneration_model or settings.cerebras_model}})
         workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload,request.mock_mode);state["cache_key"]=cache_key;state["cache_hit"]=False
+        logger.info("workflow_started workflow_id=%s request_id=%s current_stage=%s elapsed_seconds=0.000", workflow_id, workflow_id, state["current_stage"])
         cached=await cache.get_json(cache_key)
         if cached:
             state.update({key:cached.get(key,value) for key,value in {"structured_context":{},"scenarios":[],"scenario_validation":{},"test_cases":[],"testcase_validation":{}}.items()})
@@ -40,7 +42,7 @@ class WorkflowService:
     async def cancel(self,wid):
         state=self.get(wid); task=self._tasks.get(wid)
         if task and not task.done(): task.cancel()
-        state["cancelled"]=True;state["status"]=state["current_stage"]="cancelled";return state
+        state["cancelled"]=True;state["status"]=state["current_stage"]="cancelled";logger.info("workflow_cancelled workflow_id=%s request_id=%s current_stage=%s elapsed_seconds=%.3f", wid, wid, state["current_stage"], (datetime.now(timezone.utc)-state["started_at"]).total_seconds());return state
     async def resume(self,wid,request):
         state=self.get(wid)
         if state["status"] not in {"scenario_manual_review","testcase_manual_review"}: raise ManualReviewRequired("Workflow is not awaiting manual review")
@@ -48,7 +50,7 @@ class WorkflowService:
         state["manual_feedback"]=request.feedback
         if request.stage=="scenario_manual_review": state["scenario_attempt_count"]=0;state["current_stage"]="pending"
         else: state["testcase_attempt_count"]=0;state["current_stage"]="generating_test_cases"
-        self._tasks[wid]=asyncio.create_task(self._run(wid)); return state
+        self._tasks[wid]=asyncio.create_task(self._run(wid)); logger.info("workflow_resumed workflow_id=%s request_id=%s current_stage=%s elapsed_seconds=%.3f", wid, wid, state["current_stage"], (datetime.now(timezone.utc)-state["started_at"]).total_seconds()); return state
     def decide(self,wid,request):
         state=self.get(wid); key=f"{request.entity_type}:{request.entity_id}"
         state.setdefault("review_decisions",{})[key]=request.decision

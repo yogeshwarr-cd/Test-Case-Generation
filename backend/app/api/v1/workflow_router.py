@@ -4,12 +4,15 @@ from fastapi.responses import StreamingResponse
 from app.schemas.input_schema import WorkflowStartRequest
 from app.schemas.workflow_schema import WorkflowStartResponse,ResumeRequest,WorkflowEntityDecisionRequest,WorkflowBulkDecisionRequest,WorkflowRegenerationRequest,WorkflowReviewApprovalRequest
 from app.services.workflow_service import workflow_service
+from app.orchestrator.state import workflow_progress
 router=APIRouter(prefix="/workflows",tags=["AI workflows"])
 @router.post("/start",response_model=WorkflowStartResponse,status_code=status.HTTP_202_ACCEPTED,summary="Start test generation workflow")
 async def start_workflow(request:WorkflowStartRequest):
     s=await workflow_service.start(request);return WorkflowStartResponse(workflow_id=s["workflow_id"],project_id=s["project_id"],status=s["status"])
 @router.get("/{workflow_id}",summary="Get workflow status")
-async def get_workflow(workflow_id:uuid.UUID): return workflow_service.get(workflow_id)
+async def get_workflow(workflow_id:uuid.UUID):
+    state = workflow_service.get(workflow_id)
+    return {**state, "progress_percentage": workflow_progress(state.get("current_stage"))}
 @router.get("/{workflow_id}/result",summary="Get generated results")
 async def get_result(workflow_id:uuid.UUID):
     s=workflow_service.get(workflow_id);return {k:s.get(k) for k in ("workflow_id","project_id","status","current_stage","errors","manual_intervention_reason","structured_context","scenarios","scenario_validation","test_cases","testcase_validation")}
@@ -22,6 +25,7 @@ async def events(workflow_id:uuid.UUID):
             snapshot={
                 "status":s["status"],
                 "current_stage":s["current_stage"],
+                "progress_percentage":workflow_progress(s.get("current_stage")),
                 "scenario_attempt_count":s.get("scenario_attempt_count",0),
                 "testcase_attempt_count":s.get("testcase_attempt_count",0),
                 "errors":s.get("errors",[]),

@@ -433,6 +433,9 @@ class {class_name}:
     def assert_expected(self, expected_result: str, action: str):
         lowered = expected_result.lower()
         quoted = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", expected_result)
+        if any(phrase in lowered for phrase in ("page loads", "page is visible", "application loads", "application is visible", "screen is displayed")):
+            expect(self.page.locator("body")).to_be_visible()
+            return
         if any(word in lowered for word in ("entered", "input", "field", "value")) and any(
             word in lowered for word in ("contains", "display", "entered", "value")
         ):
@@ -1616,6 +1619,9 @@ class AutomationService:
     ) -> None:
         lowered = expected_result.lower()
         quoted = re.findall(r"['\"]([^'\"]+)['\"]", expected_result)
+        if any(phrase in lowered for phrase in ("page loads", "page is visible", "application loads", "application is visible", "screen is displayed")):
+            await page.locator("body").wait_for(state="visible", timeout=int(settings.automation_action_timeout_seconds * 1000))
+            return
         # Input-value outcomes must be checked as values, not as visible text.
         if any(word in lowered for word in ("entered", "input", "field", "value")) and (
             any(word in lowered for word in ("contains", "display", "entered", "value"))
