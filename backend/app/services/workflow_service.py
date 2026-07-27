@@ -18,7 +18,7 @@ class WorkflowService:
     async def start(self,request):
         project_id=request.project_id or uuid.uuid4()
         payload=(request.input_payload.model_dump() if request.input_payload else await DatabaseInputSource().load(project_id))
-        cache_key=cache.fingerprint("workflow",{"input":payload,"mock_mode":request.mock_mode,"models":{"generation":settings.cerebras_generation_model or settings.cerebras_model,"regeneration":settings.cerebras_regeneration_model or settings.cerebras_model}})
+        cache_key=cache.fingerprint("workflow",{"input":payload,"mock_mode":request.mock_mode,"models":{"generation":settings.groq_generation_model or settings.groq_model,"regeneration":settings.groq_regeneration_model or settings.groq_model}})
         workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload,request.mock_mode);state["cache_key"]=cache_key;state["cache_hit"]=False
         cached=await cache.get_json(cache_key)
         if cached:
@@ -73,9 +73,15 @@ class WorkflowService:
         return {"status":"completed","item":result,"result":{k:state.get(k) for k in ("scenarios","scenario_validation","test_cases","testcase_validation")}}
     async def approve_review(self,wid,request):
         state=self.get(wid)
+        if state["status"] != request.stage or request.stage not in {"scenario_manual_review","testcase_manual_review"}:
+            raise ManualReviewRequired("Workflow is not awaiting approval for this review stage")
         if request.stage=="scenario_manual_review":
+            decisions=state.setdefault("review_decisions",{})
+            for item in state.get("scenarios",[]): decisions[f"scenario:{item['scenario_id']}"]="approved"
             state["scenario_validation"]["status"]="passed";state["status"]=state["current_stage"]="generating_test_cases"
             self._tasks[wid]=asyncio.create_task(self._continue_after_scenario_approval(wid));return state
+        decisions=state.setdefault("review_decisions",{})
+        for item in state.get("test_cases",[]): decisions[f"testCase:{item['test_case_id']}"]="approved"
         state["testcase_validation"]["status"]="passed"
         state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);self._states[wid]=state;await self._cache_completed(state);return state
     async def _continue_after_scenario_approval(self,wid):

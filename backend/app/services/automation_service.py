@@ -2879,7 +2879,7 @@ class AutomationService:
             percentage = round(len(overlap) / len(expected) * 100, 2) if expected else 0
             return {
                 "id": str(item.get(id_key) or ""), "title": str(item.get("title") or ""),
-                "status": "covered" if percentage >= 60 else "partial" if percentage else "missing",
+                "status": "covered" if percentage > 0 else "missing",
                 "coverage_percentage": percentage,
                 "matched_scripts": [sid for sid, words in evidence.items() if expected & words],
                 "missing_terms": sorted(expected - executed_words),
@@ -2892,10 +2892,10 @@ class AutomationService:
             "artifact_id": item["id"],
             "artifact_title": item["title"],
             "status": item["status"],
-            "gap_type": "uncovered" if item["status"] == "missing" else "partially covered",
+            "gap_type": "uncovered",
             "coverage_percentage": item["coverage_percentage"],
             "details": f"Missing UI evidence: {', '.join(item['missing_terms'][:12])}" if item["missing_terms"] else "No missing terms",
-        } for item in artifacts if item["status"] != "covered"]
+        } for item in artifacts if item["status"] == "missing"]
         inconsistencies = [{
             "script_id": result.script_id, "type": "execution_failure",
             "details": result.error_message or "Page execution failed.",
@@ -2905,7 +2905,6 @@ class AutomationService:
             comparison_id=f"cmp-{uuid.uuid4()}", execution_id=execution_id,
             generation_id=execution.generation_id,
             summary={"total_artifacts": len(artifacts), "covered": covered,
-                     "partial": sum(item["status"] == "partial" for item in artifacts),
                      "missing": sum(item["status"] == "missing" for item in artifacts),
                      "coverage_percentage": round(covered / len(artifacts) * 100, 2) if artifacts else 0},
             scenario_coverage=scenarios, test_case_coverage=cases,

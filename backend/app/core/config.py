@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     app_name: str = "Test Case Generator"
     app_env: str = "development"
     app_host: str = "0.0.0.0"
-    app_port: int = 8003
+    app_port: int = 8001
     debug: bool = True
     app_mock_mode: bool = False  # TODO: re-enable mock mode when needed
     database_url: str = (
@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     groq_validation_model: str = ""
     groq_regeneration_model: str = ""
     groq_max_concurrent_requests: int = 1
-    groq_max_output_tokens: int = 1200
+    groq_max_output_tokens: int = 6000
     groq_min_request_interval_seconds: float = 55.0
     groq_quota_cooldown_seconds: float = 65.0
     cerebras_api_key: str = ""
