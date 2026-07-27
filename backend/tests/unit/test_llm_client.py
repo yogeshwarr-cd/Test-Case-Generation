@@ -655,3 +655,54 @@ def test_cerebras_429_codes_are_classified(message, category, recoverable):
     error = type("RateLimitError", (Exception,), {"status_code": 429})(message)
     classified = _classify_error(error)
     assert (classified.category, classified.recoverable) == (category, recoverable)
+
+
+def test_build_llm_client_configures_all_five_cerebras_keys(monkeypatch):
+    monkeypatch.setattr("app.llm.client.settings.cerebras_api_key", "key-1")
+    monkeypatch.setattr("app.llm.client.settings.cerebras_fallback_api_key", "key-2")
+    monkeypatch.setattr("app.llm.client.settings.cerebras_fallback_2_api_key", "key-3")
+    monkeypatch.setattr("app.llm.client.settings.cerebras_fallback_3_api_key", "key-4")
+    monkeypatch.setattr("app.llm.client.settings.cerebras_fallback_4_api_key", "key-5")
+    monkeypatch.setattr("app.llm.client.settings.app_mock_mode", False)
+
+    from app.llm.client import build_llm_client
+    client = build_llm_client("generation", mock_mode=False)
+    provider_names = [p.name for p in client.providers]
+    assert provider_names == [
+        "cerebras",
+        "cerebras_fallback",
+        "cerebras_fallback_2",
+        "cerebras_fallback_3",
+        "cerebras_fallback_4",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cerebras_five_key_sequential_failover(monkeypatch):
+    p1 = StubProvider("cerebras", [ProviderError("quota_exceeded")])
+    p2 = StubProvider("cerebras_fallback", [ProviderError("quota_exceeded")])
+    p3 = StubProvider("cerebras_fallback_2", [ProviderError("rate_limited", retry_after=0.01)])
+    p4 = StubProvider("cerebras_fallback_3", [ProviderError("temporary_provider_error")])
+    p5 = StubProvider("cerebras_fallback_4", ['{"value":"success_at_key_5"}'])
+
+    client = LLMClient([p1, p2, p3, p4, p5], cerebras_provider_retry_count=0)
+    result = await generate(client)
+    assert result.value == "success_at_key_5"
+    assert p1.calls == 1
+    assert p2.calls == 1
+    assert p3.calls == 1
+    assert p4.calls == 1
+    assert p5.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_non_retryable_error_halts_key_failover(monkeypatch):
+    p1 = StubProvider("cerebras", [ProviderError("schema_validation_error")])
+    p2 = StubProvider("cerebras_fallback", ['{"value":"should_not_be_reached"}'])
+
+    client = LLMClient([p1, p2], cerebras_provider_retry_count=0)
+    with pytest.raises(AllLLMProvidersFailed):
+        await generate(client)
+    assert p1.calls == 1
+    assert p2.calls == 0
+

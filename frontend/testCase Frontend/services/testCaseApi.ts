@@ -7,6 +7,7 @@ import type {
   ScriptGeneration,
   ExecutionReport,
   TraceabilityComparisonReport,
+  CrawlGenerationResponse,
 } from '../types';
 import { parseWorkflowEvent } from '../utils';
 
@@ -42,6 +43,13 @@ export const testCaseApi = {
     return request<ScriptGeneration>('/api/v1/automation/scripts/generate', {
       method: 'POST', body: JSON.stringify({ workflow_id: workflowId, application_url: applicationUrl }),
     });
+  },
+
+  crawlAndGenerate(url: string, options?: { page_limit?: number; depth_limit?: number }) {
+    return request<CrawlGenerationResponse>('/api/v1/automation/url-crawl', {
+      method: 'POST',
+      body: JSON.stringify({ url, ...options }),
+    }, 600000); // up to 10 min for deep crawls
   },
 
   executeScripts(generationId: string, mode: 'automated' | 'manual') {

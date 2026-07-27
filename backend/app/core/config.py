@@ -1,4 +1,4 @@
-import json
+﻿import json
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -51,8 +51,14 @@ class Settings(BaseSettings):
     groq_quota_cooldown_seconds: float = 65.0
     cerebras_api_key: str = ""
     cerebras_fallback_api_key: str = ""
+    cerebras_fallback_2_api_key: str = ""
+    cerebras_fallback_3_api_key: str = ""
+    cerebras_fallback_4_api_key: str = ""
     cerebras_model: str = "gpt-oss-120b"
     cerebras_fallback_model: str = ""
+    cerebras_fallback_2_model: str = ""
+    cerebras_fallback_3_model: str = ""
+    cerebras_fallback_4_model: str = ""
     cerebras_generation_model: str = ""
     cerebras_validation_model: str = ""
     cerebras_regeneration_model: str = ""
@@ -65,6 +71,8 @@ class Settings(BaseSettings):
     llm_structured_output_repair_enabled: bool = False
     llm_scenario_batch_size: int = 5
     llm_testcase_batch_size: int = 4
+    validation_pass_threshold: float = 0.95
+    max_validation_attempts: int = 1
     cerebras_max_concurrent_requests: int = 1
     cerebras_provider_retry_count: int = 0
     cerebras_initial_backoff_seconds: float = 2.0
@@ -105,14 +113,14 @@ class Settings(BaseSettings):
     automation_require_reproducible_failure: bool = True
     automation_crawl_page_limit: int = 20
     automation_crawl_depth_limit: int = 5
-    skyvern_fallback_enabled: bool = False
-    skyvern_integration_mode: str = "self_hosted"
-    skyvern_base_url: str = "http://localhost:8000"
-    skyvern_api_key: str = ""
-    skyvern_timeout_seconds: float = 30.0
-    skyvern_max_attempts: int = 1
-    skyvern_max_calls_per_test: int = 2
-    skyvern_max_calls_per_run: int = 20
+    seacrawl_fallback_enabled: bool = False
+    seacrawl_integration_mode: str = "self_hosted"
+    seacrawl_base_url: str = "http://localhost:8000"
+    seacrawl_api_key: str = ""
+    seacrawl_timeout_seconds: float = 30.0
+    seacrawl_max_attempts: int = 1
+    seacrawl_max_calls_per_test: int = 2
+    seacrawl_max_calls_per_run: int = 20
 
     @field_validator("database_url", "backend_1_database_url", mode="before")
     @classmethod

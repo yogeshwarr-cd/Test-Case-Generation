@@ -21,6 +21,8 @@ from app.core.config import settings
 from app.core.exceptions import AppError
 from app.schemas.automation_schema import (
     AutomationHealth,
+    CrawlAndGenerateRequest,
+    CrawlGenerationResponse,
     DiscoveredElement,
     AutomationRecommendation,
     DeveloperImplementationPlan,
@@ -37,7 +39,7 @@ from app.schemas.automation_schema import (
     RetestStrategy,
     TraceabilityComparisonReport,
 )
-from app.services.skyvern_service import SkyvernAdapter
+from app.services.seacrawl_service import SeacrawlAdapter
 from app.services.cache_service import cache
 from app.services.workflow_service import workflow_service
 
@@ -151,7 +153,7 @@ def _application_map(
         "relationships": relationships,
         "page_count": len(pages),
         "element_count": len(elements),
-        "discovery_engine": "Skyvern + Playwright" if settings.skyvern_fallback_enabled else "Playwright",
+        "discovery_engine": "Seacrawl + Playwright" if settings.seacrawl_fallback_enabled else "Playwright",
         "capture_engine": "Playwright",
     }
 
@@ -430,7 +432,7 @@ class AutomationService:
     def __init__(self) -> None:
         self._generations: dict[str, dict[str, Any]] = {}
         self._reports: dict[str, ExecutionReport] = {}
-        self.skyvern = SkyvernAdapter()
+        self.seacrawl = SeacrawlAdapter()
 
     @property
     def artifact_root(self) -> Path:
@@ -541,14 +543,14 @@ class AutomationService:
                 browser = await playwright.chromium.launch(headless=True)
                 page = await browser.new_page()
                 origin = urlsplit(url)
-                skyvern_urls = await self.skyvern.discover_urls(
+                seacrawl_urls = await self.seacrawl.discover_urls(
                     url=url,
                     page_limit=settings.automation_crawl_page_limit,
                     depth_limit=settings.automation_crawl_depth_limit,
                 )
                 verified_candidates = [
                     candidate
-                    for candidate in skyvern_urls
+                    for candidate in seacrawl_urls
                     if urlsplit(candidate).scheme in {"http", "https"}
                     and urlsplit(candidate).netloc == origin.netloc
                 ]
@@ -863,6 +865,129 @@ class AutomationService:
             manifest,
             settings.redis_script_ttl_seconds,
         )
+
+    async def crawl_and_generate(
+        self, request: CrawlAndGenerateRequest, *, _dedicated_loop: bool = False
+    ) -> CrawlGenerationResponse:
+        """Standalone URL crawl → Playwright script generation.
+
+        Validates the URL, uses Playwright to crawl all same-origin pages up to
+        the configured limits, then generates one verified test script per page.
+        No workflow_id or pre-existing test cases are required.
+        """
+        if sys.platform == "win32" and not settings.app_mock_mode and not _dedicated_loop:
+            return await _on_playwright_loop(
+                lambda: self.crawl_and_generate(request, _dedicated_loop=True)
+            )
+
+        url = str(request.url)
+        page_limit = request.page_limit
+        depth_limit = request.depth_limit
+
+        logger.info("crawl_and_generate() start url=%s page_limit=%d depth_limit=%d", url, page_limit, depth_limit)
+
+        await self._validate_url(url)
+
+        # Temporarily override crawl limits for this request
+        original_page_limit = settings.automation_crawl_page_limit
+        original_depth_limit = settings.automation_crawl_depth_limit
+        settings.automation_crawl_page_limit = page_limit
+        settings.automation_crawl_depth_limit = depth_limit
+        try:
+            title, elements = await self._discover(url)
+        finally:
+            settings.automation_crawl_page_limit = original_page_limit
+            settings.automation_crawl_depth_limit = original_depth_limit
+
+        crawl_id = f"crawl-{uuid.uuid4()}"
+        directory = self.artifact_root / crawl_id
+        directory.mkdir(parents=True, exist_ok=True)
+
+        element_dicts = [element.model_dump(mode="json") for element in elements]
+        application_map = _application_map(url, title, element_dicts)
+
+        scripts: list[GeneratedScript] = []
+        skipped_count = 0
+
+        for index, page_info in enumerate(application_map.get("pages", []), start=1):
+            page_url = str(page_info.get("url") or url)
+            page_elements = list(page_info.get("elements") or [])
+            page_name = urlsplit(page_url).path.strip("/") or title or "home"
+            script_id = f"crawl-page-{index:03d}-{_safe_name(page_name)}"
+            path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
+            test_case_label = f"Page: {page_name}"
+            try:
+                source = _page_script_source(test_case_label, page_url, page_elements)
+                _validate_generated_source(source)
+            except (SyntaxError, ValueError) as source_err:
+                logger.warning(
+                    "Crawl script skipped – validation failed script_id=%s error=%s: %s",
+                    script_id, type(source_err).__name__, source_err,
+                )
+                skipped_count += 1
+                continue
+            path.write_text(source, encoding="utf-8")
+            scripts.append(
+                GeneratedScript(
+                    script_id=script_id,
+                    workflow_id=uuid.UUID(int=0),  # sentinel — no workflow
+                    test_case_id=f"CRAWL-{index:03d}",
+                    scenario_id="URL-CRAWL",
+                    name=test_case_label,
+                    application_url=url,
+                    source=source,
+                    download_path=f"/api/v1/automation/url-crawl/{crawl_id}/{script_id}/download",
+                    page_url=page_url,
+                    page_elements=page_elements,
+                )
+            )
+
+        logger.info(
+            "crawl_and_generate() complete crawl_id=%s scripts=%d skipped=%d",
+            crawl_id, len(scripts), skipped_count,
+        )
+
+        if not scripts:
+            raise AutomationError(
+                "No scripts could be generated from the crawled URL. "
+                "Ensure the URL loads a real UI and is not behind a login wall."
+            )
+
+        response = CrawlGenerationResponse(
+            crawl_id=crawl_id,
+            url=url,
+            page_title=title,
+            pages_crawled=len(application_map.get("pages", [])),
+            elements_found=len(elements),
+            scripts=scripts,
+            discovered_elements=elements,
+            application_map=application_map,
+        )
+
+        # Persist manifest for download route
+        (directory / "crawl.json").write_text(
+            json.dumps(response.model_dump(mode="json"), default=str, indent=2),
+            encoding="utf-8",
+        )
+
+        # Cache the crawl generation keyed by crawl_id
+        self._generations[crawl_id] = {
+            "response": response,
+            "workflow": {},
+            "directory": directory,
+            "learned_locators": {},
+        }
+
+        return response
+
+    async def crawl_script_path(self, crawl_id: str, script_id: str) -> Path:
+        """Resolve the .pwscript file for a URL-crawl download."""
+        safe_crawl = _safe_name(crawl_id)
+        safe_script = _safe_name(script_id)
+        path = self.artifact_root / safe_crawl / f"{safe_script}{SCRIPT_ARTIFACT_SUFFIX}"
+        if not path.is_file():
+            raise AutomationNotFound(f"Crawl script not found: {crawl_id}/{script_id}")
+        return path
 
     async def generation(self, generation_id: str) -> dict[str, Any]:
         if generation_id in self._generations:
@@ -1193,7 +1318,7 @@ class AutomationService:
     def _learned_locator_key(url: str, action: str) -> str:
         parsed = urlsplit(url)
         return cache.fingerprint(
-            "skyvern-locator",
+            "seacrawl-locator",
             {
                 "origin": f"{parsed.scheme}://{parsed.netloc}",
                 "path": parsed.path,
@@ -1486,7 +1611,7 @@ class AutomationService:
         results: list[ScriptExecutionResult] = []
         state = generation["workflow"]
         cases = {str(item["test_case_id"]): item for item in state.get("test_cases", [])}
-        run_skyvern_calls = 0
+        run_seacrawl_calls = 0
         from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
         from playwright.async_api import async_playwright
@@ -1522,8 +1647,8 @@ class AutomationService:
                 failed_step = None
                 expected = None
                 element = None
-                skyvern_attempted = False
-                skyvern_succeeded = False
+                seacrawl_attempted = False
+                seacrawl_succeeded = False
                 failure_category = "Script Generation"
                 try:
                     test_case = cases.get(script.test_case_id, {"steps": []})
@@ -1607,22 +1732,22 @@ class AutomationService:
                                     action_recovered = True
                                 except (LookupError, ValueError, PlaywrightError):
                                     pass
-                            # ---- Skyvern fallback – only after all Playwright strategies fail (req 6) ----
+                            # ---- Seacrawl fallback – only after all Playwright strategies fail (req 6) ----
                             if (
                                 not action_recovered
-                                and self.skyvern.enabled
-                                and per_test_calls < settings.skyvern_max_calls_per_test
-                                and run_skyvern_calls < settings.skyvern_max_calls_per_run
+                                and self.seacrawl.enabled
+                                and per_test_calls < settings.seacrawl_max_calls_per_test
+                                and run_seacrawl_calls < settings.seacrawl_max_calls_per_run
                             ):
                                 per_test_calls += 1
-                                run_skyvern_calls += 1
-                                recovery = await self.skyvern.recover(
+                                run_seacrawl_calls += 1
+                                recovery = await self.seacrawl.recover(
                                     url=page.url,
                                     action=action,
                                     expected_result=expected or "",
                                 )
-                                skyvern_attempted = recovery.attempted
-                                skyvern_succeeded = recovery.succeeded
+                                seacrawl_attempted = recovery.attempted
+                                seacrawl_succeeded = recovery.succeeded
                                 if recovery.locator:
                                     try:
                                         await self._retry_recovered(
@@ -1635,11 +1760,11 @@ class AutomationService:
                                             action,
                                             recovery.locator,
                                         )
-                                        element = f"Skyvern locator: {recovery.locator}"
-                                        skyvern_succeeded = True
+                                        element = f"Seacrawl locator: {recovery.locator}"
+                                        seacrawl_succeeded = True
                                     except (LookupError, ValueError, PlaywrightError):
-                                        skyvern_succeeded = False
-                                action_recovered = skyvern_succeeded
+                                        seacrawl_succeeded = False
+                                action_recovered = seacrawl_succeeded
                             if not action_recovered:
                                 raise action_error
 
@@ -1716,8 +1841,8 @@ class AutomationService:
                         console_logs=console_logs,
                         network_errors=network_errors,
                         stack_trace=traceback.format_exc(),
-                        skyvern_attempted=skyvern_attempted,
-                        skyvern_succeeded=skyvern_succeeded,
+                        seacrawl_attempted=seacrawl_attempted,
+                        seacrawl_succeeded=seacrawl_succeeded,
                     )
                     results.append(
                         ScriptExecutionResult(
@@ -2764,9 +2889,12 @@ class AutomationService:
         cases = [coverage(item, "test_case_id") for item in workflow.get("test_cases", [])]
         artifacts = scenarios + cases
         gaps = [{
-            "artifact_id": item["id"], "artifact_title": item["title"],
+            "artifact_id": item["id"],
+            "artifact_title": item["title"],
+            "status": item["status"],
             "gap_type": "uncovered" if item["status"] == "missing" else "partially covered",
-            "details": f"Missing UI evidence: {', '.join(item['missing_terms'][:12])}",
+            "coverage_percentage": item["coverage_percentage"],
+            "details": f"Missing UI evidence: {', '.join(item['missing_terms'][:12])}" if item["missing_terms"] else "No missing terms",
         } for item in artifacts if item["status"] != "covered"]
         inconsistencies = [{
             "script_id": result.script_id, "type": "execution_failure",
@@ -2794,9 +2922,9 @@ class AutomationService:
                 status="healthy",
                 playwright_available=True,
                 browser_available=True,
-                skyvern_enabled=False,
-                skyvern_api_reachable=None,
-                skyvern_configuration_valid=True,
+                seacrawl_enabled=False,
+                seacrawl_api_reachable=None,
+                seacrawl_configuration_valid=True,
                 details={"mode": "mock"},
             )
         if sys.platform == "win32" and not _dedicated_loop:
@@ -2816,15 +2944,15 @@ class AutomationService:
                 await browser.close()
         except Exception as exc:
             details["playwright"] = type(exc).__name__
-        skyvern_reachable = await self.skyvern.health() if self.skyvern.enabled else None
+        seacrawl_reachable = await self.seacrawl.health() if self.seacrawl.enabled else None
         healthy = playwright_available and browser_available
         return AutomationHealth(
             status="healthy" if healthy else "degraded",
             playwright_available=playwright_available,
             browser_available=browser_available,
-            skyvern_enabled=self.skyvern.enabled,
-            skyvern_api_reachable=skyvern_reachable,
-            skyvern_configuration_valid=self.skyvern.configuration_valid,
+            seacrawl_enabled=self.seacrawl.enabled,
+            seacrawl_api_reachable=seacrawl_reachable,
+            seacrawl_configuration_valid=self.seacrawl.configuration_valid,
             details=details,
         )
 

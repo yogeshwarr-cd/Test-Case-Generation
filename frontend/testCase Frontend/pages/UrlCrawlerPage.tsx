@@ -1,0 +1,293 @@
+﻿'use client';
+
+import { useState } from 'react';
+import {
+  ArrowRight,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  FileCode2,
+  Globe,
+  LoaderCircle,
+  Map,
+  Sparkles,
+  Layers,
+} from 'lucide-react';
+import { testCaseApi } from '../services/testCaseApi';
+import type { CrawlGenerationResponse } from '../types';
+import { downloadFile, friendlyError } from '../utils';
+
+function downloadAllAsZip(result: CrawlGenerationResponse) {
+  const combined = result.scripts
+    .map((s) => `# ===== ${s.script_id}.py =====\n\n${s.source}`)
+    .join('\n\n\n');
+  downloadFile('all_crawl_scripts.py', combined, 'text/x-python');
+}
+
+export function UrlCrawlerPage() {
+  const [url, setUrl] = useState('');
+  const [pageLimit, setPageLimit] = useState(20);
+  const [depthLimit, setDepthLimit] = useState(5);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<CrawlGenerationResponse | null>(null);
+  const [selectedScript, setSelectedScript] = useState(0);
+
+  const handleCrawl = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmed = url.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setError('');
+    setResult(null);
+    setSelectedScript(0);
+    try {
+      const response = await testCaseApi.crawlAndGenerate(trimmed, {
+        page_limit: pageLimit,
+        depth_limit: depthLimit,
+      });
+      setResult(response);
+    } catch (err) {
+      setError(friendlyError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const script = result?.scripts[selectedScript];
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-card to-card p-6 sm:p-8">
+        <div className="flex items-start gap-4">
+          <div className="rounded-xl bg-primary p-3 text-primary-foreground">
+            <Globe className="h-6 w-6" />
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">
+              URL Crawler
+            </p>
+            <h1 className="mt-2 text-2xl font-bold sm:text-3xl">
+              Crawl any URL &middot; Generate test scripts
+            </h1>
+            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+              Enter a deployed application URL. The crawler will visit every reachable page,
+              discover interactive elements, and generate a Playwright test script for each page
+              &mdash; no user stories or workflow required.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Crawl Form */}
+      <form onSubmit={handleCrawl} className="space-y-4">
+        {error && (
+          <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600 dark:text-red-300">
+            {error}
+          </div>
+        )}
+
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6 space-y-4">
+          <div className="space-y-2">
+            <label htmlFor="crawl-url" className="text-sm font-semibold">
+              Application URL <span className="text-red-500">*</span>
+            </label>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <input
+                id="crawl-url"
+                type="url"
+                required
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://your-app.example.com"
+                className="min-w-0 flex-1 rounded-xl border border-input bg-background px-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
+              />
+              <button
+                type="submit"
+                disabled={busy || !url.trim()}
+                id="crawl-submit-btn"
+                className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-bold text-primary-foreground shadow-lg shadow-primary/20 transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {busy ? (
+                  <>
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                    Crawling pages&hellip;
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" />
+                    Crawl &amp; Generate
+                    <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition"
+          >
+            {showAdvanced ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            Advanced options
+          </button>
+
+          {showAdvanced && (
+            <div className="grid gap-4 rounded-xl border border-border bg-muted/30 p-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label htmlFor="page-limit" className="text-sm font-semibold">
+                  Page limit <span className="text-muted-foreground font-normal">(1-100)</span>
+                </label>
+                <input
+                  id="page-limit"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={pageLimit}
+                  onChange={(e) => setPageLimit(Number(e.target.value))}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary transition"
+                />
+                <p className="text-xs text-muted-foreground">Max pages the crawler will visit</p>
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="depth-limit" className="text-sm font-semibold">
+                  Depth limit <span className="text-muted-foreground font-normal">(1-10)</span>
+                </label>
+                <input
+                  id="depth-limit"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={depthLimit}
+                  onChange={(e) => setDepthLimit(Number(e.target.value))}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary transition"
+                />
+                <p className="text-xs text-muted-foreground">How many navigation levels deep</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </form>
+
+      {busy && (
+        <div className="rounded-2xl border border-primary/20 bg-primary/5 p-8 text-center space-y-4">
+          <LoaderCircle className="mx-auto h-10 w-10 animate-spin text-primary" />
+          <div>
+            <p className="font-semibold text-primary">Crawling in progress&hellip;</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Playwright is visiting every page, discovering elements, and building test scripts.
+              This may take a minute for larger sites.
+            </p>
+          </div>
+          <div className="flex justify-center gap-6 text-xs text-muted-foreground">
+            <span>URL validated</span>
+            <span className="animate-pulse">Discovering pages</span>
+            <span className="opacity-40">Generating scripts</span>
+          </div>
+        </div>
+      )}
+
+      {result && !busy && (
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-green-500/30 bg-green-500/5 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                <div>
+                  <p className="font-semibold text-green-700 dark:text-green-400">
+                    Crawl complete &mdash; {result.scripts.length} scripts generated
+                  </p>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    {result.page_title ?? result.url} &middot; {result.pages_crawled} pages &middot; {result.elements_found} elements discovered
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => downloadAllAsZip(result)}
+                id="download-all-btn"
+                className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm font-semibold shadow-sm hover:bg-muted transition"
+              >
+                <Download className="h-4 w-4" />
+                Download all scripts
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              { label: 'Pages crawled', value: result.pages_crawled, icon: <Map className="h-4 w-4" /> },
+              { label: 'Elements found', value: result.elements_found, icon: <Layers className="h-4 w-4" /> },
+              { label: 'Scripts generated', value: result.scripts.length, icon: <FileCode2 className="h-4 w-4" /> },
+              { label: 'Depth limit', value: depthLimit, icon: <Globe className="h-4 w-4" /> },
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-xl border border-border bg-card p-4 text-center shadow-sm">
+                <div className="flex justify-center text-primary mb-1">{stat.icon}</div>
+                <p className="text-2xl font-bold">{stat.value}</p>
+                <p className="text-xs text-muted-foreground mt-1">{stat.label}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
+            <aside className="space-y-1 rounded-2xl border border-border bg-card p-3 max-h-[40rem] overflow-y-auto">
+              <p className="px-2 py-1 text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                Generated scripts
+              </p>
+              {result.scripts.map((item, index) => (
+                <button
+                  key={item.script_id}
+                  id={`script-btn-${index}`}
+                  onClick={() => setSelectedScript(index)}
+                  className={`w-full rounded-xl p-3 text-left text-sm transition ${
+                    selectedScript === index
+                      ? 'bg-primary text-primary-foreground shadow-md'
+                      : 'hover:bg-muted'
+                  }`}
+                >
+                  <span className="flex items-center gap-2 font-semibold">
+                    <FileCode2 className="h-3.5 w-3.5 shrink-0" />
+                    {item.name}
+                  </span>
+                  <span className="mt-1 block truncate text-xs opacity-70">
+                    {item.page_url ?? item.test_case_id}
+                  </span>
+                </button>
+              ))}
+            </aside>
+
+            {script && (
+              <section className="min-w-0 rounded-2xl border border-border bg-card overflow-hidden">
+                <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 p-4">
+                  <div>
+                    <h2 className="font-semibold">{script.name}</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {script.page_url} &middot; {script.script_id}
+                    </p>
+                  </div>
+                  <button
+                    id={`download-script-${script.script_id}`}
+                    onClick={() => downloadFile(`${script.script_id}.py`, script.source, 'text/x-python')}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold hover:bg-muted transition"
+                  >
+                    <Download className="h-4 w-4" />
+                    Download
+                  </button>
+                </div>
+                <pre
+                  id="script-preview"
+                  className="max-h-[36rem] overflow-auto p-5 text-xs leading-relaxed font-mono bg-background"
+                >
+                  {script.source}
+                </pre>
+              </section>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

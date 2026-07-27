@@ -465,6 +465,16 @@ class LLMClient:
                     "retry_after": error.retry_after,
                 }
                 if error.category in {
+                    "schema_validation_error",
+                    "missing_required_fields",
+                    "invalid_request",
+                }:
+                    logger.warning(
+                        "LLM generation failed with non-retryable error provider=%s model=%s request_id=%s failure_reason=%s decision=stop_failover",
+                        provider.name, provider.model, request_id, error.category,
+                    )
+                    raise AllLLMProvidersFailed(attempted, failures)
+                if error.category in {
                     "authentication",
                     "missing_configuration",
                     "permission_denied",
@@ -539,6 +549,12 @@ class LLMClient:
                     error.status_code,
                 )
                 await asyncio.sleep(delay)
+            if self._has_later_available_provider(provider_index):
+                next_provider = self.providers[provider_index + 1]
+                logger.warning(
+                    "LLM provider key failover switching provider current_provider=%s next_provider=%s request_id=%s failure_reason=%s",
+                    provider.name, next_provider.name, request_id, failures.get(provider.name, {}).get("category", "-"),
+                )
         raise AllLLMProvidersFailed(attempted, failures)
 
 
@@ -554,30 +570,39 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
             provider_retry_count=0,
             cerebras_provider_retry_count=0,
         )
-    model_by_provider = {
-        "groq": getattr(settings, f"groq_{task}_model") or settings.groq_model,
-        "groq_fallback": settings.groq_fallback_model or settings.groq_model,
-    }
-    max_output_tokens = min(
-        getattr(settings, f"llm_{task}_max_output_tokens"),
-        settings.groq_max_output_tokens,
-    )
-    providers = [
-        GroqProvider(
-            settings.groq_api_key,
-            model_by_provider["groq"],
-            max_output_tokens=max_output_tokens,
-        )
+    task_model = getattr(settings, f"cerebras_{task}_model") or settings.cerebras_model
+    key_configs = [
+        ("cerebras", settings.cerebras_api_key, task_model),
+        ("cerebras_fallback", settings.cerebras_fallback_api_key, settings.cerebras_fallback_model or settings.cerebras_model),
+        ("cerebras_fallback_2", settings.cerebras_fallback_2_api_key, settings.cerebras_fallback_2_model or settings.cerebras_fallback_model or settings.cerebras_model),
+        ("cerebras_fallback_3", settings.cerebras_fallback_3_api_key, settings.cerebras_fallback_3_model or settings.cerebras_fallback_model or settings.cerebras_model),
+        ("cerebras_fallback_4", settings.cerebras_fallback_4_api_key, settings.cerebras_fallback_4_model or settings.cerebras_fallback_model or settings.cerebras_model),
     ]
-    if settings.groq_fallback_api_key:
-        providers.append(
-            GroqProvider(
-                settings.groq_fallback_api_key,
-                model_by_provider["groq_fallback"],
-                max_output_tokens=max_output_tokens,
-                provider_name="groq_fallback",
+
+    providers = []
+    provider_concurrency = {}
+    provider_min_request_interval = {}
+    provider_cooldown_seconds = {}
+
+    for provider_name, api_key, model in key_configs:
+        if api_key:
+            providers.append(
+                CerebrasProvider(api_key, model, provider_name=provider_name)
             )
-        )
+            provider_concurrency[provider_name] = settings.cerebras_max_concurrent_requests
+            provider_min_request_interval[provider_name] = settings.cerebras_min_request_interval_seconds
+            provider_cooldown_seconds[provider_name] = settings.cerebras_quota_cooldown_seconds
+
+    if not providers:
+        default_p1 = CerebrasProvider(settings.cerebras_api_key, task_model, provider_name="cerebras")
+        default_p2 = CerebrasProvider(settings.cerebras_fallback_api_key, settings.cerebras_fallback_model or settings.cerebras_model, provider_name="cerebras_fallback")
+        providers = [default_p1, default_p2]
+        for p in providers:
+            provider_concurrency[p.name] = settings.cerebras_max_concurrent_requests
+            provider_min_request_interval[p.name] = settings.cerebras_min_request_interval_seconds
+            provider_cooldown_seconds[p.name] = settings.cerebras_quota_cooldown_seconds
+
+    max_output_tokens = getattr(settings, f"llm_{task}_max_output_tokens")
     return LLMClient(
         providers,
         timeout=settings.llm_request_timeout_seconds,
@@ -587,19 +612,10 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
         rate_limit_backoff_seconds=settings.llm_rate_limit_backoff_seconds,
         rate_limit_jitter_seconds=settings.llm_rate_limit_jitter_seconds,
         rate_limit_fallback_threshold_seconds=settings.llm_rate_limit_fallback_threshold_seconds,
-        provider_concurrency={
-            "groq": settings.groq_max_concurrent_requests,
-            "groq_fallback": settings.groq_max_concurrent_requests,
-        },
-        provider_min_request_interval={
-            "groq": settings.groq_min_request_interval_seconds,
-            "groq_fallback": settings.groq_min_request_interval_seconds,
-        },
+        provider_concurrency=provider_concurrency,
+        provider_min_request_interval=provider_min_request_interval,
         cerebras_provider_retry_count=settings.cerebras_provider_retry_count,
         cerebras_initial_backoff_seconds=settings.cerebras_initial_backoff_seconds,
         cerebras_max_backoff_seconds=settings.cerebras_max_backoff_seconds,
-        provider_cooldown_seconds={
-            "groq": settings.groq_quota_cooldown_seconds,
-            "groq_fallback": settings.groq_quota_cooldown_seconds,
-        },
+        provider_cooldown_seconds=provider_cooldown_seconds,
     )

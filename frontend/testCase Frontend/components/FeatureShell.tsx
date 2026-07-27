@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { FlaskConical, Home } from 'lucide-react';
+import { FlaskConical, Globe, Home } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 export function FeatureShell({ children }: { children: React.ReactNode }) {
@@ -18,6 +18,13 @@ export function FeatureShell({ children }: { children: React.ReactNode }) {
             </span>
           </Link>
           <div className="flex items-center gap-2">
+            <Link
+              href="/test-case-generation/url-crawler"
+              id="nav-url-crawler"
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 text-sm font-medium text-primary hover:bg-primary/10 transition"
+            >
+              <Globe className="h-4 w-4" /><span className="hidden sm:inline">URL Crawler</span>
+            </Link>
             <Link href="/" className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm font-medium hover:bg-muted">
               <Home className="h-4 w-4" /><span className="hidden sm:inline">Home</span>
             </Link>
