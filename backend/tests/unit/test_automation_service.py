@@ -15,6 +15,7 @@ from app.services.automation_service import (
     SCRIPT_ARTIFACT_SUFFIX,
     AutomationError,
     AutomationService,
+    InvalidGeneratedStepError,
     _best_page_url,
     _canonical_page_url,
     _challenge_evidence,
@@ -24,6 +25,37 @@ from app.services.automation_service import (
     _validate_css_selector,
     _validate_generated_source,
 )
+
+
+def test_failure_locator_evidence_lists_verified_strategies_in_priority_order():
+    details, attempts = AutomationService._locator_evidence({
+        "tag": "button",
+        "test_id": "submit",
+        "aria_label": "Submit order",
+        "role": "button",
+        "name": "Submit",
+        "css_selector": "#submit",
+        "locator_validated": True,
+        "page_url": "https://example.test/checkout",
+    })
+
+    assert details["discovered_page_url"] == "https://example.test/checkout"
+    assert [item["strategy"] for item in attempts[:3]] == [
+        "test_id",
+        "aria_label",
+        "role_and_accessible_name",
+    ]
+    assert all(item["attempted"] for item in attempts)
+
+
+@pytest.mark.asyncio
+async def test_observation_only_step_is_generated_script_defect():
+    with pytest.raises(InvalidGeneratedStepError, match="no executable action"):
+        await AutomationService()._perform(
+            object(),
+            "Observe the list of products",
+            [],
+        )
 
 
 def test_cloudflare_challenge_is_rejected_before_generation():

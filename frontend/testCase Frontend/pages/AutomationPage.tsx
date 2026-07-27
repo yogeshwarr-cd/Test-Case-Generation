@@ -156,6 +156,7 @@ function ExecutionDashboard({ report }: { report: ExecutionReport }) {
 }
 
 function DeveloperReportCard({ report }: { report: DeveloperExecutionReport }) {
+  const failure = report.technical_failure_details;
   const requirements = [
     ...report.developer_implementation_requirements.ui.map((value) => `UI: ${value}`),
     ...report.developer_implementation_requirements.backend_api.map((value) => `Backend/API: ${value}`),
@@ -165,13 +166,41 @@ function DeveloperReportCard({ report }: { report: DeveloperExecutionReport }) {
   return <div className="mt-4 space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
     <ReportSection title="Issue Title"><h4 className="text-base font-semibold">{report.issue_title}</h4></ReportSection>
     {report.classification && <ReportSection title="Evidence Classification"><p className="font-semibold">{report.classification} · {Math.round((report.confidence ?? 0) * 100)}% confidence{report.developer_issue_created ? ' · developer issue created' : ' · no developer issue created'}</p></ReportSection>}
+    {failure && <ReportSection title="Failure Summary"><div className="grid gap-2 md:grid-cols-2">
+      <p><strong>Category:</strong> {failure.failure_category}</p><p><strong>Stage:</strong> {failure.failure_stage ?? 'Unknown'}</p>
+      <p><strong>Test case:</strong> {failure.test_case_id} · {failure.test_case_title}</p><p><strong>Scenario:</strong> {String(failure.test_scenario?.title ?? failure.test_scenario?.scenario_id ?? 'Not mapped')}</p>
+      <p><strong>Failed step:</strong> {failure.failed_step ?? 'Unknown'}</p><p><strong>Action:</strong> {failure.failed_action ?? 'No executable action'}</p>
+      <p><strong>Current URL:</strong> {failure.page_url ?? 'Unavailable'}</p><p><strong>Expected URL:</strong> {failure.expected_page_url ?? 'Unavailable'}</p>
+      <p><strong>Page title:</strong> {failure.page_title ?? 'Unavailable'}</p><p><strong>HTTP status:</strong> {failure.http_response_status ?? 'Unavailable'}</p>
+      <p><strong>Executed:</strong> {failure.execution_timestamp}</p><p><strong>Developer issue:</strong> {failure.developer_issue_recommended ? 'Recommended' : 'Not recommended'}</p>
+    </div></ReportSection>}
     <ReportSection title="Affected Feature/User Story"><p><strong>{report.affected_feature_user_story.feature}</strong></p><TextList values={report.affected_feature_user_story.user_stories} empty="No mapped user story was found." /></ReportSection>
+    {report.mapping_explanation && <ReportSection title="Mapping Status"><p>{report.mapping_explanation}</p></ReportSection>}
     <ReportSection title="Problem Description"><p>{report.problem_description}</p></ReportSection>
     <ReportSection title="Expected vs Actual Application Behavior"><p><strong>Expected:</strong> {report.expected_vs_actual_application_behavior.expected}</p><p className="mt-2"><strong>Actual:</strong> {report.expected_vs_actual_application_behavior.actual}</p></ReportSection>
     <ReportSection title="Missing Functionality"><p>{report.missing_functionality}</p></ReportSection>
+    {failure && <ReportSection title="Playwright Locator Evidence">
+      <p><strong>Exact locator:</strong> {failure.exact_locator ?? 'No valid locator was produced.'}</p>
+      {failure.locator_diagnosis && <p className="mt-2"><strong>Diagnosis:</strong> {failure.locator_diagnosis}</p>}
+      <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-background p-3 text-xs">{JSON.stringify({ locator: failure.locator_details, alternatives: failure.alternate_locators_attempted }, null, 2)}</pre>
+    </ReportSection>}
+    {failure && Object.keys(failure.input_details).length > 0 && <ReportSection title="Input Evidence"><pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-background p-3 text-xs">{JSON.stringify(failure.input_details, null, 2)}</pre></ReportSection>}
+    {failure && Object.keys(failure.navigation_details).length > 0 && <ReportSection title="Navigation Evidence"><pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-background p-3 text-xs">{JSON.stringify(failure.navigation_details, null, 2)}</pre></ReportSection>}
+    {failure && Object.keys(failure.assertion_details).length > 0 && <ReportSection title="Assertion Evidence"><pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-background p-3 text-xs">{JSON.stringify(failure.assertion_details, null, 2)}</pre></ReportSection>}
+    {failure && <ReportSection title="Execution Evidence"><TextList values={[
+      failure.screenshot ? `Screenshot: ${failure.screenshot}` : '',
+      failure.trace_path ? `Trace: ${failure.trace_path}` : '',
+      failure.dom_snapshot ? `DOM snapshot: ${failure.dom_snapshot}` : '',
+      ...failure.console_logs.map((value) => `Console: ${value}`),
+      ...failure.network_errors.map((value) => `Network: ${value}`),
+    ].filter(Boolean)} empty="No execution evidence was captured." /></ReportSection>}
+    {report.root_cause_analysis && <ReportSection title="Root Cause Analysis"><p>{report.root_cause_analysis}</p></ReportSection>}
+    <ReportSection title="Reproduction Steps"><TextList values={report.reproduction_steps ?? []} ordered /></ReportSection>
+    <ReportSection title="Recommended Script Correction"><TextList values={report.recommended_script_correction ?? []} /></ReportSection>
+    <ReportSection title="Recommended Application Fix"><TextList values={report.recommended_application_fix ?? []} /></ReportSection>
     <ReportSection title="Developer Implementation Requirements"><TextList values={requirements} /></ReportSection>
     <ReportSection title="Acceptance Criteria"><TextList values={report.acceptance_criteria.map((item) => `${item.id}: ${item.title}`)} empty="No acceptance criteria were mapped." /></ReportSection>
-    <ReportSection title="Priority"><p className="font-semibold">{report.priority}</p></ReportSection>
+    <ReportSection title="Severity / Priority"><p className="font-semibold">{report.severity ?? report.priority} / {report.priority}</p></ReportSection>
   </div>;
 }
 

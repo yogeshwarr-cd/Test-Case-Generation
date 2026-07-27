@@ -284,7 +284,16 @@ export interface TraceabilityComparisonReport {
 
 export interface FailureAnalysis {
   test_case_id: string;
+  issue_title?: string;
+  confidence_score: number;
+  affected_feature?: string;
+  mapped_user_stories: Array<{ id: string; title: string }>;
+  mapped_acceptance_criteria: Array<{ id: string; title: string }>;
+  test_scenario: Record<string, unknown>;
+  test_case_title?: string;
   failed_step?: number;
+  failed_action?: string;
+  failure_stage?: string;
   expected_result?: string;
   actual_result?: string;
   failure_reason: string;
@@ -301,13 +310,39 @@ export interface FailureAnalysis {
     | 'Environment Issue'
     | 'Page Failure'
     | 'Application Failure'
+    | 'Generated Script Defect'
+    | 'Test Data Failure'
+    | 'API Failure'
+    | 'Authentication Failure'
+    | 'Application State Failure'
+    | 'Blocked Page'
+    | 'Dynamic Content Timeout'
     // legacy
     | 'Script Generation'
     | 'Locator'
     | 'Navigation'
     | 'Application';
   page_url?: string;
+  expected_page_url?: string;
+  page_title?: string;
+  http_response_status?: number;
+  execution_timestamp: string;
   ui_element?: string;
+  exact_locator?: string;
+  locator_details: Record<string, unknown>;
+  alternate_locators_attempted: Array<Record<string, unknown>>;
+  locator_diagnosis?: string;
+  input_details: Record<string, unknown>;
+  navigation_details: Record<string, unknown>;
+  assertion_details: Record<string, unknown>;
+  api_details: Record<string, unknown>;
+  application_state_details: Record<string, unknown>;
+  captured_dom_text?: string;
+  reproduction_steps: string[];
+  severity: 'Critical' | 'High' | 'Medium' | 'Low';
+  priority: 'Critical' | 'High' | 'Medium' | 'Low';
+  developer_issue_recommended: boolean;
+  mapping_explanation?: string;
   screenshot?: string;
   /** Path to saved DOM snapshot HTML (on failure) */
   dom_snapshot?: string;
@@ -433,9 +468,16 @@ export interface DeveloperExecutionReport {
   };
   acceptance_criteria: Array<{ id: string; title: string }>;
   priority: 'Critical' | 'High' | 'Medium' | 'Low';
+  severity?: 'Critical' | 'High' | 'Medium' | 'Low';
   classification?: FailureIntelligence['classification'];
   confidence?: number;
   developer_issue_created?: boolean;
+  technical_failure_details?: FailureAnalysis;
+  root_cause_analysis?: string;
+  reproduction_steps?: string[];
+  recommended_script_correction?: string[];
+  recommended_application_fix?: string[];
+  mapping_explanation?: string;
 }
 
 export interface QaDiagnosticReport {

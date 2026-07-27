@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -106,7 +106,16 @@ class ExecuteScriptsRequest(BaseModel):
 
 class FailureAnalysis(BaseModel):
     test_case_id: str
+    issue_title: str | None = None
+    confidence_score: float = Field(default=0, ge=0, le=1)
+    affected_feature: str | None = None
+    mapped_user_stories: list[dict[str, str]] = Field(default_factory=list)
+    mapped_acceptance_criteria: list[dict[str, str]] = Field(default_factory=list)
+    test_scenario: dict[str, Any] = Field(default_factory=dict)
+    test_case_title: str | None = None
     failed_step: int | None = None
+    failed_action: str | None = None
+    failure_stage: str | None = None
     expected_result: str | None = None
     actual_result: str | None = None
     failure_reason: str
@@ -122,6 +131,13 @@ class FailureAnalysis(BaseModel):
         "Environment Issue",
         "Page Failure",
         "Application Failure",
+        "Generated Script Defect",
+        "Test Data Failure",
+        "API Failure",
+        "Authentication Failure",
+        "Application State Failure",
+        "Blocked Page",
+        "Dynamic Content Timeout",
         # Legacy labels
         "Script Generation",
         "Locator",
@@ -129,7 +145,28 @@ class FailureAnalysis(BaseModel):
         "Application",
     ] = "Application"
     page_url: str | None = None
+    expected_page_url: str | None = None
+    page_title: str | None = None
+    http_response_status: int | None = None
+    execution_timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     ui_element: str | None = None
+    exact_locator: str | None = None
+    locator_details: dict[str, Any] = Field(default_factory=dict)
+    alternate_locators_attempted: list[dict[str, Any]] = Field(default_factory=list)
+    locator_diagnosis: str | None = None
+    input_details: dict[str, Any] = Field(default_factory=dict)
+    navigation_details: dict[str, Any] = Field(default_factory=dict)
+    assertion_details: dict[str, Any] = Field(default_factory=dict)
+    api_details: dict[str, Any] = Field(default_factory=dict)
+    application_state_details: dict[str, Any] = Field(default_factory=dict)
+    captured_dom_text: str | None = None
+    reproduction_steps: list[str] = Field(default_factory=list)
+    severity: Literal["Critical", "High", "Medium", "Low"] = "Medium"
+    priority: Literal["Critical", "High", "Medium", "Low"] = "Medium"
+    developer_issue_recommended: bool = False
+    mapping_explanation: str | None = None
     screenshot: str | None = None
     dom_snapshot: str | None = None   # path to saved DOM HTML snapshot
     trace_path: str | None = None     # path to saved Playwright trace zip

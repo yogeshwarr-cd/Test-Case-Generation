@@ -82,6 +82,10 @@ class AutomationNotFound(AppError):
     error_code = "AUTOMATION_NOT_FOUND"
 
 
+class InvalidGeneratedStepError(ValueError):
+    """The generated step describes an observation but no executable action."""
+
+
 def _safe_name(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]+", "-", value).strip("-")[:80] or "test"
 
@@ -2310,6 +2314,123 @@ class AutomationService:
                 ranked.append((score, element))
         return max(ranked, key=lambda item: item[0])[1] if ranked else None
 
+    @staticmethod
+    def _locator_evidence(
+        element: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        if not element:
+            return {}, []
+        details = {
+            "xpath": element.get("xpath"),
+            "css_selector": element.get("css_selector"),
+            "role": element.get("role"),
+            "accessible_name": element.get("name"),
+            "aria_label": element.get("aria_label"),
+            "label": element.get("label"),
+            "placeholder": element.get("placeholder"),
+            "test_id": element.get("test_id"),
+            "stable_id": element.get("element_id"),
+            "stable_name": element.get("name"),
+            "verified_during_crawl": bool(element.get("locator_validated")),
+            "discovered_page_url": element.get("page_url"),
+        }
+        ordered = (
+            ("test_id", element.get("test_id")),
+            ("aria_label", element.get("aria_label")),
+            (
+                "role_and_accessible_name",
+                (
+                    f"{element.get('role')}:{element.get('name')}"
+                    if element.get("role") and element.get("name")
+                    else None
+                ),
+            ),
+            ("label", element.get("label")),
+            ("placeholder", element.get("placeholder")),
+            ("stable_id", element.get("element_id")),
+            ("stable_name", element.get("name")),
+            (
+                "verified_css",
+                element.get("css_selector")
+                if element.get("locator_validated")
+                else None,
+            ),
+            ("exact_visible_text", element.get("visible_text")),
+        )
+        attempts = [
+            {
+                "strategy": strategy,
+                "locator": str(value),
+                "source": "crawl_evidence",
+                "attempted": True,
+            }
+            for strategy, value in ordered
+            if value
+        ]
+        return details, attempts
+
+    @staticmethod
+    def _failure_stage(action: str, category: str) -> str:
+        lowered = action.lower()
+        if category == "Generated Script Defect":
+            return "generated_test_step"
+        if category in {"Navigation Failure", "Blocked Page"}:
+            return "navigation"
+        if category == "Page Load Timeout":
+            return "page_loading"
+        if category == "Assertion Failure":
+            return "assertion_validation"
+        if category == "Application State Failure":
+            return "application_state_setup"
+        if category == "API Failure":
+            return "api_response"
+        if category == "Authentication Failure":
+            return "authentication"
+        if any(token in lowered for token in ("enter", "type", "fill")):
+            return "entering_data"
+        if any(token in lowered for token in ("select", "choose")):
+            return "selecting_option"
+        if any(token in lowered for token in ("click", "press", "check", "uncheck")):
+            return "clicking"
+        if "wait" in lowered:
+            return "waiting_for_dynamic_content"
+        return "locating_element"
+
+    @staticmethod
+    def _locator_diagnosis(
+        element: dict[str, Any] | None, current_url: str
+    ) -> str | None:
+        if not element:
+            return "No crawl-verified locator was linked to the generated action."
+        discovered_url = str(element.get("page_url") or "")
+        if (
+            discovered_url
+            and current_url
+            and _canonical_page_url(discovered_url)
+            != _canonical_page_url(current_url)
+        ):
+            return (
+                f"The element belongs to {discovered_url}, but execution was on "
+                f"{current_url}."
+            )
+        css = str(element.get("css_selector") or "").strip()
+        if css in {"a", "div", "span", "button", "input"}:
+            return f"The CSS selector {css!r} is too generic."
+        if "nth-of-type" in css or "nth-child" in css:
+            return f"The CSS selector {css!r} is structurally unstable."
+        if css and not element.get("locator_validated"):
+            return f"The CSS selector {css!r} was not verified during crawling."
+        return None
+
+    @staticmethod
+    def _masked_input_value(action: str) -> str | None:
+        values = re.findall(r"['\"]([^'\"]+)['\"]", action)
+        if not values:
+            return None
+        if re.search(r"password|token|secret|api.?key|otp|card|cvv", action, re.I):
+            return "********"
+        return values[-1]
+
     async def _restore_crawl_context(
         self, page: Any, element: dict[str, Any], fallback_url: str
     ) -> list[dict[str, Any]]:
@@ -2453,8 +2574,10 @@ class AutomationService:
         roles: tuple[str, ...]
         interactive_tokens = ("click", "press", "select", "choose", "check", "uncheck", "enter", "type", "fill", "radio")
         if not any(token in lowered for token in interactive_tokens):
-            # Passive / observation step — no element click/fill required
-            return "passive | page state"
+            raise InvalidGeneratedStepError(
+                f"Invalid generated test step: {action!r} has no executable "
+                "action or explicit interaction value."
+            )
         if any(token in lowered for token in ("select", "choose")):
             roles = ("combobox", "radio")
         elif any(token in lowered for token in ("check", "uncheck", "radio")):
@@ -2916,6 +3039,15 @@ class AutomationService:
                 failed_step = None
                 expected = None
                 element = None
+                action = ""
+                context_element: dict[str, Any] | None = None
+                expected_page = ""
+                locator_details: dict[str, Any] = {}
+                locator_attempts: list[dict[str, Any]] = []
+                input_details: dict[str, Any] = {}
+                navigation_details: dict[str, Any] = {}
+                assertion_details: dict[str, Any] = {}
+                http_response_status: int | None = None
                 seacrawl_attempted = False
                 seacrawl_succeeded = False
                 failure_category = "Script Generation"
@@ -2927,11 +3059,30 @@ class AutomationService:
                     # ---- Navigation with explicit wait + validation (req 4, 7) ----
                     failure_category = "Navigation Failure"
                     try:
-                        await page.goto(
+                        source_url = page.url
+                        navigation_response = await page.goto(
                             target_url,
                             wait_until="domcontentloaded",
                             timeout=int(settings.automation_navigation_timeout_seconds * 1000),
                         )
+                        http_response_status = (
+                            navigation_response.status if navigation_response else None
+                        )
+                        redirect_chain: list[str] = []
+                        if navigation_response:
+                            request_cursor = navigation_response.request
+                            while request_cursor:
+                                redirect_chain.append(request_cursor.url)
+                                request_cursor = request_cursor.redirected_from
+                            redirect_chain.reverse()
+                        navigation_details = {
+                            "source_url": source_url,
+                            "intended_destination": target_url,
+                            "actual_destination": page.url,
+                            "redirect_chain": redirect_chain,
+                            "response_status": http_response_status,
+                            "expected_page_elements_appeared": None,
+                        }
                     except PlaywrightTimeoutError as nav_timeout:
                         failure_category = "Page Load Timeout"
                         raise nav_timeout
@@ -2956,7 +3107,11 @@ class AutomationService:
                         failure_category = "Locator Failure"
                         try:
                             context_element = self._context_element(action, disc_dicts)
+                            locator_details, locator_attempts = self._locator_evidence(
+                                context_element
+                            )
                             if context_element:
+                                failure_category = "Application State Failure"
                                 fresh_elements = await self._restore_crawl_context(
                                     page,
                                     context_element,
@@ -2978,6 +3133,12 @@ class AutomationService:
                                     == expected_page
                                 ]
                                 page_elements = [*recorded, *fresh_elements]
+                                failure_category = "Locator Failure"
+                                navigation_details.update({
+                                    "intended_destination": expected_page,
+                                    "actual_destination": page.url,
+                                    "expected_page_elements_appeared": bool(recorded),
+                                })
                             else:
                                 page_elements = [
                                     el for el in disc_dicts
@@ -2989,7 +3150,11 @@ class AutomationService:
                         except (LookupError, PlaywrightError, PlaywrightTimeoutError) as action_error:
                             # Classify timeout separately
                             if isinstance(action_error, PlaywrightTimeoutError):
-                                failure_category = "Page Load Timeout"
+                                failure_category = (
+                                    "Dynamic Content Timeout"
+                                    if "wait" in action.lower()
+                                    else "Locator Failure"
+                                )
                             action_recovered = False
                             # ---- Learned-locator retry ----
                             learned_locator = await self._load_learned_locator(
@@ -3040,6 +3205,11 @@ class AutomationService:
 
                         # ---- Post-action assertion (req 4) ----
                         failure_category = "Assertion Failure"
+                        assertion_details = {
+                            "expected_value": expected,
+                            "actual_value": None,
+                            "comparison_type": "visible text / page-state assertion",
+                        }
                         await self._assert_expected(page, expected or "")
 
                     quality_checks = await self._quality_checks(
@@ -3068,8 +3238,79 @@ class AutomationService:
                     # ---- Classify environment errors (req 10) ----
                     if isinstance(exc, (ImportError, OSError, PermissionError, EnvironmentError)):
                         failure_category = "Environment Issue"
-                    elif isinstance(exc, AssertionError):
+                    elif (
+                        isinstance(exc, AssertionError)
+                        and failure_category != "Assertion Failure"
+                    ):
                         failure_category = "Application Failure"
+                    elif isinstance(exc, InvalidGeneratedStepError):
+                        failure_category = "Generated Script Defect"
+
+                    captured_dom_text: str | None = None
+                    captured_page_title: str | None = None
+                    try:
+                        captured_dom_text = (
+                            await page.locator("body").inner_text(timeout=3000)
+                        )[:5000]
+                    except Exception:
+                        pass
+                    try:
+                        captured_page_title = await page.title()
+                    except Exception:
+                        pass
+                    api_failures = [
+                        entry
+                        for entry in network_errors
+                        if re.search(r"HTTP (?:4|5)\d\d", entry)
+                        and any(token in entry.lower() for token in ("/api/", "graphql"))
+                    ]
+                    if any(re.search(r"HTTP (?:401|403)", entry) for entry in api_failures):
+                        failure_category = "Authentication Failure"
+                    elif api_failures:
+                        failure_category = "API Failure"
+                    elif captured_dom_text and any(
+                        token in captured_dom_text.lower()
+                        for token in ("access denied", "just a moment", "captcha")
+                    ):
+                        failure_category = "Blocked Page"
+                    assertion_details["actual_value"] = str(exc)
+                    if captured_dom_text:
+                        assertion_details["captured_dom_text"] = captured_dom_text
+
+                    if self._failure_stage(action, failure_category) == "entering_data":
+                        input_details = {
+                            "field_name": (
+                                locator_details.get("label")
+                                or locator_details.get("accessible_name")
+                                or locator_details.get("placeholder")
+                            ),
+                            "attempted_value": self._masked_input_value(action),
+                            "visible": None,
+                            "enabled": None,
+                            "editable": None,
+                            "focused": None,
+                            "validation_or_timeout_message": str(exc),
+                        }
+                        if context_element:
+                            for candidate in self._discovered_locator_candidates(
+                                page,
+                                self._locator_phrase(action),
+                                [context_element],
+                            ):
+                                try:
+                                    if await candidate.count():
+                                        target = candidate.first
+                                        input_details.update({
+                                            "visible": await target.is_visible(),
+                                            "enabled": await target.is_enabled(),
+                                            "editable": await target.is_editable(),
+                                            "focused": await target.evaluate(
+                                                "el => document.activeElement === el"
+                                            ),
+                                        })
+                                        break
+                                except Exception:
+                                    continue
 
                     # ---- Screenshot (req 11) ----
                     screenshot_path: Path | None = None
@@ -3098,13 +3339,53 @@ class AutomationService:
 
                     failure = FailureAnalysis(
                         test_case_id=script.test_case_id,
+                        issue_title=f"{failure_category}: {script.name}",
+                        test_case_title=str(test_case.get("title") or script.name),
                         failed_step=failed_step,
+                        failed_action=action or None,
+                        failure_stage=self._failure_stage(action, failure_category),
                         expected_result=expected,
                         actual_result=str(exc),
                         failure_reason=type(exc).__name__,
                         failure_category=failure_category,
                         page_url=page.url,
+                        expected_page_url=expected_page or target_url,
+                        page_title=captured_page_title,
+                        http_response_status=http_response_status,
                         ui_element=element,
+                        exact_locator=(
+                            locator_attempts[0]["locator"] if locator_attempts else None
+                        ),
+                        locator_details=locator_details,
+                        alternate_locators_attempted=locator_attempts,
+                        locator_diagnosis=(
+                            self._locator_diagnosis(context_element, page.url)
+                        ),
+                        input_details=input_details,
+                        navigation_details=navigation_details,
+                        assertion_details=assertion_details,
+                        api_details={
+                            "http_response_status": http_response_status,
+                            "failed_responses": network_errors,
+                        },
+                        application_state_details=(
+                            context_element.get("application_state", {})
+                            if context_element else {}
+                        ),
+                        captured_dom_text=captured_dom_text,
+                        reproduction_steps=[
+                            f"Open {target_url}.",
+                            *(
+                                [
+                                    f"Navigate through: {' -> '.join(context_element.get('navigation_path') or [])}."
+                                ]
+                                if context_element
+                                and context_element.get("navigation_path")
+                                else []
+                            ),
+                            f"Execute step {failed_step}: {action}.",
+                            f"Verify: {expected}.",
+                        ],
                         screenshot=str(screenshot_path) if screenshot_path else None,
                         dom_snapshot=str(dom_snapshot_path) if dom_snapshot_path else None,
                         trace_path=str(trace_path) if trace_path else None,
@@ -3360,6 +3641,48 @@ class AutomationService:
                 0.96,
                 False,
                 "The captured DOM is an access challenge rather than the expected application page.",
+            )
+        if failure.failure_category == "Generated Script Defect":
+            return (
+                "AUTOMATION_DEFECT",
+                "Locator or automation issue",
+                0.99,
+                False,
+                "The generated step contains an observation but no executable "
+                "action or explicit interaction value.",
+            )
+        if failure.failure_category == "Application State Failure":
+            return (
+                "AUTOMATION_DEFECT",
+                "Locator or automation issue",
+                0.9,
+                False,
+                "The script did not successfully recreate the page, form, modal, "
+                "cart, or authentication state captured during crawling.",
+            )
+        if failure.failure_category == "Test Data Failure":
+            return (
+                "TEST_DATA_FAILURE",
+                "Environment or configuration issue",
+                0.92,
+                False,
+                "The required test input, account, fixture, or application record is unavailable.",
+            )
+        if failure.failure_category == "API Failure":
+            return (
+                "APPLICATION_DEFECT",
+                "API/Backend failure",
+                0.92,
+                True,
+                "The application API returned an unsuccessful response.",
+            )
+        if failure.failure_category in {"Blocked Page", "Authentication Failure"}:
+            return (
+                "ENVIRONMENT_FAILURE",
+                "Environment or configuration issue",
+                0.9,
+                False,
+                "The expected page could not be reached because access was blocked or authentication state was unavailable.",
             )
         significant_network_failure = any(
             re.search(r"\b(?:4|5)\d\d\b", entry)
@@ -3709,6 +4032,66 @@ class AutomationService:
                 result.failure.intelligence = self._failure_intelligence(
                     request.generation_id, workflow, result
                 )
+                mapping, scenario, test_case = self._map_failure_requirements(
+                    workflow, result
+                )
+                intelligence = result.failure.intelligence
+                result.failure.confidence_score = intelligence.confidence
+                result.failure.affected_feature = (
+                    mapping.feature[0]["title"]
+                    if mapping.feature
+                    else result.script_name
+                )
+                result.failure.mapped_user_stories = mapping.user_story
+                result.failure.mapped_acceptance_criteria = (
+                    mapping.acceptance_criteria
+                )
+                result.failure.test_scenario = scenario or {
+                    "scenario_id": result.scenario_id,
+                    "mapping_status": "not_found",
+                }
+                result.failure.test_case_title = str(
+                    (test_case or {}).get("title")
+                    or result.failure.test_case_title
+                    or result.script_name
+                )
+                missing_mappings = [
+                    name
+                    for name, values in (
+                        ("user story", mapping.user_story),
+                        ("acceptance criterion", mapping.acceptance_criteria),
+                        ("scenario", mapping.scenario),
+                        ("test case", mapping.test_case),
+                    )
+                    if not values
+                ]
+                result.failure.mapping_explanation = (
+                    "Mapped using generated workflow IDs."
+                    if not missing_mappings
+                    else "Mapping unavailable for "
+                    + ", ".join(missing_mappings)
+                    + "; the workflow did not contain matching IDs."
+                )
+                result.failure.developer_issue_recommended = bool(
+                    intelligence.developer_implementation_plan
+                )
+                result.failure.severity = (
+                    intelligence.developer_implementation_plan.priority
+                    if intelligence.developer_implementation_plan
+                    else (
+                        "High"
+                        if intelligence.classification
+                        in {"APPLICATION_DEFECT", "MISSING_FEATURE"}
+                        else "Medium"
+                    )
+                )
+                result.failure.priority = result.failure.severity
+                result.failure.issue_title = (
+                    intelligence.developer_implementation_plan.ticket_title
+                    if intelligence.developer_implementation_plan
+                    else f"{result.failure.failure_category}: "
+                    f"{result.failure.test_case_title}"
+                )
         failed_mappings = [
             {
                 "script_id": result.script_id,
@@ -3839,9 +4222,31 @@ class AutomationService:
                             for item in intelligence.requirement_mapping.acceptance_criteria
                         ],
                         "priority": plan.priority if plan else "Medium",
+                        "severity": result.failure.severity,
                         "classification": intelligence.classification,
                         "confidence": intelligence.confidence,
                         "developer_issue_created": bool(plan),
+                        "technical_failure_details": result.failure.model_dump(
+                            mode="json", exclude={"intelligence"}
+                        ),
+                        "root_cause_analysis": intelligence.root_cause_analysis,
+                        "reproduction_steps": result.failure.reproduction_steps,
+                        "recommended_script_correction": (
+                            (
+                                intelligence.automation_recommendation.script_changes
+                                + intelligence.automation_recommendation.locator_strategy
+                                + intelligence.automation_recommendation.wait_strategy
+                                + intelligence.automation_recommendation.assertion_strategy
+                                + intelligence.automation_recommendation.navigation_strategy
+                            )
+                            if intelligence.automation_recommendation
+                            else []
+                        ),
+                        "recommended_application_fix": (
+                            plan.suggested_implementation_steps
+                            if plan else intelligence.recommended_fix
+                        ),
+                        "mapping_explanation": result.failure.mapping_explanation,
                     }
                 )
                 continue
