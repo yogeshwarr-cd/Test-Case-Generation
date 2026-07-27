@@ -14,6 +14,7 @@ from app.core.exceptions import AllLLMProvidersFailed
 from app.llm.parser import InvalidJSONResponse, parse_json, parse_model
 from app.llm.providers import (
     CerebrasProvider,
+    GroqProvider,
     LLMProvider,
     MockLLMProvider,
     ProviderError,
@@ -175,12 +176,22 @@ class LLMClient:
             return False
         return True
 
-    def _has_later_available_provider(self, current_index: int) -> bool:
+    def _has_later_available_provider(
+        self, current_index: int, providers: list[LLMProvider] | None = None
+    ) -> bool:
+        providers = self.providers if providers is None else providers
         return any(
             provider.name not in self.unavailable_providers
             and not self._globally_unavailable(provider.name)
-            for provider in self.providers[current_index + 1 :]
+            for provider in providers[current_index + 1 :]
         )
+
+    def _spacing_delay(self, provider: LLMProvider) -> float:
+        interval = self.provider_min_request_interval.get(provider.name, 0)
+        elapsed = time.monotonic() - _provider_last_request.get(
+            _provider_lane(provider.name), 0
+        )
+        return max(0.0, interval - elapsed)
 
     async def _call(
         self,
@@ -239,13 +250,20 @@ class LLMClient:
         attempted: list[str] = []
         failures: dict[str, dict[str, object]] = {}
         compact_schema = json.dumps(response_model.model_json_schema(), separators=(",", ":"))
-        schema_system_prompt = (
+        full_schema_system_prompt = (
             f"{system_prompt}\nPopulate every required field in the JSON schema. Never omit required "
             "arrays or return them empty when minItems is 1. Every test_cases[].steps item must be a "
             "JSON object containing step_number, action, and expected_result. Never return steps as "
             f"strings and never omit the steps field. JSON schema:{compact_schema}"
         )
-        for provider_index, provider in enumerate(self.providers):
+        ordered_providers = sorted(
+            self.providers,
+            key=lambda provider: (
+                self._spacing_delay(provider),
+                self.providers.index(provider),
+            ),
+        )
+        for provider_index, provider in enumerate(ordered_providers):
             if provider.name in self.unavailable_providers or self._globally_unavailable(provider.name):
                 logger.info(
                     "LLM provider skipped provider=%s model=%s request_id=%s reason=provider_cooldown_or_client_unavailable",
@@ -253,6 +271,11 @@ class LLMClient:
                 )
                 continue
             attempted.append(provider.name)
+            provider_system_prompt = (
+                f"{system_prompt}\nReturn every required field as schema-compliant JSON."
+                if getattr(provider, "structured_output", False)
+                else full_schema_system_prompt
+            )
             repair_attempted = False
             mandatory_regeneration_attempted = False
             retry_count = (
@@ -264,7 +287,7 @@ class LLMClient:
                 started = time.perf_counter()
                 try:
                     response = await self._call(
-                        provider, schema_system_prompt, user_prompt, response_model
+                        provider, provider_system_prompt, user_prompt, response_model
                     )
                     if not response.content or not response.content.strip():
                         logger.warning(
@@ -340,7 +363,7 @@ class LLMClient:
                             )
                             regenerated = await self._call(
                                 provider,
-                                schema_system_prompt,
+                                provider_system_prompt,
                                 regeneration_prompt,
                                 response_model,
                             )
@@ -493,7 +516,9 @@ class LLMClient:
                 if (
                     error.retry_after is not None
                     and error.retry_after > self.rate_limit_fallback_threshold_seconds
-                    and self._has_later_available_provider(provider_index)
+                    and self._has_later_available_provider(
+                        provider_index, ordered_providers
+                    )
                 ):
                     _provider_unavailable_until[provider.name] = (
                         time.monotonic() + error.retry_after
@@ -530,23 +555,29 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
             cerebras_provider_retry_count=0,
         )
     model_by_provider = {
-        "cerebras": getattr(settings, f"cerebras_{task}_model") or settings.cerebras_model,
-        "cerebras_fallback": settings.cerebras_fallback_model or settings.cerebras_model,
+        "groq": getattr(settings, f"groq_{task}_model") or settings.groq_model,
+        "groq_fallback": settings.groq_fallback_model or settings.groq_model,
     }
-    max_output_tokens = getattr(settings, f"llm_{task}_max_output_tokens")
-    provider_map = {
-        "cerebras": CerebrasProvider(
-            settings.cerebras_api_key, model_by_provider["cerebras"]
-        ),
-        "cerebras_fallback": CerebrasProvider(
-            settings.cerebras_fallback_api_key,
-            model_by_provider["cerebras_fallback"],
-            provider_name="cerebras_fallback",
-        ),
-    }
-    providers = [provider_map["cerebras"]]
-    if settings.cerebras_fallback_api_key:
-        providers.append(provider_map["cerebras_fallback"])
+    max_output_tokens = min(
+        getattr(settings, f"llm_{task}_max_output_tokens"),
+        settings.groq_max_output_tokens,
+    )
+    providers = [
+        GroqProvider(
+            settings.groq_api_key,
+            model_by_provider["groq"],
+            max_output_tokens=max_output_tokens,
+        )
+    ]
+    if settings.groq_fallback_api_key:
+        providers.append(
+            GroqProvider(
+                settings.groq_fallback_api_key,
+                model_by_provider["groq_fallback"],
+                max_output_tokens=max_output_tokens,
+                provider_name="groq_fallback",
+            )
+        )
     return LLMClient(
         providers,
         timeout=settings.llm_request_timeout_seconds,
@@ -557,18 +588,18 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
         rate_limit_jitter_seconds=settings.llm_rate_limit_jitter_seconds,
         rate_limit_fallback_threshold_seconds=settings.llm_rate_limit_fallback_threshold_seconds,
         provider_concurrency={
-            "cerebras": settings.cerebras_max_concurrent_requests,
-            "cerebras_fallback": settings.cerebras_max_concurrent_requests,
+            "groq": settings.groq_max_concurrent_requests,
+            "groq_fallback": settings.groq_max_concurrent_requests,
         },
         provider_min_request_interval={
-            "cerebras": settings.cerebras_min_request_interval_seconds,
-            "cerebras_fallback": settings.cerebras_min_request_interval_seconds,
+            "groq": settings.groq_min_request_interval_seconds,
+            "groq_fallback": settings.groq_min_request_interval_seconds,
         },
         cerebras_provider_retry_count=settings.cerebras_provider_retry_count,
         cerebras_initial_backoff_seconds=settings.cerebras_initial_backoff_seconds,
         cerebras_max_backoff_seconds=settings.cerebras_max_backoff_seconds,
         provider_cooldown_seconds={
-            "cerebras": settings.cerebras_quota_cooldown_seconds,
-            "cerebras_fallback": settings.cerebras_quota_cooldown_seconds,
+            "groq": settings.groq_quota_cooldown_seconds,
+            "groq_fallback": settings.groq_quota_cooldown_seconds,
         },
     )

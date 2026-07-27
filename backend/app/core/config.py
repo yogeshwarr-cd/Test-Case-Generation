@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     backend_1_api_url: str = "http://localhost:8000/api/v1"
     backend_1_database_url: str | None = None
     cors_origins: list[str] = Field(default_factory=list)
+    groq_api_key: str = ""
+    groq_fallback_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-120b"
+    groq_fallback_model: str = ""
+    groq_generation_model: str = ""
+    groq_validation_model: str = ""
+    groq_regeneration_model: str = ""
+    groq_max_concurrent_requests: int = 1
+    groq_max_output_tokens: int = 1200
+    groq_min_request_interval_seconds: float = 55.0
+    groq_quota_cooldown_seconds: float = 65.0
     cerebras_api_key: str = ""
     cerebras_fallback_api_key: str = ""
     cerebras_model: str = "gpt-oss-120b"

@@ -86,7 +86,6 @@ def scoped_context(context: dict[str, Any], selected: list[Any]) -> dict[str, An
     result: dict[str, Any] = {
         "project_id": context.get("project_id"),
         "tech_stack": _clean(context.get("tech_stack", {})),
-        "current_items": selected_clean,
         "image_ids": _clean(context.get("image_ids", [])),
         "visual_context": _clean(context.get("visual_context", [])),
     }

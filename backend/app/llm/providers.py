@@ -234,11 +234,12 @@ class GroqProvider(LLMProvider):
 
     def __init__(
         self, api_key: str, model: str, client: Any = None, max_output_tokens: int = 1500,
-        structured_output: bool = True,
+        structured_output: bool = True, provider_name: str = "groq",
     ):
         self.api_key, self.model, self._client = api_key, model, client
         self.max_output_tokens = max_output_tokens
         self.structured_output = structured_output
+        self.name = provider_name
 
     async def generate(self, **kwargs: Any) -> ProviderResponse:
         if not self.api_key or not self.model:
