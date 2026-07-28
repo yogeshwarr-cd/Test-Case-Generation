@@ -7,6 +7,7 @@ backend/.env
 storage/images/
 backend/storage/images/
 backend/artifacts/automation/
+backend/tests/config.json
 ml/models/*.pt
 ml/models/*.onnx
 ml/runs/

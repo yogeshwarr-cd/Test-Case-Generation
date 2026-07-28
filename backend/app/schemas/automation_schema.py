@@ -4,7 +4,7 @@ from typing import Any, Literal
 from datetime import datetime, timezone
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
 
 
 class GenerateScriptsRequest(BaseModel):
@@ -79,6 +79,7 @@ class GeneratedScript(BaseModel):
     ] = "Valid"
     page_url: str | None = None
     page_elements: list[dict[str, Any]] = Field(default_factory=list)
+    executable_steps: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ScriptGenerationResponse(BaseModel):
@@ -99,9 +100,21 @@ class ScriptGenerationResponse(BaseModel):
     scripts: list[GeneratedScript]
 
 
+class PlaywrightAuthentication(BaseModel):
+    email: str | None = None
+    password: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def validate_pair(self) -> "PlaywrightAuthentication":
+        if bool(self.email) != bool(self.password):
+            raise ValueError("Both email and password are required.")
+        return self
+
+
 class ExecuteScriptsRequest(BaseModel):
     generation_id: str
     mode: Literal["automated", "manual"] = "automated"
+    authentication: PlaywrightAuthentication | None = None
 
 
 class FailureAnalysis(BaseModel):
@@ -132,6 +145,7 @@ class FailureAnalysis(BaseModel):
         "Page Failure",
         "Application Failure",
         "Generated Script Defect",
+        "Invalid Test Step",
         "Test Data Failure",
         "API Failure",
         "Authentication Failure",

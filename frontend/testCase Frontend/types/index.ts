@@ -169,6 +169,7 @@ export interface GeneratedScript {
   lifecycle_status: 'Valid' | 'Needs Review' | 'Obsolete' | 'Regeneration Required';
   page_url?: string;
   page_elements: Array<Record<string, unknown>>;
+  executable_steps: Array<Record<string, unknown>>;
 }
 
 export interface DiscoveredElement {
@@ -311,6 +312,7 @@ export interface FailureAnalysis {
     | 'Page Failure'
     | 'Application Failure'
     | 'Generated Script Defect'
+    | 'Invalid Test Step'
     | 'Test Data Failure'
     | 'API Failure'
     | 'Authentication Failure'

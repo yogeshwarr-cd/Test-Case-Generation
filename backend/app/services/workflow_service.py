@@ -1,5 +1,6 @@
-import asyncio,uuid
+import asyncio,json,uuid
 from datetime import datetime,timezone
+from pathlib import Path
 from app.core.config import settings
 from app.core.exceptions import WorkflowNotFound,ManualReviewRequired
 from app.orchestrator.state import initial_state
@@ -15,6 +16,23 @@ from app.services.cache_service import cache
 class WorkflowService:
     """Coordinates agents; persistence adapters can subscribe to state transitions."""
     def __init__(self): self._states={};self._tasks={};self.orchestrator=WorkflowOrchestrator()
+    @staticmethod
+    def _state_path(wid):
+        return Path(settings.automation_artifacts_path) / "workflows" / f"{wid}.json"
+    def _persist_state(self,state):
+        wid=state.get("workflow_id")
+        if not wid:return
+        path=self._state_path(wid);path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps(state,default=str,indent=2),encoding="utf-8")
+    def _load_state(self,wid):
+        path=self._state_path(wid)
+        if not path.is_file():return None
+        try:
+            state=json.loads(path.read_text(encoding="utf-8"))
+        except (OSError,ValueError,TypeError):return None
+        state["workflow_id"]=uuid.UUID(str(state.get("workflow_id") or wid))
+        if state.get("project_id"):state["project_id"]=uuid.UUID(str(state["project_id"]))
+        return state
     async def start(self,request):
         project_id=request.project_id or uuid.uuid4()
         payload=(request.input_payload.model_dump() if request.input_payload else await DatabaseInputSource().load(project_id))
@@ -26,15 +44,20 @@ class WorkflowService:
             for collection in ("scenarios","test_cases"):
                 for item in state[collection]: item["project_id"]=str(project_id)
             state["status"]=state["current_stage"]="completed";state["completed_at"]=datetime.now(timezone.utc);state["cache_hit"]=True
-            self._states[workflow_id]=state;return state
+            self._states[workflow_id]=state;self._persist_state(state);return state
         self._states[workflow_id]=state; self._tasks[workflow_id]=asyncio.create_task(self._run(workflow_id)); return state
     async def _run(self,wid):
         self._states[wid]=await self.orchestrator.run(self._states[wid])
         await self._cache_completed(self._states[wid])
     async def _cache_completed(self,state):
-        if state.get("status")!="completed" or not state.get("cache_key"): return
+        if state.get("status")!="completed": return
+        self._persist_state(state)
+        if not state.get("cache_key"): return
         await cache.set_json(state["cache_key"],{"input_payload":state.get("input_payload",{}),"structured_context":state.get("structured_context",{}),"scenarios":state.get("scenarios",[]),"scenario_validation":state.get("scenario_validation",{}),"test_cases":state.get("test_cases",[]),"testcase_validation":state.get("testcase_validation",{})},settings.redis_workflow_ttl_seconds)
     def get(self,wid):
+        if wid not in self._states:
+            restored=self._load_state(wid)
+            if restored is not None:self._states[wid]=restored
         if wid not in self._states: raise WorkflowNotFound("Workflow was not found")
         return self._states[wid]
     async def cancel(self,wid):

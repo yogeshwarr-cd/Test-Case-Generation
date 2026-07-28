@@ -11,6 +11,8 @@ import { downloadFile, friendlyError } from '../utils';
 export function AutomationPage() {
   const { workflowId, hydrate } = useTestCaseWorkflowStore();
   const [applicationUrl, setApplicationUrl] = useState('');
+  const [authenticationEmail, setAuthenticationEmail] = useState('');
+  const [authenticationPassword, setAuthenticationPassword] = useState('');
   const [generation, setGeneration] = useState<ScriptGeneration | null>(null);
   const [crawl, setCrawl] = useState<CrawlAnalysis | null>(null);
   const [report, setReport] = useState<ExecutionReport | null>(null);
@@ -47,8 +49,15 @@ export function AutomationPage() {
 
   const execute = async () => {
     if (!generation) return;
+    if (Boolean(authenticationEmail.trim()) !== Boolean(authenticationPassword)) {
+      setError('Enter both Email and Password, or leave both fields empty.');
+      return;
+    }
+    const authentication = authenticationEmail.trim() && authenticationPassword
+      ? { email: authenticationEmail.trim(), password: authenticationPassword }
+      : undefined;
     setBusy(true); setError(''); setShowTestReport(false);
-    try { setReport(await testCaseApi.executeScripts(generation.generation_id, mode)); }
+    try { setReport(await testCaseApi.executeScripts(generation.generation_id, mode, authentication)); }
     catch (requestError) {
       if (requestError instanceof Error && requestError.message.includes('(404)') && workflowId && applicationUrl.trim()) {
         try {
@@ -60,7 +69,7 @@ export function AutomationPage() {
           );
           setGeneration(refreshed);
           setSelectedScript(0);
-          setReport(await testCaseApi.executeScripts(refreshed.generation_id, mode));
+          setReport(await testCaseApi.executeScripts(refreshed.generation_id, mode, authentication));
         } catch (retryError) { setError(friendlyError(retryError)); }
       } else { setError(friendlyError(requestError)); }
     }
@@ -93,6 +102,10 @@ export function AutomationPage() {
           <input id="application-url" type="url" value={applicationUrl} onChange={(event) => { setApplicationUrl(event.target.value); setCrawl(null); setGeneration(null); }} placeholder="https://app.example.com" className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
           <button disabled={busy || !applicationUrl.trim()} onClick={crawlApplication} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Crawl application</button>
           <button disabled={busy || crawl?.crawl_status !== 'crawl_completed'} onClick={generate} className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><Play className="h-4 w-4" /> Generate Test Scripts</button>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div><label htmlFor="playwright-email" className="text-sm font-semibold">Email <span className="font-normal text-muted-foreground">(optional)</span></label><input id="playwright-email" type="email" autoComplete="username" value={authenticationEmail} onChange={(event) => setAuthenticationEmail(event.target.value)} placeholder="sample@gmail.com" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" /></div>
+          <div><label htmlFor="playwright-password" className="text-sm font-semibold">Password <span className="font-normal text-muted-foreground">(optional)</span></label><input id="playwright-password" type="password" autoComplete="current-password" value={authenticationPassword} onChange={(event) => setAuthenticationPassword(event.target.value)} placeholder="12345678" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" /></div>
         </div>
       </section>
 

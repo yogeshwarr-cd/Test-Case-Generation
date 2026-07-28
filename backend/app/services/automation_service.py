@@ -45,6 +45,7 @@ from app.schemas.automation_schema import (
 from app.services.seacrawl_service import SeacrawlAdapter
 from app.services.cache_service import cache
 from app.services.workflow_service import workflow_service
+from tests import config as playwright_test_config
 
 R = TypeVar("R")
 logger = logging.getLogger(__name__)
@@ -84,6 +85,10 @@ class AutomationNotFound(AppError):
 
 class InvalidGeneratedStepError(ValueError):
     """The generated step describes an observation but no executable action."""
+
+
+class PlaywrightAuthenticationError(RuntimeError):
+    """Authentication was required but could not be completed or verified."""
 
 
 def _safe_name(value: str) -> str:
@@ -358,9 +363,31 @@ def test_{test_name}(page: Page):
 '''
 
 
-def _test_case_supported(
+def _step_execution_kind(action: str) -> str:
+    lowered = " ".join(action.lower().split())
+    interaction_patterns = (
+        r"\b(click|fill|type|enter|select|choose|selectoption|check|uncheck)\b",
+        r"\bpress\b.+\b(enter|escape|tab|arrow|space)\b",
+        r"\bhover\b",
+        r"\bwait\s+(for|until)\b",
+        r"\b(navigate|open|visit|go\s+to)\b",
+    )
+    if any(re.search(pattern, lowered) for pattern in interaction_patterns):
+        return "action"
+    assertion_verb = re.search(r"\b(assert|expect|confirm|ensure|verify)\b", lowered)
+    assertion_condition = re.search(
+        r"\b(visible|hidden|contains?|text|value|checked|unchecked|enabled|"
+        r"disabled|url|title|count|equals?|matches?)\b",
+        lowered,
+    )
+    if assertion_verb and assertion_condition:
+        return "assertion"
+    return "invalid"
+
+
+def _invalid_test_steps(
     test_case: dict[str, Any], elements: list[dict[str, Any]]
-) -> bool:
+) -> list[dict[str, Any]]:
     identities = [
         _meaningful_words(
             " ".join(
@@ -370,35 +397,40 @@ def _test_case_supported(
         )
         for element in elements
     ]
+    invalid: list[dict[str, Any]] = []
     for step in test_case.get("steps", []):
         action = str(step.get("action") or "")
+        kind = _step_execution_kind(action)
+        if kind == "invalid":
+            invalid.append({
+                "step_number": step.get("step_number"),
+                "action": action,
+                "reason": (
+                    "Step has no concrete Playwright action or verifiable assertion."
+                ),
+            })
+            continue
         lowered = action.lower()
         if any(token in lowered for token in ("navigate", "open", "visit", "go to")):
             continue
-        actionable = any(
-            token in lowered
-            for token in (
-                "click",
-                "press",
-                "select",
-                "choose",
-                "check",
-                "uncheck",
-                "enter",
-                "type",
-                "fill",
-                "search",
-                "submit",
-            )
-        )
-        # Observation/assertion steps do not require a control locator; Playwright
-        # validates their expected result after the preceding interaction.
-        if not actionable:
+        if kind == "assertion" and any(
+            token in lowered for token in ("url", "title")
+        ):
             continue
         action_words = _meaningful_words(action)
         if action_words and not any(action_words & identity for identity in identities):
-            return False
-    return True
+            invalid.append({
+                "step_number": step.get("step_number"),
+                "action": action,
+                "reason": "No crawl-verified element matches the step target.",
+            })
+    return invalid
+
+
+def _test_case_supported(
+    test_case: dict[str, Any], elements: list[dict[str, Any]]
+) -> bool:
+    return not _invalid_test_steps(test_case, elements)
 
 
 def _validate_css_selector(selector: str) -> str:
@@ -577,9 +609,55 @@ class {class_name}:
         lowered = instruction.lower()
         values = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", instruction)
         value = values[-1] if values else None
-        if any(token in lowered for token in ("navigate", "open", "visit", "go to")):
+        is_assertion = (
+            any(token in lowered for token in ("assert", "expect", "confirm", "ensure", "verify"))
+            and any(token in lowered for token in (
+                "visible", "hidden", "text", "value", "checked", "enabled",
+                "disabled", "url", "title", "contains", "matches",
+            ))
+        )
+        if is_assertion:
+            if "url" in lowered:
+                if value is None:
+                    raise AssertionError(f"URL assertion requires an explicit value: {{instruction}}")
+                expect(self.page).to_have_url(re.compile(re.escape(value)))
+            elif "title" in lowered:
+                if value is None:
+                    raise AssertionError(f"Title assertion requires an explicit value: {{instruction}}")
+                expect(self.page).to_have_title(re.compile(re.escape(value), re.I))
+            else:
+                locator = self.stable_locator(instruction)
+                if "hidden" in lowered:
+                    expect(locator).to_be_hidden()
+                elif "checked" in lowered and "unchecked" not in lowered:
+                    expect(locator).to_be_checked()
+                elif "value" in lowered:
+                    if value is None:
+                        raise AssertionError(f"Value assertion requires an explicit value: {{instruction}}")
+                    expect(locator).to_have_value(value)
+                elif "text" in lowered or "contain" in lowered or "match" in lowered:
+                    if value is None:
+                        raise AssertionError(f"Text assertion requires an explicit value: {{instruction}}")
+                    expect(locator).to_contain_text(value)
+                else:
+                    expect(locator).to_be_visible()
+        elif any(token in lowered for token in ("navigate", "open", "visit", "go to")):
             self.page.goto(BASE_URL, wait_until="domcontentloaded")
             self.page.wait_for_load_state("networkidle")
+        elif "hover" in lowered:
+            locator = self.stable_locator(instruction)
+            locator.wait_for(state="visible")
+            locator.scroll_into_view_if_needed()
+            locator.hover()
+        elif "wait for" in lowered or "wait until" in lowered:
+            self.stable_locator(instruction).wait_for(state="visible")
+        elif "press" in lowered:
+            key = re.search(r"\\b(Enter|Escape|Tab|Space|Arrow(?:Up|Down|Left|Right))\\b", instruction, re.I)
+            if key is None:
+                raise AssertionError(f"Press action requires a supported key: {{instruction}}")
+            locator = self.stable_locator(instruction)
+            locator.wait_for(state="visible")
+            locator.press(key.group(1))
         elif any(token in lowered for token in ("select", "choose")):
             if value is None:
                 raise AssertionError(f"Selection has no explicit UI value: {{instruction}}")
@@ -1679,24 +1757,42 @@ class AutomationService:
                 })
                 skipped_count += 1
                 continue
-            if not _test_case_supported(test_case, element_dicts):
+            invalid_steps = _invalid_test_steps(test_case, evidence_elements)
+            invalid_step_numbers = {
+                item.get("step_number") for item in invalid_steps
+            }
+            executable_steps = [
+                step
+                for step in test_case.get("steps", [])
+                if step.get("step_number") not in invalid_step_numbers
+                and _step_execution_kind(str(step.get("action") or "")) != "invalid"
+            ]
+            if invalid_steps:
                 unsupported_requirements.append({
                     "test_case_id": str(test_case.get("test_case_id")),
                     "classification": (
                         "not_testable_due_to_configuration"
-                        if dependency else "missing_from_application"
+                        if dependency else "invalid_test_step"
                     ),
                     "reason": dependency or (
-                        "Required actions could not be mapped to elements observed during "
-                        "the completed crawl."
+                        "One or more steps are not executable with crawl-verified "
+                        "Playwright actions or assertions."
                     ),
+                    "invalid_steps": invalid_steps,
                 })
+            if not executable_steps:
                 skipped_count += 1
                 continue
+            executable_test_case = {
+                **test_case,
+                "steps": executable_steps,
+            }
             script_id = f"pw-{index:03d}-{_safe_name(str(test_case.get('test_case_id')))}"
             path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
             try:
-                source = _python_source(test_case, page_url, evidence_elements)
+                source = _python_source(
+                    executable_test_case, page_url, evidence_elements
+                )
                 # Bug 6 fix: catch per-script validation errors so one bad script
                 # doesn't abort generation of all remaining scripts.
                 _validate_generated_source(source)
@@ -1724,6 +1820,7 @@ class AutomationService:
                     lifecycle_status="Valid",
                     page_url=page_url,
                     page_elements=evidence_elements,
+                    executable_steps=executable_steps,
                     requirement_ids=[
                         str(item) for item in test_case.get("requirement_ids", [])
                     ],
@@ -2372,7 +2469,7 @@ class AutomationService:
     @staticmethod
     def _failure_stage(action: str, category: str) -> str:
         lowered = action.lower()
-        if category == "Generated Script Defect":
+        if category in {"Generated Script Defect", "Invalid Test Step"}:
             return "generated_test_step"
         if category in {"Navigation Failure", "Blocked Page"}:
             return "navigation"
@@ -2432,7 +2529,11 @@ class AutomationService:
         return values[-1]
 
     async def _restore_crawl_context(
-        self, page: Any, element: dict[str, Any], fallback_url: str
+        self,
+        page: Any,
+        element: dict[str, Any],
+        fallback_url: str,
+        credentials: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         expected_url = _canonical_page_url(
             str(element.get("page_url") or fallback_url)
@@ -2456,6 +2557,7 @@ class AutomationService:
                 timeout=int(settings.automation_navigation_timeout_seconds * 1000),
             )
             await self._crawl_wait(page)
+            await self._authenticate_if_required(page, credentials, target)
         if _canonical_page_url(page.url) != expected_url:
             await page.goto(
                 expected_url,
@@ -2463,6 +2565,7 @@ class AutomationService:
                 timeout=int(settings.automation_navigation_timeout_seconds * 1000),
             )
             await self._crawl_wait(page)
+            await self._authenticate_if_required(page, credentials, expected_url)
         await self._validate_navigation(page, expected_url)
 
         expected_title = str(element.get("page_title") or "").strip()
@@ -2572,7 +2675,10 @@ class AutomationService:
         values = re.findall(r"['\"]([^'\"]+)['\"]", action)
         desired = values[-1] if values else None
         roles: tuple[str, ...]
-        interactive_tokens = ("click", "press", "select", "choose", "check", "uncheck", "enter", "type", "fill", "radio")
+        interactive_tokens = (
+            "click", "press", "select", "choose", "check", "uncheck",
+            "enter", "type", "fill", "radio", "hover", "wait for", "wait until",
+        )
         if not any(token in lowered for token in interactive_tokens):
             raise InvalidGeneratedStepError(
                 f"Invalid generated test step: {action!r} has no executable "
@@ -2584,6 +2690,8 @@ class AutomationService:
             roles = ("checkbox", "radio")
         elif any(token in lowered for token in ("click", "press")):
             roles = ("button", "link")
+        elif "hover" in lowered or "wait " in lowered:
+            roles = ()
         elif any(token in lowered for token in ("enter", "type", "fill")):
             if desired is None:
                 raise LookupError(f"Input action has no explicit value: '{action}'")
@@ -2601,7 +2709,30 @@ class AutomationService:
                     await locator.scroll_into_view_if_needed(
                         timeout=int(settings.automation_action_timeout_seconds * 1000)
                     )
-                if any(token in lowered for token in ("select", "choose")):
+                if "wait for" in lowered or "wait until" in lowered:
+                    await locator.wait_for(
+                        state="visible",
+                        timeout=int(settings.automation_action_timeout_seconds * 1000),
+                    )
+                elif "hover" in lowered:
+                    await locator.hover(
+                        timeout=int(settings.automation_action_timeout_seconds * 1000)
+                    )
+                elif "press" in lowered:
+                    key_match = re.search(
+                        r"\b(Enter|Escape|Tab|Space|Arrow(?:Up|Down|Left|Right))\b",
+                        action,
+                        re.I,
+                    )
+                    if not key_match:
+                        raise InvalidGeneratedStepError(
+                            f"Press action has no supported key: {action!r}"
+                        )
+                    await locator.press(
+                        key_match.group(1),
+                        timeout=int(settings.automation_action_timeout_seconds * 1000),
+                    )
+                elif any(token in lowered for token in ("select", "choose")):
                     tag = await locator.evaluate("el => el.tagName.toLowerCase()")
                     if tag == "select":
                         if not desired:
@@ -2791,6 +2922,125 @@ class AutomationService:
             except Exception:
                 pass
 
+    async def _authenticate_if_required(
+        self,
+        page: Any,
+        credentials: dict[str, str] | None,
+        protected_url: str,
+    ) -> dict[str, Any]:
+        evidence = {
+            "required": False,
+            "attempted": False,
+            "succeeded": False,
+            "redirected_url": page.url,
+            "expected_protected_url": protected_url,
+        }
+        password = page.locator("input[type='password']").first
+        login_url = bool(
+            re.search(r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", page.url, re.I)
+        )
+        password_visible = bool(
+            await password.count() and await password.is_visible()
+        )
+        evidence["required"] = login_url or password_visible
+        if not evidence["required"]:
+            return evidence
+        if not credentials:
+            raise PlaywrightAuthenticationError(
+                f"Authentication Failed: {protected_url} redirected to {page.url}, "
+                "but Email and Password were not provided."
+            )
+        evidence["attempted"] = True
+
+        email_candidates = [
+            page.get_by_label(re.compile(r"email|username", re.I)),
+            page.get_by_placeholder(re.compile(r"email|username", re.I)),
+            page.locator("input[type='email']"),
+            page.locator("input[name='email'],input[name='username']"),
+        ]
+        email = None
+        for candidate in email_candidates:
+            if await candidate.count() and await candidate.first.is_visible():
+                email = candidate.first
+                break
+        if email is None or not password_visible:
+            raise PlaywrightAuthenticationError(
+                "Authentication Failed: the login page did not expose visible "
+                "email/username and password fields."
+            )
+        await email.fill(
+            credentials["email"],
+            timeout=int(settings.automation_action_timeout_seconds * 1000),
+        )
+        await password.fill(
+            credentials["password"],
+            timeout=int(settings.automation_action_timeout_seconds * 1000),
+        )
+        submit_candidates = [
+            page.get_by_role(
+                "button",
+                name=re.compile(r"log\s*in|sign\s*in|continue|submit", re.I),
+            ),
+            page.locator("button[type='submit'],input[type='submit']"),
+        ]
+        submitted = False
+        for candidate in submit_candidates:
+            if await candidate.count() and await candidate.first.is_visible():
+                await candidate.first.click(
+                    timeout=int(settings.automation_action_timeout_seconds * 1000)
+                )
+                submitted = True
+                break
+        if not submitted:
+            raise PlaywrightAuthenticationError(
+                "Authentication Failed: no visible login submit control was found."
+            )
+        try:
+            await page.wait_for_url(
+                lambda url: not re.search(
+                    r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)",
+                    str(url),
+                    re.I,
+                ),
+                timeout=int(settings.automation_navigation_timeout_seconds * 1000),
+            )
+        except Exception:
+            pass
+        await self._crawl_wait(page)
+        password_visible = bool(
+            await password.count() and await password.is_visible()
+        )
+        if password_visible or re.search(
+            r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", page.url, re.I
+        ):
+            messages = await page.locator(
+                "[role='alert'],.validation-summary-errors,.field-validation-error"
+            ).all_inner_texts()
+            raise PlaywrightAuthenticationError(
+                "Authentication Failed: login was submitted but the application "
+                f"remained on {page.url}. Message: {' '.join(messages)[:1000] or 'none'}"
+            )
+        if _canonical_page_url(page.url) != _canonical_page_url(protected_url):
+            await page.goto(
+                protected_url,
+                wait_until="domcontentloaded",
+                timeout=int(settings.automation_navigation_timeout_seconds * 1000),
+            )
+            await self._crawl_wait(page)
+        if _canonical_page_url(page.url) != _canonical_page_url(protected_url):
+            raise PlaywrightAuthenticationError(
+                "Authentication Failed: login completed, but the expected protected "
+                f"page {protected_url} did not load; current URL is {page.url}."
+            )
+        if await page.locator("input[type='password']").count():
+            visible_password = page.locator("input[type='password']").first
+            if await visible_password.is_visible():
+                raise PlaywrightAuthenticationError(
+                    "Authentication Failed: protected page still displays a password field."
+                )
+        evidence.update({"succeeded": True, "redirected_url": page.url})
+        return evidence
+
     @staticmethod
     async def _wait_for_page_stable(page: Any) -> None:
         """Use a short navigation settle wait without blocking on background traffic."""
@@ -2831,10 +3081,49 @@ class AutomationService:
                 raise AutomationError(
                     f"Navigation failure: unexpected URL {page.url!r}"
                 )
-        if expected_url_prefix and not page.url.startswith(expected_url_prefix.split("//")[0]):
+        if expected_url_prefix and (
+            _canonical_page_url(page.url)
+            != _canonical_page_url(expected_url_prefix)
+        ):
             raise AutomationError(
-                f"Navigation failure: URL scheme mismatch current={page.url!r}"
+                "Navigation failure: current URL does not match the crawl page; "
+                f"expected={expected_url_prefix!r} current={page.url!r}"
             )
+
+    async def _expected_page_evidence_present(
+        self,
+        page: Any,
+        expected_url: str,
+        elements: list[dict[str, Any]],
+    ) -> bool:
+        expected = _canonical_page_url(expected_url)
+        page_elements = [
+            item
+            for item in elements
+            if _canonical_page_url(str(item.get("page_url") or expected)) == expected
+        ]
+        if not page_elements:
+            return True
+        for item in page_elements[:50]:
+            identity = str(
+                item.get("test_id")
+                or item.get("aria_label")
+                or item.get("label")
+                or item.get("name")
+                or item.get("visible_text")
+                or ""
+            )
+            if not identity:
+                continue
+            for candidate in self._discovered_locator_candidates(
+                page, identity, [item]
+            ):
+                try:
+                    if await candidate.count() and await candidate.first.is_visible():
+                        return True
+                except Exception:
+                    continue
+        return False
 
     @staticmethod
     async def _element_exists(
@@ -2891,6 +3180,10 @@ class AutomationService:
         return False
 
     async def _assert_expected(self, page: Any, expected_result: str) -> None:
+        if not expected_result.strip():
+            raise InvalidGeneratedStepError(
+                "Expected result is empty; no verifiable assertion can be executed."
+            )
         quoted = re.findall(r"['\"]([^'\"]+)['\"]", expected_result)
         if quoted and any(
             word in expected_result.lower() for word in ("visible", "displayed", "shown")
@@ -2900,6 +3193,76 @@ class AutomationService:
             )
         else:
             await page.locator("body").wait_for(state="visible")
+
+    async def _assert_step(
+        self,
+        page: Any,
+        action: str,
+        discovered_elements: list[dict[str, Any]],
+    ) -> str:
+        lowered = action.lower()
+        quoted = re.findall(r"['\"]([^'\"]+)['\"]", action)
+        expected_value = quoted[-1] if quoted else None
+        if "url" in lowered:
+            if not expected_value:
+                raise InvalidGeneratedStepError(
+                    f"URL assertion has no explicit expected value: {action!r}"
+                )
+            if expected_value not in page.url:
+                raise AssertionError(
+                    f"Expected URL to contain {expected_value!r}, got {page.url!r}"
+                )
+            return f"URL assertion: {expected_value}"
+        if "title" in lowered:
+            if not expected_value:
+                raise InvalidGeneratedStepError(
+                    f"Title assertion has no explicit expected value: {action!r}"
+                )
+            actual_title = await page.title()
+            if expected_value.casefold() not in actual_title.casefold():
+                raise AssertionError(
+                    f"Expected title to contain {expected_value!r}, got {actual_title!r}"
+                )
+            return f"Title assertion: {expected_value}"
+
+        phrase = self._locator_phrase(action)
+        resolved = await self._resolve_locators(
+            page, phrase, (), discovered_elements
+        )
+        locator, description = resolved[0]
+        await locator.scroll_into_view_if_needed()
+        if "hidden" in lowered:
+            if await locator.is_visible():
+                raise AssertionError(f"Expected hidden element, but it is visible: {description}")
+        elif "checked" in lowered and "unchecked" not in lowered:
+            if not await locator.is_checked():
+                raise AssertionError(f"Expected checked element: {description}")
+        elif "unchecked" in lowered:
+            if await locator.is_checked():
+                raise AssertionError(f"Expected unchecked element: {description}")
+        elif "value" in lowered:
+            if expected_value is None:
+                raise InvalidGeneratedStepError(
+                    f"Value assertion has no explicit expected value: {action!r}"
+                )
+            actual_value = await locator.input_value()
+            if actual_value != expected_value:
+                raise AssertionError(
+                    f"Expected value {expected_value!r}, got {actual_value!r}"
+                )
+        elif "text" in lowered or "contain" in lowered or "match" in lowered:
+            if expected_value is None:
+                raise InvalidGeneratedStepError(
+                    f"Text assertion has no explicit expected value: {action!r}"
+                )
+            actual_text = (await locator.inner_text()).strip()
+            if expected_value.casefold() not in actual_text.casefold():
+                raise AssertionError(
+                    f"Expected text containing {expected_value!r}, got {actual_text!r}"
+                )
+        elif not await locator.is_visible():
+            raise AssertionError(f"Expected visible element: {description}")
+        return description
 
     async def _quality_checks(
         self,
@@ -2960,6 +3323,17 @@ class AutomationService:
             )
         generation = await self.generation(request.generation_id)
         response: ScriptGenerationResponse = generation["response"]
+        authentication_token = f"playwright-{uuid.uuid4()}"
+        playwright_test_config.clear()
+        authentication: dict[str, str] | None = None
+        if request.authentication and request.authentication.email:
+            password = request.authentication.password
+            playwright_test_config.overwrite(
+                authentication_token,
+                request.authentication.email,
+                password.get_secret_value() if password else "",
+            )
+            authentication = playwright_test_config.read(authentication_token)
         if request.mode == "manual":
             results = [
                 ScriptExecutionResult(
@@ -2978,6 +3352,7 @@ class AutomationService:
                 )
                 for script in response.scripts
             ]
+            playwright_test_config.clear(authentication_token)
             return self._save_report(request, results, 0, generation["directory"], generation)
 
         if settings.app_mock_mode:
@@ -2993,6 +3368,7 @@ class AutomationService:
                 )
                 for script in response.scripts
             ]
+            playwright_test_config.clear(authentication_token)
             return self._save_report(request, results, 0.01 * len(results), generation["directory"], generation)
 
         started = time.perf_counter()
@@ -3048,6 +3424,7 @@ class AutomationService:
                 navigation_details: dict[str, Any] = {}
                 assertion_details: dict[str, Any] = {}
                 http_response_status: int | None = None
+                authentication_evidence: dict[str, Any] = {}
                 seacrawl_attempted = False
                 seacrawl_succeeded = False
                 failure_category = "Script Generation"
@@ -3090,15 +3467,51 @@ class AutomationService:
                         await self._crawl_wait(page)
                     else:
                         await self._wait_for_page_stable(page)
+                    failure_category = "Authentication Failure"
+                    authentication_evidence = await self._authenticate_if_required(
+                        page, authentication, target_url
+                    )
+                    navigation_details["actual_destination"] = page.url
+                    navigation_details["redirected_url"] = (
+                        authentication_evidence.get("redirected_url")
+                    )
+                    failure_category = "Navigation Failure"
                     await self._validate_navigation(page, target_url)
+                    expected_elements_present = await self._expected_page_evidence_present(
+                        page, target_url, disc_dicts
+                    )
+                    navigation_details["expected_page_elements_appeared"] = (
+                        expected_elements_present
+                    )
+                    if not expected_elements_present:
+                        if authentication_evidence.get("required"):
+                            failure_category = "Authentication Failure"
+                            raise PlaywrightAuthenticationError(
+                                "Authentication Failed: the expected protected page "
+                                f"{target_url} loaded without its crawl-verified elements."
+                            )
+                        raise AutomationError(
+                            "Navigation failure: expected crawl-verified page elements "
+                            f"did not appear on {target_url}."
+                        )
                     # ---- Auto-dismiss overlays once after landing (req 8) ----
                     await self._dismiss_overlays(page)
 
                     per_test_calls = 0
-                    for step in test_case.get("steps", []):
+                    for step in (
+                        script.executable_steps
+                        or test_case.get("steps", [])
+                    ):
                         failed_step = step.get("step_number")
                         expected = step.get("expected_result")
                         action = step.get("action", "")
+                        step_kind = _step_execution_kind(action)
+                        if step_kind == "invalid":
+                            failure_category = "Invalid Test Step"
+                            raise InvalidGeneratedStepError(
+                                f"Invalid Test Step: {action!r} has no concrete "
+                                "Playwright action or verifiable assertion."
+                            )
                         phrase = self._locator_phrase(action)
                         element = f"Requested target: {phrase}"
 
@@ -3116,6 +3529,7 @@ class AutomationService:
                                     page,
                                     context_element,
                                     script.page_url or response.application_url,
+                                    authentication,
                                 )
                                 expected_page = _canonical_page_url(
                                     str(
@@ -3146,7 +3560,23 @@ class AutomationService:
                                     or _canonical_page_url(str(el["page_url"]))
                                     == _canonical_page_url(page.url)
                                 ]
-                            element = await self._perform(page, action, page_elements)
+                            if _canonical_page_url(page.url) != _canonical_page_url(
+                                expected_page or target_url
+                            ):
+                                failure_category = "Navigation Failure"
+                                raise LookupError(
+                                    f"Current URL {page.url} does not match expected "
+                                    f"page {expected_page or target_url}."
+                                )
+                            if step_kind == "assertion":
+                                failure_category = "Assertion Failure"
+                                element = await self._assert_step(
+                                    page, action, page_elements
+                                )
+                            else:
+                                element = await self._perform(
+                                    page, action, page_elements
+                                )
                         except (LookupError, PlaywrightError, PlaywrightTimeoutError) as action_error:
                             # Classify timeout separately
                             if isinstance(action_error, PlaywrightTimeoutError):
@@ -3204,13 +3634,14 @@ class AutomationService:
                                 raise action_error
 
                         # ---- Post-action assertion (req 4) ----
-                        failure_category = "Assertion Failure"
-                        assertion_details = {
-                            "expected_value": expected,
-                            "actual_value": None,
-                            "comparison_type": "visible text / page-state assertion",
-                        }
-                        await self._assert_expected(page, expected or "")
+                        if step_kind == "action":
+                            failure_category = "Assertion Failure"
+                            assertion_details = {
+                                "expected_value": expected,
+                                "actual_value": None,
+                                "comparison_type": "expected-result assertion",
+                            }
+                            await self._assert_expected(page, expected or "")
 
                     quality_checks = await self._quality_checks(
                         page, generation["directory"], script.script_id, network_errors
@@ -3244,7 +3675,9 @@ class AutomationService:
                     ):
                         failure_category = "Application Failure"
                     elif isinstance(exc, InvalidGeneratedStepError):
-                        failure_category = "Generated Script Defect"
+                        failure_category = "Invalid Test Step"
+                    elif isinstance(exc, PlaywrightAuthenticationError):
+                        failure_category = "Authentication Failure"
 
                     captured_dom_text: str | None = None
                     captured_page_title: str | None = None
@@ -3369,8 +3802,16 @@ class AutomationService:
                             "failed_responses": network_errors,
                         },
                         application_state_details=(
-                            context_element.get("application_state", {})
-                            if context_element else {}
+                            {
+                                **(
+                                    context_element.get("application_state", {})
+                                    if context_element else {}
+                                ),
+                                "authentication": {
+                                    **authentication_evidence,
+                                    "credentials_provided": bool(authentication),
+                                },
+                            }
                         ),
                         captured_dom_text=captured_dom_text,
                         reproduction_steps=[
@@ -3418,6 +3859,7 @@ class AutomationService:
                     except Exception:
                         pass
             await browser.close()
+        playwright_test_config.clear(authentication_token)
         return self._save_report(request, results, time.perf_counter() - started, generation["directory"], generation)
 
     @staticmethod
@@ -3642,7 +4084,7 @@ class AutomationService:
                 False,
                 "The captured DOM is an access challenge rather than the expected application page.",
             )
-        if failure.failure_category == "Generated Script Defect":
+        if failure.failure_category in {"Generated Script Defect", "Invalid Test Step"}:
             return (
                 "AUTOMATION_DEFECT",
                 "Locator or automation issue",

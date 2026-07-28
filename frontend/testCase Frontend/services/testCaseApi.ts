@@ -66,9 +66,14 @@ export const testCaseApi = {
     }, 600000); // up to 10 min for deep crawls
   },
 
-  executeScripts(generationId: string, mode: 'automated' | 'manual') {
+  executeScripts(
+    generationId: string,
+    mode: 'automated' | 'manual',
+    authentication?: { email: string; password: string },
+  ) {
     return request<ExecutionReport>('/api/v1/automation/executions', {
-      method: 'POST', body: JSON.stringify({ generation_id: generationId, mode }),
+      method: 'POST',
+      body: JSON.stringify({ generation_id: generationId, mode, authentication }),
     }, 600000);
   },
   compareExecution(executionId: string) {

@@ -21,10 +21,18 @@ from app.services.automation_service import (
     _challenge_evidence,
     _link_skip_reason,
     _python_source,
+    _step_execution_kind,
     _test_case_supported,
     _validate_css_selector,
     _validate_generated_source,
 )
+
+
+def test_step_execution_kind_requires_concrete_action_or_assertion():
+    assert _step_execution_kind("Observe the inventory list displayed") == "invalid"
+    assert _step_execution_kind("Verify the displayed details") == "invalid"
+    assert _step_execution_kind("Click the 'Login' button") == "action"
+    assert _step_execution_kind("Verify 'Inventory' text is visible") == "assertion"
 
 
 def test_failure_locator_evidence_lists_verified_strategies_in_priority_order():
@@ -146,7 +154,7 @@ async def test_incomplete_crawl_does_not_generate_partial_scripts(monkeypatch, t
     assert not list(tmp_path.glob("crawl-*/*.pwscript"))
 
 
-def test_dom_coverage_gate_ignores_non_interactive_verification_steps():
+def test_dom_coverage_gate_rejects_generic_verification_steps():
     test_case = {
         "steps": [
             {"action": "Enter 'Lenovo' in the search field"},
@@ -154,7 +162,7 @@ def test_dom_coverage_gate_ignores_non_interactive_verification_steps():
         ]
     }
     elements = [{"tag": "input", "label": "Search store", "page_url": "https://example.com"}]
-    assert _test_case_supported(test_case, elements) is True
+    assert _test_case_supported(test_case, elements) is False
 
 
 def test_generated_source_is_playwright_page_object_and_contains_traceable_id():
