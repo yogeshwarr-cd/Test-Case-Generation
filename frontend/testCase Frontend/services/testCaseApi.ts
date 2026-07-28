@@ -9,6 +9,7 @@ import type {
   TraceabilityComparisonReport,
   CrawlGenerationResponse,
   CrawlAnalysis,
+  HumanExecutionSession,
 } from '../types';
 import { parseWorkflowEvent } from '../utils';
 
@@ -75,6 +76,33 @@ export const testCaseApi = {
       method: 'POST',
       body: JSON.stringify({ generation_id: generationId, mode, authentication }),
     }, 600000);
+  },
+  startHumanExecution(payload: {
+    workflow_id: string;
+    scenario_id: string;
+    test_case_id: string;
+    application_url: string;
+  }) {
+    return request<HumanExecutionSession>('/api/v1/human-execution/sessions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }, 120000);
+  },
+  getHumanExecution(sessionId: string) {
+    return request<HumanExecutionSession>(`/api/v1/human-execution/sessions/${sessionId}`);
+  },
+  finishHumanExecution(sessionId: string) {
+    return request<HumanExecutionSession>(`/api/v1/human-execution/sessions/${sessionId}/finish`, {
+      method: 'POST',
+    }, 120000);
+  },
+  cancelHumanExecution(sessionId: string) {
+    return request<HumanExecutionSession>(`/api/v1/human-execution/sessions/${sessionId}/cancel`, {
+      method: 'POST',
+    });
+  },
+  getExecutionReport(executionId: string) {
+    return request<ExecutionReport>(`/api/v1/automation/executions/${executionId}`);
   },
   compareExecution(executionId: string) {
     return request<TraceabilityComparisonReport>('/api/v1/automation/executions/compare', {

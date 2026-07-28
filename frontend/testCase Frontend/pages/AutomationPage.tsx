@@ -5,7 +5,7 @@ import { CheckCircle2, Download, LoaderCircle, Play, XCircle } from 'lucide-reac
 import { StatePanel } from '../components/StatePanel';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
-import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionReport, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport } from '../types';
+import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
 export function AutomationPage() {
@@ -22,8 +22,28 @@ export function AutomationPage() {
   const [error, setError] = useState('');
   const [showTestReport, setShowTestReport] = useState(false);
   const [comparison, setComparison] = useState<TraceabilityComparisonReport | null>(null);
+  const [humanSession, setHumanSession] = useState<HumanExecutionSession | null>(null);
+  const humanSessionId = humanSession?.session_id;
+  const humanSessionState = humanSession?.state;
 
   useEffect(() => hydrate(), [hydrate]);
+  useEffect(() => {
+    if (!humanSessionId || !humanSessionState || !['waiting_for_human', 'recording', 'generating_scripts', 'validating_scripts', 'executing_scripts'].includes(humanSessionState)) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const current = await testCaseApi.getHumanExecution(humanSessionId);
+        setHumanSession(current);
+        if (current.state === 'completed' && current.execution_id) {
+          setReport(await testCaseApi.getExecutionReport(current.execution_id));
+          if (current.comparison) setComparison(current.comparison);
+        }
+        if (current.state === 'failed') setError(current.error || 'Manual execution failed.');
+      } catch (requestError) {
+        setError(friendlyError(requestError));
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [humanSessionId, humanSessionState]);
 
   const crawlApplication = async () => {
     if (!workflowId || !applicationUrl.trim()) return;
@@ -48,7 +68,24 @@ export function AutomationPage() {
   };
 
   const execute = async () => {
-    if (!generation) return;
+    if (!generation || !script) return;
+    if (mode === 'manual') {
+      if (!workflowId || !applicationUrl.trim()) return;
+      setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false);
+      try {
+        setHumanSession(await testCaseApi.startHumanExecution({
+          workflow_id: workflowId,
+          scenario_id: script.scenario_id,
+          test_case_id: script.test_case_id,
+          application_url: applicationUrl.trim(),
+        }));
+      } catch (requestError) {
+        setError(friendlyError(requestError));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     if (Boolean(authenticationEmail.trim()) !== Boolean(authenticationPassword)) {
       setError('Enter both Email and Password, or leave both fields empty.');
       return;
@@ -57,7 +94,7 @@ export function AutomationPage() {
       ? { email: authenticationEmail.trim(), password: authenticationPassword }
       : undefined;
     setBusy(true); setError(''); setShowTestReport(false);
-    try { setReport(await testCaseApi.executeScripts(generation.generation_id, mode, authentication)); }
+    try { setReport(await testCaseApi.executeScripts(generation.generation_id, 'automated', authentication)); }
     catch (requestError) {
       if (requestError instanceof Error && requestError.message.includes('(404)') && workflowId && applicationUrl.trim()) {
         try {
@@ -69,11 +106,50 @@ export function AutomationPage() {
           );
           setGeneration(refreshed);
           setSelectedScript(0);
-          setReport(await testCaseApi.executeScripts(refreshed.generation_id, mode, authentication));
+          setReport(await testCaseApi.executeScripts(refreshed.generation_id, 'automated', authentication));
         } catch (retryError) { setError(friendlyError(retryError)); }
       } else { setError(friendlyError(requestError)); }
     }
     finally { setBusy(false); }
+  };
+
+  const finishHumanExecution = async () => {
+    if (!humanSession) return;
+    setBusy(true); setError('');
+    try { setHumanSession(await testCaseApi.finishHumanExecution(humanSession.session_id)); }
+    catch (requestError) { setError(friendlyError(requestError)); }
+    finally { setBusy(false); }
+  };
+
+  const cancelHumanExecution = async () => {
+    if (!humanSession) return;
+    setBusy(true); setError('');
+    try { setHumanSession(await testCaseApi.cancelHumanExecution(humanSession.session_id)); }
+    catch (requestError) { setError(friendlyError(requestError)); }
+    finally { setBusy(false); }
+  };
+
+  const executeGeneratedHumanScripts = async () => {
+    if (!humanSession?.generation_id) return;
+    if (Boolean(authenticationEmail.trim()) !== Boolean(authenticationPassword)) {
+      setError('Enter both Email and Password, or leave both fields empty.');
+      return;
+    }
+    const authentication = authenticationEmail.trim() && authenticationPassword
+      ? { email: authenticationEmail.trim(), password: authenticationPassword }
+      : undefined;
+    setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false);
+    try {
+      setReport(await testCaseApi.executeScripts(
+        humanSession.generation_id,
+        'automated',
+        authentication,
+      ));
+    } catch (requestError) {
+      setError(friendlyError(requestError));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const compare = async () => {
@@ -144,9 +220,38 @@ export function AutomationPage() {
             <div className="mt-3 flex flex-wrap gap-3">
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-4 py-3"><input type="radio" checked={mode === 'automated'} onChange={() => setMode('automated')} /> Automated execution (default)</label>
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-4 py-3"><input type="radio" checked={mode === 'manual'} onChange={() => setMode('manual')} /> Manual execution</label>
-              <button disabled={busy} onClick={execute} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {mode === 'automated' ? 'Execute with Playwright' : 'Prepare manual package'}</button>
+              <button disabled={busy || Boolean(humanSession && ['waiting_for_human', 'recording', 'generating_scripts', 'validating_scripts', 'executing_scripts'].includes(humanSession.state))} onClick={execute} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {mode === 'automated' ? 'Execute with Playwright' : 'Start Manual Execution'}</button>
             </div>
+            {humanSession && <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-4">
+              <div className="grid gap-3 text-sm sm:grid-cols-3">
+                <div><p className="text-xs text-muted-foreground">Session state</p><p className="mt-1 font-semibold capitalize">{humanSession.state.replaceAll('_', ' ')}</p></div>
+                <div><p className="text-xs text-muted-foreground">Browser status</p><p className="mt-1 font-semibold capitalize">{humanSession.browser_status}</p></div>
+                <div><p className="text-xs text-muted-foreground">Recorded actions</p><p className="mt-1 font-semibold">{humanSession.recorded_action_count}</p></div>
+              </div>
+              {humanSession.error && <p className="mt-3 text-sm text-red-600">{humanSession.error}</p>}
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button disabled={busy || humanSession.state !== 'recording'} onClick={finishHumanExecution} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">Finish Recording</button>
+                <button disabled={busy || !['waiting_for_human', 'recording'].includes(humanSession.state)} onClick={cancelHumanExecution} className="rounded-lg border border-red-500/30 px-4 py-2 text-sm font-semibold text-red-600 disabled:opacity-50">Cancel Session</button>
+              </div>
+            </div>}
           </section>
+          {humanSession?.generated_scripts?.length ? <section className="space-y-4 rounded-2xl border border-green-500/30 bg-green-500/5 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-green-600">Human-recorded automation</p>
+                <h2 className="mt-2 text-lg font-bold">Generated Manual Test Scripts</h2>
+                <p className="mt-1 text-sm text-muted-foreground">{humanSession.generated_scripts.length} validated Playwright script{humanSession.generated_scripts.length === 1 ? '' : 's'} generated from {humanSession.recorded_action_count} recorded actions.</p>
+              </div>
+              <button disabled={busy || !humanSession.generation_id} onClick={executeGeneratedHumanScripts} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Execute with Playwright</button>
+            </div>
+            {humanSession.generated_scripts.map((generatedScript) => <article key={generatedScript.script_id} className="overflow-hidden rounded-xl border border-border bg-card">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
+                <div><h3 className="font-semibold">{generatedScript.name}</h3><p className="mt-1 text-xs text-muted-foreground">{generatedScript.test_case_id} · {generatedScript.scenario_id} · {generatedScript.action_count} actions</p></div>
+                <button onClick={() => downloadFile(`${generatedScript.script_id}.py`, generatedScript.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-semibold hover:bg-muted"><Download className="h-4 w-4" /> Download script</button>
+              </div>
+              <pre className="max-h-[36rem] overflow-auto whitespace-pre p-4 text-xs">{generatedScript.source}</pre>
+            </article>)}
+          </section> : null}
         </>
       )}
 

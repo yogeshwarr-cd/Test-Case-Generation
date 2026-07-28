@@ -568,6 +568,48 @@ export interface ExecutionReport {
   retest_verification: Array<{ script_id: string; previous_status: string; current_status: string; verified: boolean; message: string }>;
 }
 
+export type HumanExecutionState =
+  | 'waiting_for_human'
+  | 'recording'
+  | 'generating_scripts'
+  | 'validating_scripts'
+  | 'executing_scripts'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface HumanExecutionSession {
+  session_id: string;
+  workflow_id: string;
+  scenario_id: string;
+  test_case_id: string;
+  application_url: string;
+  state: HumanExecutionState;
+  browser_status: string;
+  recorded_action_count: number;
+  generation_id?: string;
+  execution_id?: string;
+  comparison?: TraceabilityComparisonReport;
+  error?: string;
+  generated_scripts: Array<{
+    script_id: string;
+    workflow_id: string;
+    scenario_id: string;
+    test_case_id: string;
+    name: string;
+    application_url: string;
+    source: string;
+    action_count: number;
+  }>;
+  actions: Array<{
+    sequence: number;
+    kind: 'click' | 'fill' | 'select' | 'check' | 'uncheck' | 'navigation';
+    accessible_name?: string;
+    label?: string;
+    test_id?: string;
+  }>;
+}
+
 export interface CrawlGenerationResponse {
   crawl_id: string;
   url: string;

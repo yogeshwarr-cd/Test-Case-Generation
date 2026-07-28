@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Manual Execution</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">Playwright human recorder</p>
+        <h1>Manual Execution</h1>
+        <p>Perform the business flow in a headed browser. Valid interactions are recorded and converted into a tested Playwright script.</p>
+      </header>
+
+      <section class="panel">
+        <div class="fields">
+          <label>Workflow ID<input id="workflow" autocomplete="off" required /></label>
+          <label>Scenario ID<input id="scenario" autocomplete="off" required /></label>
+          <label>Test-case ID<input id="testCase" autocomplete="off" required /></label>
+          <label>Application URL<input id="applicationUrl" type="url" placeholder="https://app.example.com" required /></label>
+        </div>
+        <div class="controls">
+          <button id="start" class="primary">Start Manual Execution</button>
+          <button id="finish" disabled>Finish Recording</button>
+          <button id="cancel" class="danger" disabled>Cancel Session</button>
+        </div>
+      </section>
+
+      <section class="panel status-panel" aria-live="polite">
+        <div><span>Session state</span><strong id="state">Not started</strong></div>
+        <div><span>Browser status</span><strong id="browser">Closed</strong></div>
+        <div><span>Recorded actions</span><strong id="count">0</strong></div>
+      </section>
+
+      <section id="message" class="message" hidden></section>
+      <section class="panel">
+        <h2>Recorded activity</h2>
+        <ol id="actions"><li class="empty">No actions recorded yet.</li></ol>
+      </section>
+    </main>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>
