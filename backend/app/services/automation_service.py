@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from pprint import pformat
+from threading import Event
 from typing import Any, Awaitable, Callable, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
@@ -26,6 +27,7 @@ from app.schemas.automation_schema import (
     CrawlApplicationRequest,
     CrawlAndGenerateRequest,
     CrawlGenerationResponse,
+    CrawlJobResponse,
     DiscoveredElement,
     AutomationRecommendation,
     DeveloperImplementationPlan,
@@ -41,6 +43,7 @@ from app.schemas.automation_schema import (
     RequirementMapping,
     RetestStrategy,
     TraceabilityComparisonReport,
+    WorkflowCrawlJobResponse,
 )
 from app.services.seacrawl_service import SeacrawlAdapter
 from app.services.cache_service import cache
@@ -720,7 +723,141 @@ class AutomationService:
         self._reports: dict[str, ExecutionReport] = {}
         self._crawl_reports: dict[str, dict[str, Any]] = {}
         self._crawls: dict[str, dict[str, Any]] = {}
+        self._crawl_jobs: dict[str, dict[str, Any]] = {}
+        self._workflow_crawl_jobs: dict[str, dict[str, Any]] = {}
         self.seacrawl = SeacrawlAdapter()
+
+    def _crawl_job_response(self, job_id: str) -> CrawlJobResponse:
+        job = self._crawl_jobs.get(job_id)
+        if job is None:
+            raise AutomationError("Crawl job was not found or has expired.")
+        report = self._crawl_reports.get(job["report_key"], {})
+        return CrawlJobResponse(
+            job_id=job_id,
+            status=job["status"],
+            stop_requested=job["cancel_event"].is_set(),
+            progress=report.get("progress", {}),
+            result=job.get("result"),
+            error=job.get("error"),
+        )
+
+    async def start_crawl_job(
+        self, request: CrawlAndGenerateRequest
+    ) -> CrawlJobResponse:
+        job_id = f"crawl-job-{uuid.uuid4()}"
+        job: dict[str, Any] = {
+            "status": "queued",
+            "cancel_event": Event(),
+            "report_key": _canonical_page_url(str(request.url)),
+            "result": None,
+            "error": None,
+        }
+        self._crawl_jobs[job_id] = job
+
+        async def run() -> None:
+            job["status"] = "running"
+            try:
+                job["result"] = await self.crawl_and_generate(
+                    request, cancel_event=job["cancel_event"]
+                )
+                job["status"] = "completed"
+            except Exception as exc:
+                job["error"] = str(exc)
+                job["status"] = "failed"
+                logger.exception("Crawl job failed job_id=%s", job_id)
+
+        job["task"] = asyncio.create_task(run())
+        return self._crawl_job_response(job_id)
+
+    def crawl_job(self, job_id: str) -> CrawlJobResponse:
+        return self._crawl_job_response(job_id)
+
+    def stop_crawl_job(self, job_id: str) -> CrawlJobResponse:
+        job = self._crawl_jobs.get(job_id)
+        if job is None:
+            raise AutomationError("Crawl job was not found or has expired.")
+        if job["status"] in {"queued", "running"}:
+            job["cancel_event"].set()
+            job["status"] = "stopping"
+        return self._crawl_job_response(job_id)
+
+    def _workflow_crawl_job_response(
+        self, job_id: str
+    ) -> WorkflowCrawlJobResponse:
+        job = self._workflow_crawl_jobs.get(job_id)
+        if job is None:
+            raise AutomationError("Workflow crawl job was not found or has expired.")
+        report = self._crawl_reports.get(job["report_key"], {})
+        return WorkflowCrawlJobResponse(
+            job_id=job_id,
+            status=job["status"],
+            stop_requested=job["cancel_event"].is_set(),
+            progress=report.get("progress", {}),
+            crawl=job.get("crawl"),
+            generation=job.get("generation"),
+            error=job.get("error"),
+        )
+
+    async def start_workflow_crawl_job(
+        self, request: CrawlApplicationRequest
+    ) -> WorkflowCrawlJobResponse:
+        job_id = f"workflow-crawl-job-{uuid.uuid4()}"
+        job: dict[str, Any] = {
+            "status": "queued",
+            "cancel_event": Event(),
+            "report_key": _canonical_page_url(str(request.application_url)),
+            "crawl": None,
+            "generation": None,
+            "error": None,
+        }
+        self._workflow_crawl_jobs[job_id] = job
+
+        async def run() -> None:
+            job["status"] = "running"
+            try:
+                crawl = await self.analyze_application(
+                    request, cancel_event=job["cancel_event"]
+                )
+                job["crawl"] = crawl
+                has_scanned_data = (
+                    crawl.crawl_status != "crawl_blocked"
+                    and (
+                        crawl.pages_crawled > 0
+                        or bool(crawl.discovered_elements)
+                    )
+                )
+                if has_scanned_data:
+                    job["generation"] = await self.generate(
+                        GenerateScriptsRequest(
+                            workflow_id=request.workflow_id,
+                            application_url=request.application_url,
+                            crawl_id=crawl.crawl_id,
+                        )
+                    )
+                job["status"] = "completed"
+            except Exception as exc:
+                job["error"] = str(exc)
+                job["status"] = "failed"
+                logger.exception(
+                    "Workflow crawl job failed job_id=%s", job_id
+                )
+
+        job["task"] = asyncio.create_task(run())
+        return self._workflow_crawl_job_response(job_id)
+
+    def workflow_crawl_job(self, job_id: str) -> WorkflowCrawlJobResponse:
+        return self._workflow_crawl_job_response(job_id)
+
+    def stop_workflow_crawl_job(
+        self, job_id: str
+    ) -> WorkflowCrawlJobResponse:
+        job = self._workflow_crawl_jobs.get(job_id)
+        if job is None:
+            raise AutomationError("Workflow crawl job was not found or has expired.")
+        if job["status"] in {"queued", "running"}:
+            job["cancel_event"].set()
+            job["status"] = "stopping"
+        return self._workflow_crawl_job_response(job_id)
 
     def _completed_crawl_report(
         self, url: str, title: str | None, elements: list[DiscoveredElement]
@@ -908,7 +1045,9 @@ class AutomationService:
             })"""
         )
 
-    async def _discover(self, url: str) -> tuple[str | None, list[DiscoveredElement]]:
+    async def _discover(
+        self, url: str, *, cancel_event: Event | None = None
+    ) -> tuple[str | None, list[DiscoveredElement]]:
         if settings.app_mock_mode:
             self._crawl_reports[_canonical_page_url(url)] = {
                 "status": "crawl_completed", "start_url": url,
@@ -966,6 +1105,8 @@ class AutomationService:
             "recommended_corrective_action": None,
         }
         report_key = _canonical_page_url(url)
+        # Store the live report object so crawl-job polling can expose progress.
+        self._crawl_reports[report_key] = report
         started_at = time.monotonic()
         deadline = started_at + settings.automation_crawl_timeout_seconds
         try:
@@ -1083,6 +1224,12 @@ class AutomationService:
                 report["status"] = "crawl_in_progress"
                 report["events"].append("crawl_in_progress")
                 while pending and len(report["page_inventory"]) < settings.automation_crawl_page_limit:
+                    if cancel_event is not None and cancel_event.is_set():
+                        report["failure_reason"] = "Crawl stopped by user."
+                        report["stop_requested"] = True
+                        report["remaining_crawl_queue"] = [item[0] for item in pending]
+                        report["events"].append("crawl_stopped")
+                        break
                     now = time.monotonic()
                     elapsed = now - started_at
                     completed = len(report["page_inventory"])
@@ -1144,14 +1291,24 @@ class AutomationService:
                         status_code=navigation_response.status if navigation_response else None,
                         elements=discovered,
                     )
-                    if challenge and settings.automation_challenge_wait_seconds > 0:
+                    if (
+                        challenge
+                        and settings.automation_challenge_wait_seconds > 0
+                        and not (cancel_event is not None and cancel_event.is_set())
+                    ):
                         report["events"].append("challenge_resolution_wait_started")
                         challenge_deadline = min(
                             deadline,
                             time.monotonic()
                             + settings.automation_challenge_wait_seconds,
                         )
-                        while challenge and time.monotonic() < challenge_deadline:
+                        while (
+                            challenge
+                            and time.monotonic() < challenge_deadline
+                            and not (
+                                cancel_event is not None and cancel_event.is_set()
+                            )
+                        ):
                             remaining_ms = max(
                                 1,
                                 int((challenge_deadline - time.monotonic()) * 1000),
@@ -1175,6 +1332,14 @@ class AutomationService:
                             if challenge is None
                             else "challenge_resolution_wait_expired"
                         )
+                    if cancel_event is not None and cancel_event.is_set():
+                        report["failure_reason"] = "Crawl stopped by user."
+                        report["stop_requested"] = True
+                        report["remaining_crawl_queue"] = [
+                            current_url, *[item[0] for item in pending]
+                        ]
+                        report["events"].append("crawl_stopped")
+                        break
                     if challenge:
                         screenshot_dir = self.artifact_root / "crawl-evidence"
                         screenshot_dir.mkdir(parents=True, exist_ok=True)
@@ -1553,7 +1718,9 @@ class AutomationService:
                         "The application crawl did not reach a complete state."
                     )
                     report["recommended_corrective_action"] = (
-                        "Increase crawl page/depth/time limits or fix skipped navigation failures, then retry."
+                        "Review and execute the scripts generated from pages scanned before the stop."
+                        if report.get("stop_requested")
+                        else "Increase crawl page/depth/time limits or fix skipped navigation failures, then retry."
                     )
                     report["events"].append("crawl_incomplete")
             self._crawl_reports[report_key] = report
@@ -1674,6 +1841,7 @@ class AutomationService:
         usable_partial_crawl = bool(
             crawl.get("application_map", {}).get("pages")
             or crawl.get("discovered_elements")
+            or int(crawl_report.get("pages_completed") or 0) > 0
         )
         if (
             crawl_report.get("status") == "crawl_blocked"
@@ -1688,11 +1856,10 @@ class AutomationService:
             DiscoveredElement.model_validate(item)
             for item in crawl.get("discovered_elements", [])
         ]
-        self._completed_crawl_report(url, title, elements)
         script_cache_key = cache.fingerprint(
             "scripts",
             {
-                "generator_version": 8,
+                "generator_version": 9,
                 "application_url": url,
                 "requirement_version": requirement_version,
                 "crawl_id": request.crawl_id,
@@ -1756,14 +1923,24 @@ class AutomationService:
         directory.mkdir(parents=True, exist_ok=False)
         element_dicts = [element.model_dump(mode="json") for element in elements]
         application_map = _application_map(url, title, element_dicts)
+        stored_application_map = crawl.get("application_map") or {}
         application_map.update({
             "crawl_status": crawl_report["status"],
-            "pages": crawl_report.get("page_inventory") or application_map["pages"],
+            "pages": (
+                crawl_report.get("page_inventory")
+                or stored_application_map.get("pages")
+                or application_map["pages"]
+            ),
             "relationships": (
                 crawl_report.get("navigation_relationships")
+                or stored_application_map.get("relationships")
                 or application_map["relationships"]
             ),
-            "page_count": crawl_report.get("pages_completed", application_map["page_count"]),
+            "page_count": (
+                crawl_report.get("pages_completed")
+                or stored_application_map.get("page_count")
+                or application_map["page_count"]
+            ),
             "pages_skipped": crawl_report.get("pages_skipped", []),
             "crawl_events": crawl_report.get("events", []),
         })
@@ -1896,6 +2073,74 @@ class AutomationService:
                     ],
                 )
             )
+        if crawl_report.get("status") == "crawl_incomplete":
+            represented_pages = {
+                _canonical_page_url(str(script.page_url))
+                for script in scripts
+                if script.page_url
+            }
+            for page_index, page_info in enumerate(
+                application_map.get("pages", []), start=1
+            ):
+                page_url = _canonical_page_url(
+                    str(page_info.get("final_url") or page_info.get("url") or url)
+                )
+                if page_url in represented_pages:
+                    continue
+                page_elements = list(page_info.get("elements") or [])
+                page_name = (
+                    str(page_info.get("title") or "").strip()
+                    or urlsplit(page_url).path.strip("/")
+                    or "home"
+                )
+                script_id = (
+                    f"partial-page-{page_index:03d}-{_safe_name(page_name)}"
+                )
+                source = _page_script_source(
+                    f"Successfully crawled page {page_name}",
+                    page_url,
+                    page_elements,
+                )
+                try:
+                    _validate_generated_source(source)
+                except (SyntaxError, ValueError) as source_err:
+                    logger.warning(
+                        "Partial page script skipped page_url=%s error=%s: %s",
+                        page_url,
+                        type(source_err).__name__,
+                        source_err,
+                    )
+                    skipped_count += 1
+                    continue
+                (
+                    directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
+                ).write_text(source, encoding="utf-8")
+                scripts.append(
+                    GeneratedScript(
+                        script_id=script_id,
+                        workflow_id=request.workflow_id,
+                        test_case_id=f"CRAWL-{page_index:03d}",
+                        scenario_id="URL-CRAWL",
+                        name=f"Successfully crawled page: {page_name}",
+                        application_url=url,
+                        source=source,
+                        download_path=(
+                            f"/api/v1/automation/scripts/{generation_id}/"
+                            f"{script_id}/download"
+                        ),
+                        application_map_version=application_map_version,
+                        requirement_version=requirement_version,
+                        lifecycle_status="Valid",
+                        page_url=page_url,
+                        page_elements=page_elements,
+                        executable_steps=[{
+                            "step_number": 1,
+                            "action": f"Open {page_url}",
+                            "expected_result": "The successfully crawled page is visible",
+                        }],
+                    )
+                )
+                represented_pages.add(page_url)
         crawl_report["requirement_evidence"] = {
             "supported_test_cases": [script.test_case_id for script in scripts],
             "unsupported_test_cases": unsupported_requirements,
@@ -1906,17 +2151,10 @@ class AutomationService:
             len(scripts), skipped_count, generation_id,
         )
         if not scripts:
-            # Provide a clear, actionable message instead of silent empty list
-            reason = (
-                "The coverage gate filtered all test cases because none of their step "
-                "actions matched any element discovered on the page. Check that the "
-                "application URL is correct and the page is fully rendered, or review "
-                "the test case steps."
-                if element_dicts
-                else "Playwright could not discover any interactive elements on the page. "
-                "Ensure the URL loads a real UI (not a login wall or error page)."
+            crawl_report["script_generation_message"] = (
+                "No scripts available: the backend confirmed that zero valid scripts "
+                "could be generated from the preserved crawl data."
             )
-            raise AutomationError(f"No scripts could be generated: {reason}")
         response = ScriptGenerationResponse(
             generation_id=generation_id,
             application_url=url,
@@ -1954,11 +2192,19 @@ class AutomationService:
         return response
 
     async def analyze_application(
-        self, request: CrawlApplicationRequest, *, _dedicated_loop: bool = False
+        self,
+        request: CrawlApplicationRequest,
+        *,
+        _dedicated_loop: bool = False,
+        cancel_event: Event | None = None,
     ) -> CrawlAnalysisResponse:
         if sys.platform == "win32" and not settings.app_mock_mode and not _dedicated_loop:
             return await _on_playwright_loop(
-                lambda: self.analyze_application(request, _dedicated_loop=True)
+                lambda: self.analyze_application(
+                    request,
+                    _dedicated_loop=True,
+                    cancel_event=cancel_event,
+                )
             )
         state = workflow_service.get(request.workflow_id)
         if state.get("status") != "completed":
@@ -1979,7 +2225,12 @@ class AutomationService:
         elements: list[DiscoveredElement] = []
         try:
             try:
-                title, elements = await self._discover(url)
+                if cancel_event is None:
+                    title, elements = await self._discover(url)
+                else:
+                    title, elements = await self._discover(
+                        url, cancel_event=cancel_event
+                    )
                 report = self._completed_crawl_report(url, title, elements)
             except AutomationError:
                 report = self._crawl_reports.get(_canonical_page_url(url), {})
@@ -2064,7 +2315,11 @@ class AutomationService:
         )
 
     async def crawl_and_generate(
-        self, request: CrawlAndGenerateRequest, *, _dedicated_loop: bool = False
+        self,
+        request: CrawlAndGenerateRequest,
+        *,
+        _dedicated_loop: bool = False,
+        cancel_event: Event | None = None,
     ) -> CrawlGenerationResponse:
         """Standalone URL crawl → Playwright script generation.
 
@@ -2074,7 +2329,11 @@ class AutomationService:
         """
         if sys.platform == "win32" and not settings.app_mock_mode and not _dedicated_loop:
             return await _on_playwright_loop(
-                lambda: self.crawl_and_generate(request, _dedicated_loop=True)
+                lambda: self.crawl_and_generate(
+                    request,
+                    _dedicated_loop=True,
+                    cancel_event=cancel_event,
+                )
             )
 
         url = str(request.url)
@@ -2098,7 +2357,12 @@ class AutomationService:
         elements: list[DiscoveredElement] = []
         try:
             try:
-                title, elements = await self._discover(url)
+                if cancel_event is None:
+                    title, elements = await self._discover(url)
+                else:
+                    title, elements = await self._discover(
+                        url, cancel_event=cancel_event
+                    )
                 crawl_report = self._completed_crawl_report(url, title, elements)
             except AutomationError:
                 crawl_report = self._crawl_reports.get(_canonical_page_url(url), {})
@@ -2196,7 +2460,7 @@ class AutomationService:
             crawl_id, len(scripts), skipped_count,
         )
 
-        if not scripts:
+        if not scripts and not crawl_report.get("stop_requested"):
             raise AutomationError(
                 "No scripts could be generated from the crawled URL. "
                 "Ensure the URL loads a real UI and is not behind a login wall."

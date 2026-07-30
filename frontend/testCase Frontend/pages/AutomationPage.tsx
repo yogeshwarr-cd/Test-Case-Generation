@@ -5,7 +5,7 @@ import { CheckCircle2, Download, LoaderCircle, Play, XCircle } from 'lucide-reac
 import { StatePanel } from '../components/StatePanel';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
-import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport } from '../types';
+import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
 export function AutomationPage() {
@@ -23,8 +23,12 @@ export function AutomationPage() {
   const [showTestReport, setShowTestReport] = useState(false);
   const [comparison, setComparison] = useState<TraceabilityComparisonReport | null>(null);
   const [humanSession, setHumanSession] = useState<HumanExecutionSession | null>(null);
+  const [crawlJob, setCrawlJob] = useState<WorkflowCrawlJob | null>(null);
   const humanSessionId = humanSession?.session_id;
   const humanSessionState = humanSession?.state;
+  const crawlRunning = Boolean(
+    crawlJob && ['queued', 'running', 'stopping'].includes(crawlJob.status),
+  );
 
   useEffect(() => hydrate(), [hydrate]);
   useEffect(() => {
@@ -44,13 +48,57 @@ export function AutomationPage() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [humanSessionId, humanSessionState]);
+  useEffect(() => {
+    if (!crawlJob?.job_id || !crawlRunning) return;
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const current = await testCaseApi.getWorkflowCrawlJob(crawlJob.job_id);
+        if (disposed) return;
+        setCrawlJob(current);
+        if (current.status === 'completed') {
+          if (current.crawl) setCrawl(current.crawl);
+          if (current.generation) {
+            setGeneration(current.generation);
+            setSelectedScript(0);
+          }
+        } else if (current.status === 'failed') {
+          setError(current.error || 'The application crawl failed.');
+        }
+      } catch (requestError) {
+        if (!disposed) setError(friendlyError(requestError));
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [crawlJob?.job_id, crawlRunning]);
 
   const crawlApplication = async () => {
-    if (!workflowId || !applicationUrl.trim()) return;
+    if (crawlRunning && crawlJob) {
+      if (busy) return;
+      setBusy(true); setError('');
+      try {
+        setCrawlJob(await testCaseApi.stopWorkflowCrawlJob(crawlJob.job_id));
+      } catch (requestError) {
+        setError(friendlyError(requestError));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (!workflowId || !applicationUrl.trim() || busy) return;
+    const targetUrl = applicationUrl.trim();
     setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false);
     try {
+      setCrawl(null);
       setGeneration(null);
-      setCrawl(await testCaseApi.crawlApplication(workflowId, applicationUrl.trim()));
+      setCrawlJob(await testCaseApi.startWorkflowCrawlJob(
+        workflowId, targetUrl,
+      ));
     } catch (requestError) { setError(friendlyError(requestError)); }
     finally { setBusy(false); }
   };
@@ -178,6 +226,9 @@ export function AutomationPage() {
     && (crawl.pages_crawled > 0 || crawl.discovered_elements.length > 0),
   );
   const partialGeneration = generation?.crawl_report.status === 'crawl_incomplete';
+  const skippedPages = (crawl?.crawl_report.pages_skipped ?? []).filter(
+    (item) => /^https?:\/\//i.test(item.url),
+  );
   return (
     <div className="space-y-6">
       <div>
@@ -191,7 +242,7 @@ export function AutomationPage() {
         <label htmlFor="application-url" className="text-sm font-semibold">Deployed application URL</label>
         <div className="mt-2 flex flex-col gap-3 sm:flex-row">
           <input id="application-url" type="url" value={applicationUrl} onChange={(event) => { setApplicationUrl(event.target.value); setCrawl(null); setGeneration(null); }} placeholder="https://app.example.com" className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
-          <button disabled={busy || !applicationUrl.trim()} onClick={crawlApplication} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Crawl application</button>
+          <button disabled={busy || (!crawlRunning && !applicationUrl.trim())} onClick={crawlApplication} className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${crawlRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-primary text-primary-foreground'}`}>{busy || crawlJob?.status === 'stopping' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {crawlRunning ? 'Stop Crawling' : 'Crawl Application'}</button>
           <button disabled={busy || !hasUsableCrawl} onClick={generate} className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><Play className="h-4 w-4" /> Generate Test Scripts</button>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -200,44 +251,62 @@ export function AutomationPage() {
         </div>
       </section>
 
+      {crawlRunning && <section className="rounded-2xl border border-primary/20 bg-primary/5 p-5">
+        <div className="flex items-center gap-2 font-semibold text-primary"><LoaderCircle className="h-5 w-5 animate-spin" /> Crawling application</div>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {crawlJob?.progress?.pages_completed ?? 0} pages scanned ·{' '}
+          {crawlJob?.progress?.pages_remaining ?? 0} pages remaining ·{' '}
+          {crawlJob?.progress?.elapsed_seconds ?? 0}s elapsed
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">Click Stop Crawling to preserve scanned pages and generate scripts immediately.</p>
+      </section>}
+
       {crawl && (
         <section className={`rounded-2xl border p-5 ${crawl.crawl_status === 'crawl_completed' ? 'border-green-500/30 bg-green-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
           <div className={`flex items-center gap-2 font-semibold ${crawl.crawl_status === 'crawl_completed' ? 'text-green-600' : 'text-red-600'}`}>
             {crawl.crawl_status === 'crawl_completed' ? <CheckCircle2 className="h-5 w-5" /> : <XCircle className="h-5 w-5" />}
             {crawl.crawl_status.replaceAll('_', ' ')}
           </div>
-          <p className="mt-2 text-sm text-muted-foreground">{crawl.pages_crawled} pages scanned · {crawl.elements_found} verified elements · {crawl.crawl_report.pages_skipped.length} pages skipped</p>
+          <p className="mt-2 text-sm text-muted-foreground">{crawl.pages_crawled} pages scanned · {crawl.elements_found} verified elements · {skippedPages.length} pages skipped</p>
           {crawl.crawl_report.failure_reason && <p className="mt-3 text-sm font-medium text-red-600">{crawl.crawl_report.failure_reason}</p>}
           {crawl.crawl_status === 'crawl_incomplete' && hasUsableCrawl && <p className="mt-3 text-sm font-medium text-amber-700">The crawl stopped early, but scripts can still be generated from the successfully scanned pages.</p>}
           {crawl.crawl_report.blocked_url && <p className="mt-1 break-all text-xs text-muted-foreground">Blocked URL: {crawl.crawl_report.blocked_url}</p>}
           {crawl.crawl_report.recommended_corrective_action && <p className="mt-2 text-sm text-muted-foreground">Recommended action: {crawl.crawl_report.recommended_corrective_action}</p>}
+          {skippedPages.length > 0 && <div className="mt-4 rounded-lg border border-amber-500/20 bg-background/50 p-3">
+            <p className="text-sm font-semibold text-amber-700">Skipped pages ({skippedPages.length})</p>
+            <ul className="mt-2 max-h-40 space-y-1 overflow-auto text-xs text-muted-foreground">
+              {skippedPages.map((item, index) => <li key={`${item.url}-${index}`} className="break-all"><span className="font-medium text-foreground">{item.url}</span> — {item.reason}</li>)}
+            </ul>
+          </div>}
         </section>
       )}
 
       {generation && (
         <>
           <section className={`rounded-2xl border p-5 ${partialGeneration ? 'border-amber-500/30 bg-amber-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
-            <div className={`flex items-center gap-2 font-semibold ${partialGeneration ? 'text-amber-700' : 'text-green-600'}`}><CheckCircle2 className="h-5 w-5" /> {partialGeneration ? 'Scripts generated from available pages' : 'Application reachable'}</div>
+            <div className={`flex items-center gap-2 font-semibold ${partialGeneration ? 'text-amber-700' : 'text-green-600'}`}><CheckCircle2 className="h-5 w-5" /> {partialGeneration ? 'Scripts Generated from Successfully Crawled Pages' : 'Generated Test Scripts'}</div>
             <p className="mt-2 text-sm text-muted-foreground">{generation.page_title || generation.application_url} · {generation.application_map?.page_count ?? 1} pages · {generation.discovered_elements.length} verified interactive elements · {generation.scripts.length} scripts generated</p>
-            {partialGeneration && <p className="mt-2 text-sm text-amber-700">The crawl time limit was reached. These scripts use all successfully scanned pages and elements collected before the timeout.</p>}
+            {partialGeneration && <p className="mt-2 text-sm text-amber-700">These scripts use the pages and elements preserved before the crawl stopped.</p>}
           </section>
 
-          <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
+          {generation.scripts.length === 0
+            ? <section className="rounded-2xl border border-border bg-card p-5 text-sm text-muted-foreground">No scripts available</section>
+            : <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
             <aside className="space-y-2 rounded-2xl border border-border bg-card p-3">
-              {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-lg p-3 text-left text-sm ${selectedScript === index ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs opacity-70">{item.test_case_id}</span></button>)}
+              {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-lg p-3 text-left text-sm ${selectedScript === index ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs opacity-70">{item.page_url || item.application_url}</span></button>)}
             </aside>
             {script && <section className="min-w-0 rounded-2xl border border-border bg-card">
-              <div className="flex items-center justify-between gap-3 border-b border-border p-4"><div><h2 className="font-semibold">{script.name}</h2><p className="text-xs text-muted-foreground">{script.test_case_id} → {script.script_id}</p></div><button onClick={() => downloadFile(`${script.script_id}.py`, script.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-semibold hover:bg-muted"><Download className="h-4 w-4" /> Download</button></div>
+              <div className="flex items-center justify-between gap-3 border-b border-border p-4"><div><h2 className="font-semibold">{script.name}</h2><p className="break-all text-xs text-muted-foreground">{script.page_url || script.application_url}</p><p className="mt-1 text-xs text-muted-foreground">{script.test_case_id} → {script.script_id}</p></div><button onClick={() => downloadFile(`${script.script_id}.py`, script.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-semibold hover:bg-muted"><Download className="h-4 w-4" /> Download</button></div>
               <pre className="max-h-[36rem] overflow-auto p-4 text-xs">{script.source}</pre>
             </section>}
-          </div>
+          </div>}
 
           <section className="rounded-2xl border border-border bg-card p-5">
             <h2 className="font-semibold">Execution mode</h2>
             <div className="mt-3 flex flex-wrap gap-3">
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-4 py-3"><input type="radio" checked={mode === 'automated'} onChange={() => setMode('automated')} /> Automated execution (default)</label>
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-4 py-3"><input type="radio" checked={mode === 'manual'} onChange={() => setMode('manual')} /> Manual execution</label>
-              <button disabled={busy || Boolean(humanSession && ['waiting_for_human', 'recording', 'generating_scripts', 'validating_scripts', 'executing_scripts'].includes(humanSession.state))} onClick={execute} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {mode === 'automated' ? 'Execute with Playwright' : 'Start Manual Execution'}</button>
+              <button disabled={busy || !script || Boolean(humanSession && ['waiting_for_human', 'recording', 'generating_scripts', 'validating_scripts', 'executing_scripts'].includes(humanSession.state))} onClick={execute} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {mode === 'automated' ? 'Execute with Playwright' : 'Start Manual Execution'}</button>
             </div>
             {humanSession && <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-4">
               <div className="grid gap-3 text-sm sm:grid-cols-3">

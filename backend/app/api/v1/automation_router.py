@@ -28,6 +28,21 @@ async def crawl_and_generate(request: CrawlAndGenerateRequest):
     return await automation_service.crawl_and_generate(request)
 
 
+@router.post("/url-crawl/jobs", summary="Start a cancellable URL crawl")
+async def start_crawl_job(request: CrawlAndGenerateRequest):
+    return await automation_service.start_crawl_job(request)
+
+
+@router.get("/url-crawl/jobs/{job_id}", summary="Get crawl progress and partial result")
+async def get_crawl_job(job_id: str):
+    return automation_service.crawl_job(job_id)
+
+
+@router.post("/url-crawl/jobs/{job_id}/stop", summary="Stop a crawl and generate partial scripts")
+async def stop_crawl_job(job_id: str):
+    return automation_service.stop_crawl_job(job_id)
+
+
 @router.get(
     "/url-crawl/{crawl_id}/{script_id}/download",
     summary="Download a script from a URL-crawl session",
@@ -45,6 +60,21 @@ async def generate_scripts(request: GenerateScriptsRequest):
 @router.post("/scripts/crawl", summary="Crawl and validate an application before script generation")
 async def crawl_application(request: CrawlApplicationRequest):
     return await automation_service.analyze_application(request)
+
+
+@router.post("/scripts/crawl/jobs", summary="Start a cancellable workflow application crawl")
+async def start_workflow_crawl_job(request: CrawlApplicationRequest):
+    return await automation_service.start_workflow_crawl_job(request)
+
+
+@router.get("/scripts/crawl/jobs/{job_id}", summary="Get workflow crawl progress and scripts")
+async def get_workflow_crawl_job(job_id: str):
+    return automation_service.workflow_crawl_job(job_id)
+
+
+@router.post("/scripts/crawl/jobs/{job_id}/stop", summary="Stop workflow crawl and generate partial scripts")
+async def stop_workflow_crawl_job(job_id: str):
+    return automation_service.stop_workflow_crawl_job(job_id)
 
 
 @router.get("/scripts/{generation_id}/{script_id}/download", summary="Download a script")

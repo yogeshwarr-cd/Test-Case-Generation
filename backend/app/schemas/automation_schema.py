@@ -34,6 +34,18 @@ class CrawlAnalysisResponse(BaseModel):
     discovered_elements: list[DiscoveredElement] = Field(default_factory=list)
 
 
+class WorkflowCrawlJobResponse(BaseModel):
+    """State and results for a cancellable workflow-backed crawl."""
+
+    job_id: str
+    status: Literal["queued", "running", "stopping", "completed", "failed"]
+    stop_requested: bool = False
+    progress: dict[str, Any] = Field(default_factory=dict)
+    crawl: CrawlAnalysisResponse | None = None
+    generation: ScriptGenerationResponse | None = None
+    error: str | None = None
+
+
 class DiscoveredElement(BaseModel):
     role: str | None = None
     name: str | None = None
@@ -380,3 +392,14 @@ class CrawlGenerationResponse(BaseModel):
     scripts: list[GeneratedScript]
     discovered_elements: list[DiscoveredElement] = Field(default_factory=list)
     application_map: dict[str, Any] = Field(default_factory=dict)
+
+
+class CrawlJobResponse(BaseModel):
+    """Current state of a cancellable standalone crawl."""
+
+    job_id: str
+    status: Literal["queued", "running", "stopping", "completed", "failed"]
+    stop_requested: bool = False
+    progress: dict[str, Any] = Field(default_factory=dict)
+    result: CrawlGenerationResponse | None = None
+    error: str | None = None

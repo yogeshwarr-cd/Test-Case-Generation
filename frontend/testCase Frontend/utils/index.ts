@@ -28,6 +28,9 @@ export function friendlyError(error: unknown): string {
   if (lower.includes('401') || lower.includes('403')) return 'You are not authorized to perform this action.';
   if (lower.includes('404')) return 'The workflow could not be found. It may have expired.';
   if (lower.includes('422') || lower.includes('validation')) return 'Some submitted data is invalid. Review the form and try again.';
+  if (lower.includes('backend request failed (400):')) {
+    return message.split('Backend request failed (400):', 2)[1]?.trim() || message;
+  }
   if (lower.includes('network') || lower.includes('fetch') || lower.includes('failed to')) {
     return 'The Test Case Generation service is unavailable. Check the service and your connection.';
   }

@@ -175,6 +175,7 @@ export interface GeneratedScript {
   test_case_id: string;
   scenario_id: string;
   name: string;
+  application_url: string;
   source: string;
   download_path: string;
   requirement_ids: string[];
@@ -264,6 +265,16 @@ export interface CrawlAnalysis {
   crawl_report: CrawlReport;
   application_map: ScriptGeneration['application_map'];
   discovered_elements: ScriptGeneration['discovered_elements'];
+}
+
+export interface WorkflowCrawlJob {
+  job_id: string;
+  status: 'queued' | 'running' | 'stopping' | 'completed' | 'failed';
+  stop_requested: boolean;
+  progress: CrawlReport['progress'];
+  crawl: CrawlAnalysis | null;
+  generation: ScriptGeneration | null;
+  error: string | null;
 }
 
 export interface TraceabilityComparisonReport {
@@ -636,4 +647,20 @@ export interface CrawlGenerationResponse {
   scripts: GeneratedScript[];
   discovered_elements: DiscoveredElement[];
   application_map: Record<string, unknown>;
+}
+
+export interface CrawlJob {
+  job_id: string;
+  status: 'queued' | 'running' | 'stopping' | 'completed' | 'failed';
+  stop_requested: boolean;
+  progress: {
+    pages_discovered?: number;
+    pages_completed?: number;
+    pages_remaining?: number;
+    current_crawl_depth?: number;
+    elapsed_seconds?: number;
+    estimated_completion_seconds?: number | null;
+  };
+  result: CrawlGenerationResponse | null;
+  error: string | null;
 }

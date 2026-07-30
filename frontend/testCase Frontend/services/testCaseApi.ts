@@ -8,7 +8,9 @@ import type {
   ExecutionReport,
   TraceabilityComparisonReport,
   CrawlGenerationResponse,
+  CrawlJob,
   CrawlAnalysis,
+  WorkflowCrawlJob,
   HumanExecutionSession,
   DocumentSession,
   ParsedDocumentStory,
@@ -99,6 +101,48 @@ export const testCaseApi = {
       method: 'POST',
       body: JSON.stringify({ generation_id: generationId, mode, authentication }),
     }, 600000);
+  },
+
+  startWorkflowCrawlJob(workflowId: string, applicationUrl: string) {
+    return request<WorkflowCrawlJob>('/api/v1/automation/scripts/crawl/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        workflow_id: workflowId,
+        application_url: applicationUrl,
+      }),
+    });
+  },
+
+  getWorkflowCrawlJob(jobId: string) {
+    return request<WorkflowCrawlJob>(`/api/v1/automation/scripts/crawl/jobs/${jobId}`);
+  },
+
+  stopWorkflowCrawlJob(jobId: string) {
+    return request<WorkflowCrawlJob>(
+      `/api/v1/automation/scripts/crawl/jobs/${jobId}/stop`,
+      { method: 'POST' },
+    );
+  },
+
+  startCrawlJob(url: string, options?: {
+    page_limit?: number;
+    depth_limit?: number;
+    max_execution_time_seconds?: number;
+  }) {
+    return request<CrawlJob>('/api/v1/automation/url-crawl/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ url, ...options }),
+    });
+  },
+
+  getCrawlJob(jobId: string) {
+    return request<CrawlJob>(`/api/v1/automation/url-crawl/jobs/${jobId}`);
+  },
+
+  stopCrawlJob(jobId: string) {
+    return request<CrawlJob>(`/api/v1/automation/url-crawl/jobs/${jobId}/stop`, {
+      method: 'POST',
+    });
   },
   startHumanExecution(payload: {
     workflow_id: string;

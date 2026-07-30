@@ -1,15 +1,20 @@
 ﻿import uuid
 
+import asyncio
+
 import pytest
 
 from app.schemas.automation_schema import (
     CrawlAndGenerateRequest,
+    CrawlGenerationResponse,
     CrawlApplicationRequest,
+    CrawlAnalysisResponse,
     DiscoveredElement,
     ExecuteScriptsRequest,
     FailureAnalysis,
     GenerateScriptsRequest,
     ScriptExecutionResult,
+    ScriptGenerationResponse,
 )
 from app.services.automation_service import (
     SCRIPT_ARTIFACT_SUFFIX,
@@ -153,6 +158,100 @@ async def test_incomplete_crawl_generates_scripts_for_completed_pages(monkeypatc
     assert response.scripts[0].page_url == url
     assert response.crawl_report["progress"]["pages_remaining"] == 1
     assert len(list(tmp_path.glob("crawl-*/*.pwscript"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_crawl_job_stop_waits_for_partial_generation(monkeypatch):
+    service = AutomationService()
+
+    async def crawl_until_stopped(request, *, cancel_event=None, **_):
+        while cancel_event is not None and not cancel_event.is_set():
+            await asyncio.sleep(0)
+        return CrawlGenerationResponse(
+            crawl_id="crawl-partial",
+            url=str(request.url),
+            pages_crawled=1,
+            elements_found=2,
+            crawl_status="crawl_incomplete",
+            crawl_report={
+                "status": "crawl_incomplete",
+                "actual_application_reached": True,
+                "stop_requested": True,
+                "events": ["crawl_stopped", "partial_script_generation_completed"],
+            },
+            scripts=[],
+        )
+
+    monkeypatch.setattr(service, "crawl_and_generate", crawl_until_stopped)
+    started = await service.start_crawl_job(
+        CrawlAndGenerateRequest(url="https://example.com")
+    )
+    stopped = service.stop_crawl_job(started.job_id)
+    assert stopped.status == "stopping"
+    await service._crawl_jobs[started.job_id]["task"]
+
+    completed = service.crawl_job(started.job_id)
+    assert completed.status == "completed"
+    assert completed.stop_requested is True
+    assert completed.result is not None
+    assert completed.result.crawl_status == "crawl_incomplete"
+
+
+@pytest.mark.asyncio
+async def test_workflow_crawl_stop_generates_from_preserved_session(monkeypatch):
+    service = AutomationService()
+    workflow_id = uuid.uuid4()
+
+    async def analyze_until_stopped(request, *, cancel_event=None, **_):
+        while cancel_event is not None and not cancel_event.is_set():
+            await asyncio.sleep(0)
+        return CrawlAnalysisResponse(
+            crawl_id="crawl-workflow-partial",
+            application_url=str(request.application_url),
+            crawl_status="crawl_incomplete",
+            pages_crawled=1,
+            elements_found=1,
+            crawl_report={
+                "status": "crawl_incomplete",
+                "actual_application_reached": True,
+                "stop_requested": True,
+            },
+            discovered_elements=[
+                DiscoveredElement(tag="button", name="Continue")
+            ],
+        )
+
+    async def generate_from_preserved(request, **_):
+        assert request.crawl_id == "crawl-workflow-partial"
+        return ScriptGenerationResponse(
+            generation_id="gen-workflow-partial",
+            application_url=str(request.application_url),
+            reachable=True,
+            crawl_report={
+                "status": "crawl_incomplete",
+                "actual_application_reached": True,
+            },
+            scripts=[],
+        )
+
+    monkeypatch.setattr(service, "analyze_application", analyze_until_stopped)
+    monkeypatch.setattr(service, "generate", generate_from_preserved)
+    started = await service.start_workflow_crawl_job(
+        CrawlApplicationRequest(
+            workflow_id=workflow_id,
+            application_url="https://example.com",
+        )
+    )
+    service.stop_workflow_crawl_job(started.job_id)
+    await service._workflow_crawl_jobs[started.job_id]["task"]
+
+    completed = service.workflow_crawl_job(started.job_id)
+    assert completed.status == "completed"
+    assert completed.stop_requested is True
+    assert completed.crawl is not None
+    assert completed.crawl.pages_crawled == 1
+    assert completed.generation is not None
+    assert completed.generation.generation_id == "gen-workflow-partial"
 
 
 def test_dom_coverage_gate_rejects_generic_verification_steps():
@@ -458,6 +557,7 @@ async def test_generation_reads_completed_workflow_without_mutating_it(monkeypat
 async def test_generation_uses_pages_captured_before_crawl_timeout(monkeypatch, tmp_path):
     workflow_id = uuid.uuid4()
     url = "https://example.com/"
+    second_url = "https://example.com/two"
     service = AutomationService()
     monkeypatch.setattr(
         "app.services.automation_service.workflow_service.get",
@@ -490,24 +590,29 @@ async def test_generation_uses_pages_captured_before_crawl_timeout(monkeypatch, 
         "css_selector": "button:nth-of-type(1)",
         "locator_validated": True,
     }
+    partial_report = {
+        "status": "crawl_incomplete",
+        "actual_application_reached": True,
+        "failure_reason": "Configurable hard crawl timeout was reached.",
+        "pages_completed": 2,
+        "pages_skipped": [],
+        "remaining_crawl_queue": ["https://example.com/three"],
+        "events": ["crawl_started", "crawl_incomplete"],
+    }
+    service._crawl_reports[_canonical_page_url(url)] = partial_report
     service._crawls[crawl_id] = {
         "crawl_id": crawl_id,
         "workflow_id": str(workflow_id),
         "application_url": url,
         "page_title": "Example",
-        "crawl_report": {
-            "status": "crawl_incomplete",
-            "actual_application_reached": True,
-            "failure_reason": "Configurable hard crawl timeout was reached.",
-            "pages_completed": 1,
-            "pages_skipped": [],
-            "remaining_crawl_queue": ["https://example.com/two"],
-            "events": ["crawl_started", "crawl_incomplete"],
-        },
+        "crawl_report": partial_report,
         "application_map": {
-            "pages": [{"url": url, "title": "Example", "elements": [element]}],
+            "pages": [
+                {"url": url, "title": "Example", "elements": [element]},
+                {"url": second_url, "title": "Second page", "elements": []},
+            ],
             "relationships": [],
-            "page_count": 1,
+            "page_count": 2,
         },
         "discovered_elements": [element],
     }
@@ -520,9 +625,9 @@ async def test_generation_uses_pages_captured_before_crawl_timeout(monkeypatch, 
         ),
     )
 
-    assert len(response.scripts) == 1
+    assert len(response.scripts) == 2
     assert response.crawl_report["status"] == "crawl_incomplete"
-    assert response.scripts[0].page_url == url
+    assert {script.page_url for script in response.scripts} == {url, second_url}
 
 
 @pytest.mark.asyncio

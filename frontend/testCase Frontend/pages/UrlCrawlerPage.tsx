@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ArrowRight,
   CheckCircle2,
@@ -12,10 +12,11 @@ import {
   LoaderCircle,
   Map,
   Sparkles,
+  Square,
   Layers,
 } from 'lucide-react';
 import { testCaseApi } from '../services/testCaseApi';
-import type { CrawlGenerationResponse } from '../types';
+import type { CrawlGenerationResponse, CrawlJob } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
 function downloadAllAsZip(result: CrawlGenerationResponse) {
@@ -34,10 +35,53 @@ export function UrlCrawlerPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<CrawlGenerationResponse | null>(null);
+  const [crawlJob, setCrawlJob] = useState<CrawlJob | null>(null);
   const [selectedScript, setSelectedScript] = useState(0);
+  const isCrawling = Boolean(
+    crawlJob && ['queued', 'running', 'stopping'].includes(crawlJob.status),
+  );
+
+  useEffect(() => {
+    if (!crawlJob?.job_id || !isCrawling) return;
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const current = await testCaseApi.getCrawlJob(crawlJob.job_id);
+        if (disposed) return;
+        setCrawlJob(current);
+        if (current.status === 'completed' && current.result) {
+          setResult(current.result);
+          setSelectedScript(0);
+        } else if (current.status === 'failed') {
+          setError(current.error || 'The crawl could not be completed.');
+        }
+      } catch (err) {
+        if (!disposed) setError(friendlyError(err));
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [crawlJob?.job_id, isCrawling]);
 
   const handleCrawl = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (isCrawling && crawlJob) {
+      if (busy) return;
+      setBusy(true);
+      setError('');
+      try {
+        setCrawlJob(await testCaseApi.stopCrawlJob(crawlJob.job_id));
+      } catch (err) {
+        setError(friendlyError(err));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const trimmed = url.trim();
     if (!trimmed || busy) return;
     setBusy(true);
@@ -45,12 +89,12 @@ export function UrlCrawlerPage() {
     setResult(null);
     setSelectedScript(0);
     try {
-      const response = await testCaseApi.crawlAndGenerate(trimmed, {
+      const job = await testCaseApi.startCrawlJob(trimmed, {
         page_limit: pageLimit,
         depth_limit: depthLimit,
         max_execution_time_seconds: maxExecutionTime,
       });
-      setResult(response);
+      setCrawlJob(job);
     } catch (err) {
       setError(friendlyError(err));
     } finally {
@@ -110,19 +154,21 @@ export function UrlCrawlerPage() {
               />
               <button
                 type="submit"
-                disabled={busy || !url.trim()}
+                disabled={busy || (!isCrawling && !url.trim())}
                 id="crawl-submit-btn"
-                className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-bold text-primary-foreground shadow-lg shadow-primary/20 transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                className={`inline-flex min-w-52 items-center justify-center gap-2 rounded-xl px-6 py-3 text-sm font-bold text-white shadow-lg transition disabled:cursor-not-allowed disabled:opacity-60 ${isCrawling ? 'bg-red-600 shadow-red-600/20 hover:bg-red-700' : 'bg-primary text-primary-foreground shadow-primary/20 hover:bg-primary/90'}`}
               >
-                {busy ? (
+                {isCrawling ? (
                   <>
-                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                    Crawling pages&hellip;
+                    {busy || crawlJob?.status === 'stopping'
+                      ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                      : <Square className="h-4 w-4" />}
+                    {crawlJob?.status === 'stopping' ? 'Stopping&hellip;' : 'Stop Crawling'}
                   </>
                 ) : (
                   <>
                     <Sparkles className="h-4 w-4" />
-                    Crawl &amp; Generate
+                    Start Crawling
                     <ArrowRight className="h-4 w-4" />
                   </>
                 )}
@@ -191,15 +237,20 @@ export function UrlCrawlerPage() {
         </div>
       </form>
 
-      {busy && (
+      {isCrawling && (
         <div className="rounded-2xl border border-primary/20 bg-primary/5 p-8 text-center space-y-4">
           <LoaderCircle className="mx-auto h-10 w-10 animate-spin text-primary" />
           <div>
             <p className="font-semibold text-primary">Crawling in progress&hellip;</p>
             <p className="mt-1 text-sm text-muted-foreground">
               Playwright is visiting every page, discovering elements, and building test scripts.
-              This may take a minute for larger sites.
+              Stop at any time to generate scripts from the pages collected so far.
             </p>
+            {crawlJob?.progress && <p className="mt-2 text-xs text-muted-foreground">
+              {crawlJob.progress.pages_completed ?? 0} pages completed ·{' '}
+              {crawlJob.progress.pages_remaining ?? 0} remaining ·{' '}
+              {crawlJob.progress.elapsed_seconds ?? 0}s elapsed
+            </p>}
           </div>
           <div className="flex justify-center gap-6 text-xs text-muted-foreground">
             <span>URL validated</span>
