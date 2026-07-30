@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     automation_router,
+    document_router,
     image_router,
     input_router,
     project_router,
@@ -28,6 +29,7 @@ api_router.include_router(testcase_router.router)
 api_router.include_router(workflow_router.router)
 api_router.include_router(validation_router.router)
 api_router.include_router(image_router.router)
+api_router.include_router(document_router.router)
 api_router.include_router(automation_router.router)
 # The extension keeps its implementation isolated while sharing the host API.
 api_router.include_router(human_execution_router)

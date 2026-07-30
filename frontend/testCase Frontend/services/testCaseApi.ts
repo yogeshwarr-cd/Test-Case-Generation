@@ -10,6 +10,8 @@ import type {
   CrawlGenerationResponse,
   CrawlAnalysis,
   HumanExecutionSession,
+  DocumentSession,
+  ParsedDocumentStory,
 } from '../types';
 import { parseWorkflowEvent } from '../utils';
 
@@ -41,6 +43,27 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 30000): 
 }
 
 export const testCaseApi = {
+  async uploadDocument(document: File) {
+    const form = new FormData();
+    form.append('document', document);
+    const response = await fetch(`${BASE_URL}/api/v1/documents/upload`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(String(body.detail ?? body.message ?? `Document upload failed (${response.status})`));
+    }
+    return response.json() as Promise<DocumentSession>;
+  },
+
+  updateDocumentSession(sessionId: string, stories: ParsedDocumentStory[]) {
+    return request<DocumentSession>(`/api/v1/documents/${sessionId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ stories }),
+    });
+  },
+
   crawlApplication(workflowId: string, applicationUrl: string) {
     return request<CrawlAnalysis>('/api/v1/automation/scripts/crawl', {
       method: 'POST',

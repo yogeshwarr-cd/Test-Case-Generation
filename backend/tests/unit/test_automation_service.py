@@ -93,7 +93,7 @@ def test_destructive_and_download_links_are_skipped():
 
 
 @pytest.mark.asyncio
-async def test_incomplete_crawl_does_not_generate_partial_scripts(monkeypatch, tmp_path):
+async def test_incomplete_crawl_generates_scripts_for_completed_pages(monkeypatch, tmp_path):
     service = AutomationService()
     url = "https://example.com/"
     monkeypatch.setattr(
@@ -149,9 +149,10 @@ async def test_incomplete_crawl_does_not_generate_partial_scripts(monkeypatch, t
         _dedicated_loop=True,
     )
     assert response.crawl_status == "crawl_incomplete"
-    assert response.scripts == []
+    assert len(response.scripts) == 1
+    assert response.scripts[0].page_url == url
     assert response.crawl_report["progress"]["pages_remaining"] == 1
-    assert not list(tmp_path.glob("crawl-*/*.pwscript"))
+    assert len(list(tmp_path.glob("crawl-*/*.pwscript"))) == 1
 
 
 def test_dom_coverage_gate_rejects_generic_verification_steps():
@@ -451,6 +452,77 @@ async def test_generation_reads_completed_workflow_without_mutating_it(monkeypat
     assert repr(state) == original
     assert (tmp_path / response.generation_id / f"{response.scripts[0].script_id}{SCRIPT_ARTIFACT_SUFFIX}").is_file()
     assert not list((tmp_path / response.generation_id).glob("*.py"))
+
+
+@pytest.mark.asyncio
+async def test_generation_uses_pages_captured_before_crawl_timeout(monkeypatch, tmp_path):
+    workflow_id = uuid.uuid4()
+    url = "https://example.com/"
+    service = AutomationService()
+    monkeypatch.setattr(
+        "app.services.automation_service.workflow_service.get",
+        lambda _: {
+            "workflow_id": workflow_id,
+            "status": "completed",
+            "scenarios": [{"scenario_id": "SC-1", "user_story_ids": ["US-1"]}],
+            "test_cases": [{
+                "test_case_id": "TC-1",
+                "scenario_id": "SC-1",
+                "title": "Continue",
+                "steps": [{
+                    "step_number": 1,
+                    "action": "Click the Continue button",
+                    "expected_result": "The next page opens",
+                }],
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.automation_service.settings.automation_artifacts_path",
+        str(tmp_path),
+    )
+    crawl_id = "crawl-partial"
+    element = {
+        "tag": "button",
+        "role": "button",
+        "name": "Continue",
+        "page_url": url,
+        "css_selector": "button:nth-of-type(1)",
+        "locator_validated": True,
+    }
+    service._crawls[crawl_id] = {
+        "crawl_id": crawl_id,
+        "workflow_id": str(workflow_id),
+        "application_url": url,
+        "page_title": "Example",
+        "crawl_report": {
+            "status": "crawl_incomplete",
+            "actual_application_reached": True,
+            "failure_reason": "Configurable hard crawl timeout was reached.",
+            "pages_completed": 1,
+            "pages_skipped": [],
+            "remaining_crawl_queue": ["https://example.com/two"],
+            "events": ["crawl_started", "crawl_incomplete"],
+        },
+        "application_map": {
+            "pages": [{"url": url, "title": "Example", "elements": [element]}],
+            "relationships": [],
+            "page_count": 1,
+        },
+        "discovered_elements": [element],
+    }
+
+    response = await service.generate(
+        GenerateScriptsRequest(
+            workflow_id=workflow_id,
+            application_url=url,
+            crawl_id=crawl_id,
+        ),
+    )
+
+    assert len(response.scripts) == 1
+    assert response.crawl_report["status"] == "crawl_incomplete"
+    assert response.scripts[0].page_url == url
 
 
 @pytest.mark.asyncio

@@ -35,8 +35,23 @@ export interface ManualInputPayload {
 
 export interface WorkflowStartRequest {
   source_type: 'manual';
-  input_payload: ManualInputPayload;
+  input_payload?: ManualInputPayload;
+  document_session_id?: string;
   mock_mode?: boolean;
+}
+
+export interface ParsedDocumentStory {
+  id?: string;
+  text: string;
+  acceptance_criteria: string[];
+}
+
+export interface DocumentSession {
+  session_id: string;
+  filename: string;
+  content: string;
+  stories: ParsedDocumentStory[];
+  expires_in_seconds: number;
 }
 
 export interface WorkflowStartResponse {

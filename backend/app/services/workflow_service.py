@@ -13,6 +13,7 @@ from app.agents.testcase_generation_agent import TestCaseGenerationAgent
 from app.agents.testcase_validation_agent import TestCaseValidationAgent
 from app.orchestrator import nodes
 from app.services.cache_service import cache
+from app.services.document_service import document_service
 class WorkflowService:
     """Coordinates agents; persistence adapters can subscribe to state transitions."""
     def __init__(self): self._states={};self._tasks={};self.orchestrator=WorkflowOrchestrator()
@@ -35,7 +36,10 @@ class WorkflowService:
         return state
     async def start(self,request):
         project_id=request.project_id or uuid.uuid4()
-        payload=(request.input_payload.model_dump() if request.input_payload else await DatabaseInputSource().load(project_id))
+        if request.document_session_id:
+            payload=(await document_service.get(request.document_session_id))["input_payload"]
+        else:
+            payload=(request.input_payload.model_dump() if request.input_payload else await DatabaseInputSource().load(project_id))
         cache_key=cache.fingerprint("workflow",{"input":payload,"mock_mode":request.mock_mode,"models":{"generation":settings.groq_generation_model or settings.groq_model,"regeneration":settings.groq_regeneration_model or settings.groq_model}})
         workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload,request.mock_mode);state["cache_key"]=cache_key;state["cache_hit"]=False
         cached=await cache.get_json(cache_key)

@@ -56,7 +56,12 @@ export function AutomationPage() {
   };
 
   const generate = async () => {
-    if (!workflowId || !crawl || crawl.crawl_status !== 'crawl_completed') return;
+    if (
+      !workflowId
+      || !crawl
+      || crawl.crawl_status === 'crawl_blocked'
+      || (crawl.pages_crawled === 0 && crawl.discovered_elements.length === 0)
+    ) return;
     setBusy(true); setError('');
     try {
       setGeneration(await testCaseApi.generateScripts(
@@ -98,8 +103,12 @@ export function AutomationPage() {
     catch (requestError) {
       if (requestError instanceof Error && requestError.message.includes('(404)') && workflowId && applicationUrl.trim()) {
         try {
-          if (!crawl || crawl.crawl_status !== 'crawl_completed') {
-            throw new Error('A completed crawl is required before regenerating scripts.');
+          if (
+            !crawl
+            || crawl.crawl_status === 'crawl_blocked'
+            || (crawl.pages_crawled === 0 && crawl.discovered_elements.length === 0)
+          ) {
+            throw new Error('At least one successfully crawled page is required before regenerating scripts.');
           }
           const refreshed = await testCaseApi.generateScripts(
             workflowId, applicationUrl.trim(), crawl.crawl_id,
@@ -163,6 +172,12 @@ export function AutomationPage() {
   if (!workflowId) return <StatePanel type="error" title="No completed workflow selected" message="Return to results and choose Proceed to Test Scripts." />;
 
   const script = generation?.scripts[selectedScript];
+  const hasUsableCrawl = Boolean(
+    crawl
+    && crawl.crawl_status !== 'crawl_blocked'
+    && (crawl.pages_crawled > 0 || crawl.discovered_elements.length > 0),
+  );
+  const partialGeneration = generation?.crawl_report.status === 'crawl_incomplete';
   return (
     <div className="space-y-6">
       <div>
@@ -177,7 +192,7 @@ export function AutomationPage() {
         <div className="mt-2 flex flex-col gap-3 sm:flex-row">
           <input id="application-url" type="url" value={applicationUrl} onChange={(event) => { setApplicationUrl(event.target.value); setCrawl(null); setGeneration(null); }} placeholder="https://app.example.com" className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
           <button disabled={busy || !applicationUrl.trim()} onClick={crawlApplication} className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Crawl application</button>
-          <button disabled={busy || crawl?.crawl_status !== 'crawl_completed'} onClick={generate} className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><Play className="h-4 w-4" /> Generate Test Scripts</button>
+          <button disabled={busy || !hasUsableCrawl} onClick={generate} className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><Play className="h-4 w-4" /> Generate Test Scripts</button>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div><label htmlFor="playwright-email" className="text-sm font-semibold">Email <span className="font-normal text-muted-foreground">(optional)</span></label><input id="playwright-email" type="email" autoComplete="username" value={authenticationEmail} onChange={(event) => setAuthenticationEmail(event.target.value)} placeholder="sample@gmail.com" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" /></div>
@@ -193,6 +208,7 @@ export function AutomationPage() {
           </div>
           <p className="mt-2 text-sm text-muted-foreground">{crawl.pages_crawled} pages scanned · {crawl.elements_found} verified elements · {crawl.crawl_report.pages_skipped.length} pages skipped</p>
           {crawl.crawl_report.failure_reason && <p className="mt-3 text-sm font-medium text-red-600">{crawl.crawl_report.failure_reason}</p>}
+          {crawl.crawl_status === 'crawl_incomplete' && hasUsableCrawl && <p className="mt-3 text-sm font-medium text-amber-700">The crawl stopped early, but scripts can still be generated from the successfully scanned pages.</p>}
           {crawl.crawl_report.blocked_url && <p className="mt-1 break-all text-xs text-muted-foreground">Blocked URL: {crawl.crawl_report.blocked_url}</p>}
           {crawl.crawl_report.recommended_corrective_action && <p className="mt-2 text-sm text-muted-foreground">Recommended action: {crawl.crawl_report.recommended_corrective_action}</p>}
         </section>
@@ -200,9 +216,10 @@ export function AutomationPage() {
 
       {generation && (
         <>
-          <section className="rounded-2xl border border-green-500/30 bg-green-500/5 p-5">
-            <div className="flex items-center gap-2 font-semibold text-green-600"><CheckCircle2 className="h-5 w-5" /> Application reachable</div>
+          <section className={`rounded-2xl border p-5 ${partialGeneration ? 'border-amber-500/30 bg-amber-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
+            <div className={`flex items-center gap-2 font-semibold ${partialGeneration ? 'text-amber-700' : 'text-green-600'}`}><CheckCircle2 className="h-5 w-5" /> {partialGeneration ? 'Scripts generated from available pages' : 'Application reachable'}</div>
             <p className="mt-2 text-sm text-muted-foreground">{generation.page_title || generation.application_url} · {generation.application_map?.page_count ?? 1} pages · {generation.discovered_elements.length} verified interactive elements · {generation.scripts.length} scripts generated</p>
+            {partialGeneration && <p className="mt-2 text-sm text-amber-700">The crawl time limit was reached. These scripts use all successfully scanned pages and elements collected before the timeout.</p>}
           </section>
 
           <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">

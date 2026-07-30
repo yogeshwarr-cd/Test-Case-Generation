@@ -46,22 +46,22 @@ class ContextPreparationAgent(BaseAgent[StructuredContext]):
             record=ImagePipeline.get(image_id)
             if record: visual_context.append(record["compact_context"])
         payload["visual_context"]=[fuse(payload,visual_context)] if visual_context else []
-        target_ids = [
+        shared_target_ids = [
             str(item["id"])
             for key in (
                 "functional_requirements",
                 "non_functional_requirements",
                 "epics",
                 "features",
-                "acceptance_criteria",
                 "business_rules",
                 "dependencies",
                 "constraints",
             )
             for item in payload[key]
         ]
-        trace=[
-            TraceabilityEntry(source_id=str(story["id"]),target_ids=target_ids)
-            for story in payload["user_stories"]
-        ]
+        trace=[]
+        for story in payload["user_stories"]:
+            story_id=str(story["id"])
+            criterion_ids=[str(item["id"]) for item in payload["acceptance_criteria"] if str(item.get("user_story_id",""))==story_id]
+            trace.append(TraceabilityEntry(source_id=story_id,target_ids=shared_target_ids+criterion_ids))
         return StructuredContext(project_id=input_data.get("project_id") or uuid.uuid4(),source_type=input_data.get("source_type",SourceType.manual),traceability_map=trace,metadata={"normalized":True},**payload)

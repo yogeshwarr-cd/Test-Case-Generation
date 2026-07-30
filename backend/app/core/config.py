@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     redis_key_prefix: str = "testcase-generator:v1"
     redis_connect_timeout_seconds: float = 2.0
     redis_workflow_ttl_seconds: int = 86400
+    document_session_ttl_seconds: int = 3600
+    document_max_size_mb: int = 10
     redis_crawl_ttl_seconds: int = 86400
     redis_script_ttl_seconds: int = 86400
     backend_1_integration_mode: str = "database"
@@ -114,13 +116,15 @@ class Settings(BaseSettings):
     automation_require_reproducible_failure: bool = True
     automation_crawl_page_limit: int = 250
     automation_crawl_depth_limit: int = 15
-    automation_crawl_timeout_seconds: float = 1800.0
+    automation_crawl_timeout_seconds: float = 300.0
     automation_crawl_repeated_state_limit: int = 5
     automation_navigation_retry_limit: int = 2
     automation_navigation_controls_per_page: int = 60
     automation_crawl_concurrency: int = 4
     automation_crawl_screenshot_mode: str = "failures"
     automation_crawl_network_idle_timeout_seconds: float = 2.0
+    automation_challenge_wait_seconds: float = 15.0
+    automation_crawl_headless: bool = True
     seacrawl_fallback_enabled: bool = False
     seacrawl_integration_mode: str = "self_hosted"
     seacrawl_base_url: str = "http://localhost:8000"

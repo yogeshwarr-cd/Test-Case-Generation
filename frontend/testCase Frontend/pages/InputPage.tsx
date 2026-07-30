@@ -3,16 +3,17 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { ArrowRight, ImagePlus, LoaderCircle, Sparkles, X } from 'lucide-react';
+import { ArrowRight, FileText, ImagePlus, LoaderCircle, Plus, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
 import { DynamicListField } from '../components/DynamicListField';
 import { EMPTY_PAYLOAD, FIELD_LABELS } from '../constants';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
-import type { ManualInputPayload } from '../types';
+import type { DocumentSession, ManualInputPayload, ParsedDocumentStory } from '../types';
 import { cleanPayload, friendlyError } from '../utils';
 
 const VISIBLE_INPUT_FIELDS = ['user_stories', 'acceptance_criteria'] as const;
 const IMAGE_MAX_SIZE_MB = Number(process.env.NEXT_PUBLIC_IMAGE_MAX_SIZE_MB ?? 10);
+const DOCUMENT_MAX_SIZE_MB = Number(process.env.NEXT_PUBLIC_DOCUMENT_MAX_SIZE_MB ?? 10);
 
 export function InputPage() {
   const router = useRouter();
@@ -27,6 +28,10 @@ export function InputPage() {
   const [imagePreview, setImagePreview] = useState('');
   const [imageDescription, setImageDescription] = useState('');
   const [analysisStatus, setAnalysisStatus] = useState('');
+  const [documentSession, setDocumentSession] = useState<DocumentSession | null>(null);
+  const [documentStories, setDocumentStories] = useState<ParsedDocumentStory[]>([]);
+  const [documentLoading, setDocumentLoading] = useState(false);
+  const [documentError, setDocumentError] = useState('');
 
   const updateList = (key: Exclude<keyof ManualInputPayload, 'tech_stack'>, values: string[]) =>
     setPayload((current) => ({ ...current, [key]: values }));
@@ -44,10 +49,60 @@ export function InputPage() {
     reader.readAsDataURL(file);
   };
 
+  const uploadDocument = async (file?: File) => {
+    if (!file) return;
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (!extension || !['pdf', 'docx', 'txt'].includes(extension)) {
+      setDocumentError('Unsupported file. Select a PDF, DOCX, or TXT document.');
+      return;
+    }
+    if (file.size > DOCUMENT_MAX_SIZE_MB * 1024 * 1024) {
+      setDocumentError(`The document must be ${DOCUMENT_MAX_SIZE_MB} MB or smaller.`);
+      return;
+    }
+    setDocumentLoading(true);
+    setDocumentError('');
+    try {
+      const session = await testCaseApi.uploadDocument(file);
+      setDocumentSession(session);
+      setDocumentStories(session.stories);
+      setPayload((current) => ({
+        ...current,
+        user_stories: session.stories.map((story) => story.text),
+        acceptance_criteria: session.stories.flatMap((story) => story.acceptance_criteria),
+      }));
+      setUserStoryError('');
+    } catch (requestError) {
+      setDocumentSession(null);
+      setDocumentStories([]);
+      setDocumentError(friendlyError(requestError));
+    } finally {
+      setDocumentLoading(false);
+    }
+  };
+
+  const removeDocument = () => {
+    setDocumentSession(null);
+    setDocumentStories([]);
+    setDocumentError('');
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (submitting) return;
     const cleaned = cleanPayload(payload);
+    if (documentSession && !documentStories.length) {
+      setUserStoryError('The document must contain at least one user story.');
+      return;
+    }
+    if (documentSession && documentStories.some((story) => !story.text.trim())) {
+      setUserStoryError('Each extracted user story must contain text.');
+      return;
+    }
+    if (documentSession && documentStories.some((story) => !story.acceptance_criteria.length || story.acceptance_criteria.some((criterion) => !criterion.trim()))) {
+      setUserStoryError('Each extracted user story must have at least one acceptance criterion.');
+      return;
+    }
     if (!cleaned.user_stories.length) {
       setUserStoryError('Enter at least one user story to start generation.');
       return;
@@ -62,7 +117,12 @@ export function InputPage() {
         cleaned.image_ids = [analysis.image_id];
         setAnalysisStatus(`Image analyzed: ${analysis.screen_type} (${Math.round(analysis.analysis_confidence * 100)}% confidence)`);
       }
-      const response = await testCaseApi.startWorkflow({ source_type: 'manual', input_payload: cleaned, mock_mode: mockMode });
+      if (documentSession) {
+        await testCaseApi.updateDocumentSession(documentSession.session_id, documentStories);
+      }
+      const response = await testCaseApi.startWorkflow(documentSession
+        ? { source_type: 'manual', document_session_id: documentSession.session_id, mock_mode: mockMode }
+        : { source_type: 'manual', input_payload: cleaned, mock_mode: mockMode });
       setWorkflow(response.workflow_id, response.project_id);
       router.push('/test-case-generation/progress');
     } catch (requestError) {
@@ -91,19 +151,65 @@ export function InputPage() {
           <div><p className="font-semibold">Generation mode</p><p className="text-xs text-muted-foreground">Mock uses local sample output. When off, the configured live LLM is used.</p></div>
           <button type="button" role="switch" aria-checked={mockMode} onClick={() => setMockMode((current) => !current)} className={`rounded-xl border px-5 py-2 text-sm font-bold transition ${mockMode ? 'border-primary bg-primary text-primary-foreground' : 'border-input bg-background text-foreground hover:border-primary'}`}>Mock {mockMode ? 'ON' : 'OFF'}</button>
         </div>
-        <section className="grid gap-6 rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6 lg:grid-cols-2">
-          {VISIBLE_INPUT_FIELDS.map((key) => (
-            <DynamicListField
-              key={key}
-              label={FIELD_LABELS[key]}
-              values={payload[key]}
-              required={key === 'user_stories'}
-              recommended={key === 'acceptance_criteria'}
-              error={key === 'user_stories' ? userStoryError : undefined}
-              onChange={(values) => updateList(key, values)}
-            />
-          ))}
+        <section className="rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6">
+          <div className="flex items-start gap-3">
+            <FileText className="mt-0.5 h-5 w-5 text-primary" />
+            <div>
+              <h2 className="font-semibold">Upload user stories document</h2>
+              <p className="mt-1 text-xs text-muted-foreground">PDF, DOCX, or TXT up to {DOCUMENT_MAX_SIZE_MB} MB. Extracted stories remain editable before generation.</p>
+            </div>
+          </div>
+          {!documentSession ? (
+            <label className={`mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-input bg-background px-6 py-8 text-center hover:border-primary hover:bg-primary/5 ${documentLoading ? 'pointer-events-none opacity-60' : ''}`}>
+              {documentLoading ? <LoaderCircle className="h-8 w-8 animate-spin text-primary" /> : <UploadCloud className="h-8 w-8 text-muted-foreground" />}
+              <span className="mt-3 text-sm font-semibold">{documentLoading ? 'Uploading and extracting stories…' : 'Choose a requirements document'}</span>
+              <input type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" className="sr-only" disabled={documentLoading} onChange={(event) => { void uploadDocument(event.target.files?.[0]); event.currentTarget.value = ''; }} />
+            </label>
+          ) : (
+            <div className="mt-4 space-y-4">
+              <div className="flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 p-3">
+                <div><p className="text-sm font-semibold">{documentSession.filename}</p><p className="text-xs text-muted-foreground">{documentStories.length} user {documentStories.length === 1 ? 'story' : 'stories'} extracted · temporary session expires in 1 hour</p></div>
+                <button type="button" onClick={removeDocument} className="rounded-lg p-2 text-red-500 hover:bg-red-500/10" aria-label="Remove uploaded document"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="space-y-4">
+                {documentStories.map((story, storyIndex) => (
+                  <div key={storyIndex} className="rounded-xl border border-border bg-background p-4">
+                    <div className="flex gap-2">
+                      <textarea value={story.text} onChange={(event) => setDocumentStories((items) => items.map((item, index) => index === storyIndex ? { ...item, text: event.target.value } : item))} aria-label={`Extracted user story ${storyIndex + 1}`} className="min-h-20 flex-1 rounded-lg border border-input bg-card p-3 text-sm outline-none focus:border-primary" />
+                      <button type="button" onClick={() => setDocumentStories((items) => items.filter((_, index) => index !== storyIndex))} className="self-start rounded-lg p-2 text-red-500 hover:bg-red-500/10" aria-label={`Remove extracted story ${storyIndex + 1}`}><Trash2 className="h-4 w-4" /></button>
+                    </div>
+                    <p className="mb-2 mt-3 text-xs font-bold uppercase tracking-wide text-muted-foreground">Acceptance criteria</p>
+                    {story.acceptance_criteria.map((criterion, criterionIndex) => (
+                      <div key={criterionIndex} className="mb-2 flex gap-2">
+                        <textarea value={criterion} onChange={(event) => setDocumentStories((items) => items.map((item, index) => index === storyIndex ? { ...item, acceptance_criteria: item.acceptance_criteria.map((value, acIndex) => acIndex === criterionIndex ? event.target.value : value) } : item))} aria-label={`Story ${storyIndex + 1} acceptance criterion ${criterionIndex + 1}`} className="min-h-16 flex-1 rounded-lg border border-input bg-card p-3 text-sm outline-none focus:border-primary" />
+                        <button type="button" onClick={() => setDocumentStories((items) => items.map((item, index) => index === storyIndex ? { ...item, acceptance_criteria: item.acceptance_criteria.filter((_, acIndex) => acIndex !== criterionIndex) } : item))} className="self-start rounded-lg p-2 text-red-500 hover:bg-red-500/10" aria-label={`Remove acceptance criterion ${criterionIndex + 1}`}><Trash2 className="h-4 w-4" /></button>
+                      </div>
+                    ))}
+                    <button type="button" onClick={() => setDocumentStories((items) => items.map((item, index) => index === storyIndex ? { ...item, acceptance_criteria: [...item.acceptance_criteria, ''] } : item))} className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"><Plus className="h-3.5 w-3.5" /> Add criterion</button>
+                  </div>
+                ))}
+                <button type="button" onClick={() => setDocumentStories((items) => [...items, { text: '', acceptance_criteria: [''] }])} className="inline-flex items-center gap-2 text-sm font-semibold text-primary hover:underline"><Plus className="h-4 w-4" /> Add user story</button>
+              </div>
+            </div>
+          )}
+          {documentError && <p role="alert" className="mt-3 text-sm text-red-500">{documentError}</p>}
+          <p className="mt-3 text-xs text-muted-foreground">Prefer typing? Manual entry below remains available. Remove the document to generate from manual fields.</p>
         </section>
+        {!documentSession && (
+          <section className="grid gap-6 rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6 lg:grid-cols-2">
+            {VISIBLE_INPUT_FIELDS.map((key) => (
+              <DynamicListField
+                key={key}
+                label={FIELD_LABELS[key]}
+                values={payload[key]}
+                required={key === 'user_stories'}
+                recommended={key === 'acceptance_criteria'}
+                error={key === 'user_stories' ? userStoryError : undefined}
+                onChange={(values) => updateList(key, values)}
+              />
+            ))}
+          </section>
+        )}
 
         <section className="rounded-2xl border border-border bg-card p-5 shadow-sm sm:p-6">
           <div className="flex items-center gap-3"><ImagePlus className="h-5 w-5 text-primary" /><div><h2 className="font-semibold">Wireframe or application screenshot</h2><p className="mt-1 text-xs text-muted-foreground">Upload a PNG, JPEG, or WebP image up to {IMAGE_MAX_SIZE_MB} MB.</p></div></div>

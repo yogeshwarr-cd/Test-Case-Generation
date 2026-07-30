@@ -972,8 +972,22 @@ class AutomationService:
             from playwright.async_api import async_playwright
 
             async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch(headless=True)
-                context = await browser.new_context()
+                browser = await playwright.chromium.launch(
+                    headless=settings.automation_crawl_headless,
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+                context = await browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        f"Chrome/{browser.version} Safari/537.36"
+                    ),
+                    locale="en-US",
+                    viewport={"width": 1440, "height": 900},
+                )
+                await context.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                )
                 page = await context.new_page()
                 page.on(
                     "console",
@@ -1130,6 +1144,37 @@ class AutomationService:
                         status_code=navigation_response.status if navigation_response else None,
                         elements=discovered,
                     )
+                    if challenge and settings.automation_challenge_wait_seconds > 0:
+                        report["events"].append("challenge_resolution_wait_started")
+                        challenge_deadline = min(
+                            deadline,
+                            time.monotonic()
+                            + settings.automation_challenge_wait_seconds,
+                        )
+                        while challenge and time.monotonic() < challenge_deadline:
+                            remaining_ms = max(
+                                1,
+                                int((challenge_deadline - time.monotonic()) * 1000),
+                            )
+                            await page.wait_for_timeout(min(2000, remaining_ms))
+                            discovered = await self._capture_interactive_elements(page)
+                            page_title = await page.title()
+                            visible_text = await page.locator("body").inner_text(
+                                timeout=5000
+                            )
+                            challenge = _challenge_evidence(
+                                title=page_title,
+                                visible_text=visible_text,
+                                # The original navigation response can remain 403
+                                # after a JavaScript challenge replaces the page.
+                                status_code=None,
+                                elements=discovered,
+                            )
+                        report["events"].append(
+                            "challenge_resolved"
+                            if challenge is None
+                            else "challenge_resolution_wait_expired"
+                        )
                     if challenge:
                         screenshot_dir = self.artifact_root / "crawl-evidence"
                         screenshot_dir.mkdir(parents=True, exist_ok=True)
@@ -1558,11 +1603,20 @@ class AutomationService:
                     "recommended_corrective_action"
                 ) or "Verify Playwright browser availability and application access, then retry."
                 self._crawl_reports[report_key] = report
-            # Bug 1 fix: log the real exception so it appears in uvicorn console
-            logger.error(
-                "DOM discovery failed url=%s  error=%s: %s",
-                url, type(exc).__name__, exc, exc_info=exc,
-            )
+            if report.get("status") == "crawl_incomplete":
+                logger.warning(
+                    "DOM discovery returned partial results url=%s pages_completed=%s "
+                    "remaining=%s reason=%s",
+                    url,
+                    report.get("pages_completed", 0),
+                    len(report.get("remaining_crawl_queue", [])),
+                    report.get("failure_reason"),
+                )
+            else:
+                logger.error(
+                    "DOM discovery failed url=%s error=%s: %s",
+                    url, type(exc).__name__, exc, exc_info=exc,
+                )
             if isinstance(exc, AutomationError):
                 raise
             raise AutomationError(
@@ -1617,7 +1671,17 @@ class AutomationService:
         if _canonical_page_url(str(crawl.get("application_url"))) != _canonical_page_url(url):
             raise AutomationError("The selected crawl belongs to a different application URL.")
         crawl_report = dict(crawl.get("crawl_report") or {})
-        if crawl_report.get("status") != "crawl_completed":
+        usable_partial_crawl = bool(
+            crawl.get("application_map", {}).get("pages")
+            or crawl.get("discovered_elements")
+        )
+        if (
+            crawl_report.get("status") == "crawl_blocked"
+            or (
+                crawl_report.get("status") != "crawl_completed"
+                and not usable_partial_crawl
+            )
+        ):
             raise AutomationError(_crawl_failure_message(crawl_report))
         title = crawl.get("page_title")
         elements = [
@@ -2085,29 +2149,10 @@ class AutomationService:
             "pages_skipped": crawl_report.get("pages_skipped", []),
             "crawl_events": crawl_report.get("events", []),
         })
-        if crawl_report.get("status") != "crawl_completed":
-            response = CrawlGenerationResponse(
-                crawl_id=crawl_id,
-                url=url,
-                page_title=title,
-                pages_crawled=int(crawl_report.get("pages_completed", 0)),
-                elements_found=len(elements),
-                crawl_status=crawl_report.get("status", "crawl_incomplete"),
-                crawl_report=crawl_report,
-                scripts=[],
-                discovered_elements=elements,
-                application_map=application_map,
-            )
-            (directory / "crawl.json").write_text(
-                json.dumps(response.model_dump(mode="json"), default=str, indent=2),
-                encoding="utf-8",
-            )
-            await cache.set_json(
-                cache.key("crawl-generation", crawl_id),
-                {"response": response.model_dump(mode="json")},
-                settings.redis_crawl_ttl_seconds,
-            )
-            return response
+        if crawl_report.get("status") == "crawl_blocked":
+            raise AutomationError(_crawl_failure_message(crawl_report))
+        if crawl_report.get("status") == "crawl_incomplete":
+            crawl_report["events"].append("partial_script_generation_started")
         crawl_report["events"].append("script_generation_started")
 
         scripts: list[GeneratedScript] = []
@@ -2157,6 +2202,8 @@ class AutomationService:
                 "Ensure the URL loads a real UI and is not behind a login wall."
             )
         crawl_report["events"].append("script_generation_completed")
+        if crawl_report.get("status") == "crawl_incomplete":
+            crawl_report["events"].append("partial_script_generation_completed")
 
         response = CrawlGenerationResponse(
             crawl_id=crawl_id,

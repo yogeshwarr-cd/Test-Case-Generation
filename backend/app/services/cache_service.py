@@ -62,7 +62,34 @@ class RedisCache:
             await client.set(key, json.dumps(value, default=str), ex=ttl_seconds)
             logger.info("Redis cache stored key=%s ttl_seconds=%s", key, ttl_seconds)
         except Exception as exc:
-            logger.warning("Redis cache write skipped key=%s reason=%s", key, type(exc).__name__)
+            logger.warning(
+                "Redis cache write skipped key=%s reason=%s detail=%s",
+                key,
+                type(exc).__name__,
+                exc,
+            )
+        finally:
+            await client.aclose()
+
+    async def get_json_required(self, key: str) -> dict[str, Any] | None:
+        if not settings.redis_cache_enabled:
+            raise ConnectionError("Redis cache is disabled")
+        client = await self._client()
+        try:
+            value = await client.get(key)
+            if not value:
+                return None
+            result = json.loads(value)
+            return result if isinstance(result, dict) else None
+        finally:
+            await client.aclose()
+
+    async def set_json_required(self, key: str, value: dict[str, Any], ttl_seconds: int) -> None:
+        if not settings.redis_cache_enabled:
+            raise ConnectionError("Redis cache is disabled")
+        client = await self._client()
+        try:
+            await client.set(key, json.dumps(value, default=str), ex=ttl_seconds)
         finally:
             await client.aclose()
 

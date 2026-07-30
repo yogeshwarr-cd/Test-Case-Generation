@@ -29,7 +29,7 @@ export function UrlCrawlerPage() {
   const [url, setUrl] = useState('');
   const [pageLimit, setPageLimit] = useState(250);
   const [depthLimit, setDepthLimit] = useState(15);
-  const [maxExecutionTime, setMaxExecutionTime] = useState(1800);
+  const [maxExecutionTime, setMaxExecutionTime] = useState(300);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -217,14 +217,14 @@ export function UrlCrawlerPage() {
                 <CheckCircle2 className={`h-5 w-5 ${partialResult ? 'text-amber-600' : 'text-green-600'}`} />
                 <div>
                   <p className={`font-semibold ${partialResult ? 'text-amber-700 dark:text-amber-400' : 'text-green-700 dark:text-green-400'}`}>
-                    {partialResult ? 'Crawl time limit reached' : 'Crawl complete'} &mdash; {result.scripts.length} scripts generated
+                    {partialResult ? 'Scripts generated from available pages' : 'Crawl complete'} &mdash; {result.scripts.length} scripts generated
                   </p>
                   <p className="mt-0.5 text-sm text-muted-foreground">
                     {result.page_title ?? result.url} &middot; {result.pages_crawled} pages &middot; {result.elements_found} elements discovered
                   </p>
                   {partialResult && (
                     <div className="mt-2 space-y-1 text-sm text-amber-700 dark:text-amber-300">
-                      <p>No scripts were generated because the crawl did not complete.</p>
+                      <p>Scripts below were generated from all pages successfully crawled.</p>
                       <p>
                         {result.crawl_report.progress?.pages_discovered ?? result.pages_crawled} discovered ·{' '}
                         {result.crawl_report.progress?.pages_completed ?? result.pages_crawled} completed ·{' '}

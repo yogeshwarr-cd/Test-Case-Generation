@@ -18,7 +18,7 @@ class CrawlApplicationRequest(BaseModel):
     application_url: HttpUrl
     page_limit: int = Field(default=250, ge=1, le=500)
     depth_limit: int = Field(default=15, ge=1, le=20)
-    max_execution_time_seconds: int = Field(default=1800, ge=30, le=3600)
+    max_execution_time_seconds: int = Field(default=300, ge=30, le=3600)
     repeated_state_limit: int = Field(default=5, ge=1, le=20)
 
 
@@ -360,7 +360,7 @@ class CrawlAndGenerateRequest(BaseModel):
     url: HttpUrl
     page_limit: int = Field(default=250, ge=1, le=500)
     depth_limit: int = Field(default=15, ge=1, le=20)
-    max_execution_time_seconds: int = Field(default=1800, ge=30, le=3600)
+    max_execution_time_seconds: int = Field(default=300, ge=30, le=3600)
     repeated_state_limit: int = Field(default=5, ge=1, le=20)
 
 

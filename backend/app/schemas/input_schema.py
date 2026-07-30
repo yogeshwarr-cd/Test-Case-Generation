@@ -15,9 +15,9 @@ class ManualInputPayload(BaseModel):
 
 class WorkflowStartRequest(BaseModel):
     model_config=ConfigDict(extra="forbid")
-    project_id:uuid.UUID|None=None; source_type:SourceType=SourceType.manual; input_payload:ManualInputPayload|None=None; mock_mode:bool=False
+    project_id:uuid.UUID|None=None; source_type:SourceType=SourceType.manual; input_payload:ManualInputPayload|None=None; document_session_id:uuid.UUID|None=None; mock_mode:bool=False
     @model_validator(mode="after")
     def source_requirements(self):
         if self.source_type==SourceType.database and not self.project_id: raise ValueError("project_id is required for database source")
-        if self.source_type==SourceType.manual and not self.input_payload: raise ValueError("input_payload is required for manual source")
+        if self.source_type==SourceType.manual and not self.input_payload and not self.document_session_id: raise ValueError("input_payload or document_session_id is required for manual source")
         return self
