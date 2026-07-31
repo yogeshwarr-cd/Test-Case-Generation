@@ -93,3 +93,5 @@ asyncio.exceptions.CancelledError
 INFO:     Started server process [28140]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
+DOM discovery returned partial results url=https://demoqa.com/ pages_completed=32 remaining=8 reason=Crawl stopped by user.
+DOM discovery returned partial results url=https://demoqa.com/ pages_completed=39 remaining=3 reason=Crawl stopped by user.

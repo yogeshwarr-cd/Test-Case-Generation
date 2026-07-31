@@ -99,3 +99,10 @@ INFO:     Started server process [2340]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 WARNING:  WatchFiles detected changes in 'tests\unit\test_automation_service.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [2340]
+INFO:     Started server process [27572]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
