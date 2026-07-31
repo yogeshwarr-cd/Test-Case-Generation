@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { CheckCircle2, Download, LoaderCircle, Play, XCircle } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
+import { EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
@@ -293,10 +294,10 @@ export function AutomationPage() {
             ? <section className="rounded-2xl border border-border bg-card p-5 text-sm text-muted-foreground">No scripts available</section>
             : <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
             <aside className="space-y-2 rounded-2xl border border-border bg-card p-3">
-              {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-lg p-3 text-left text-sm ${selectedScript === index ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs opacity-70">{item.page_url || item.application_url}</span></button>)}
+              {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-xl border p-3 text-left text-sm shadow-sm transition-all ${selectedScript === index ? 'border-primary/40 bg-primary/10 ring-1 ring-primary/20' : 'border-transparent hover:-translate-y-0.5 hover:border-border hover:bg-muted/60 hover:shadow-md'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{item.page_url || item.application_url}</span><span className="mt-2 block truncate font-mono text-[10px] text-primary">Script · {item.script_id}</span></button>)}
             </aside>
             {script && <section className="min-w-0 rounded-2xl border border-border bg-card">
-              <div className="flex items-center justify-between gap-3 border-b border-border p-4"><div><h2 className="font-semibold">{script.name}</h2><p className="break-all text-xs text-muted-foreground">{script.page_url || script.application_url}</p><p className="mt-1 text-xs text-muted-foreground">{script.test_case_id} → {script.script_id}</p></div><button onClick={() => downloadFile(`${script.script_id}.py`, script.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-semibold hover:bg-muted"><Download className="h-4 w-4" /> Download</button></div>
+              <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border p-4"><div className="min-w-0"><h2 className="font-semibold">{script.name}</h2><p className="mt-1 break-all text-xs text-muted-foreground">{script.page_url || script.application_url}</p><TraceabilityChain className="mt-3" scenarioId={script.scenario_id} testCaseId={script.test_case_id} scriptId={script.script_id} /></div><button onClick={() => downloadFile(`${script.script_id}.py`, script.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold shadow-sm transition hover:-translate-y-0.5 hover:bg-muted hover:shadow-md"><Download className="h-4 w-4" /> Download</button></div>
               <pre className="max-h-[36rem] overflow-auto p-4 text-xs">{script.source}</pre>
             </section>}
           </div>}
@@ -332,7 +333,7 @@ export function AutomationPage() {
             </div>
             {humanSession.generated_scripts.map((generatedScript) => <article key={generatedScript.script_id} className="overflow-hidden rounded-xl border border-border bg-card">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
-                <div><h3 className="font-semibold">{generatedScript.name}</h3><p className="mt-1 text-xs text-muted-foreground">{generatedScript.test_case_id} · {generatedScript.scenario_id} · {generatedScript.action_count} actions</p></div>
+                <div className="min-w-0"><h3 className="font-semibold">{generatedScript.name}</h3><p className="mt-1 text-xs text-muted-foreground">{generatedScript.action_count} recorded actions</p><TraceabilityChain className="mt-3" scenarioId={generatedScript.scenario_id} testCaseId={generatedScript.test_case_id} scriptId={generatedScript.script_id} /></div>
                 <button onClick={() => downloadFile(`${generatedScript.script_id}.py`, generatedScript.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-semibold hover:bg-muted"><Download className="h-4 w-4" /> Download script</button>
               </div>
               <pre className="max-h-[36rem] overflow-auto whitespace-pre p-4 text-xs">{generatedScript.source}</pre>
@@ -352,8 +353,9 @@ function ExecutionDashboard({ report }: { report: ExecutionReport }) {
     <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
       <Metric label="Total" value={report.total_scripts} /><Metric label="Passed" value={report.passed_scripts} /><Metric label="Failed" value={report.failed_scripts} /><Metric label="Skipped" value={report.skipped_scripts} /><Metric label="Seconds" value={report.execution_time_seconds} /><Metric label="Success" value={`${report.success_percentage}%`} />
     </div>
-    <div className="space-y-3">{report.results.map((result, index) => <article key={result.script_id} className="rounded-xl border border-border bg-card p-5">
-      {result.status !== 'failed' && <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex gap-3">{result.status === 'passed' ? <CheckCircle2 className="h-5 w-5 text-green-500" /> : <Play className="h-5 w-5 text-amber-500" />}<div><h3 className="font-semibold">{result.script_name}</h3></div></div><span className="text-sm font-semibold capitalize">{result.status} · {result.duration_seconds}s</span></div>}
+    <div className="space-y-3">{report.results.map((result, index) => <article key={result.script_id} className="rounded-xl border border-border/80 bg-card p-5 shadow-sm transition hover:border-primary/20 hover:shadow-md">
+      <div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><div className="flex items-center gap-2">{result.status === 'passed' ? <CheckCircle2 className="h-5 w-5 text-green-500" /> : result.status === 'failed' ? <XCircle className="h-5 w-5 text-red-500" /> : <Play className="h-5 w-5 text-amber-500" />}<h3 className="font-semibold">{result.script_name}</h3></div><TraceabilityChain className="mt-3" scenarioId={result.scenario_id} testCaseId={result.test_case_id} scriptId={result.script_id} /></div><div className="flex items-center gap-2"><StatusBadge status={result.status} /><span className="text-xs font-semibold text-muted-foreground">{result.duration_seconds}s</span></div></div>
+      {result.error_message && <p className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-700 dark:text-red-300">{result.error_message}</p>}
       {report.developer_execution_reports?.[index] && <DeveloperReportCard report={report.developer_execution_reports[index]} />}
     </article>)}</div>
   </section>;
@@ -434,8 +436,9 @@ function QaDiagnosticCard({ report }: { report: QaDiagnosticReport }) {
     ...report.console_logs.map((value) => `Console: ${value}`),
     report.stack_trace ? `Stack trace: ${report.stack_trace}` : '',
   ].filter(Boolean);
-  return <article className="space-y-3 rounded-xl border border-border bg-muted/20 p-4 text-sm">
-    <h3 className="font-semibold">{report.script_id} · {report.status}{report.classification ? ` · ${report.classification}` : ''}</h3>
+  return <article className="space-y-3 rounded-xl border border-border bg-muted/20 p-4 text-sm shadow-sm">
+    <div className="flex flex-wrap items-center justify-between gap-2"><EntityId kind="script" value={report.script_id} /><StatusBadge status={report.status} /></div>
+    {report.classification && <p className="text-xs font-semibold text-muted-foreground">Classification: {report.classification}</p>}
     <ReportSection title="Confidence Gate"><TextList values={checks} empty="Not applicable for this result." /></ReportSection>
     <ReportSection title="Technical Evidence"><TextList values={evidence} empty="No failure evidence was produced." /></ReportSection>
     <ReportSection title="Automation Recommendations"><TextList values={recommendations} /></ReportSection>
@@ -455,6 +458,7 @@ type ComparisonDisplayItem = {
   coverage_percentage?: number;
   details?: string;
   missing_terms?: string[];
+  matched_scripts?: string[];
 };
 
 function TraceabilityComparisonSection({ comparison }: { comparison: TraceabilityComparisonReport }) {
@@ -585,6 +589,7 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
             const status = getStatus(item);
             const coveragePct = item.coverage_percentage ?? (status === 'covered' ? 100 : 0);
             const details = item.details || (item.missing_terms?.length ? `Missing UI evidence: ${item.missing_terms.join(', ')}` : 'All UI evidence verified');
+            const isTestCase = comparison.test_case_coverage.some((artifact) => artifact.id === id);
 
             return (
               <article
@@ -608,7 +613,7 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
                       </span>
                     )}
 
-                    <span className="font-mono text-xs font-semibold text-muted-foreground">{id}</span>
+                    <EntityId kind={isTestCase ? 'case' : 'scenario'} value={id} compact />
                   </div>
 
                   <span className="text-xs font-bold uppercase tracking-wider">
@@ -625,6 +630,7 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
                     </p>
                   )}
                   <p className="font-medium">{details}</p>
+                  {item.matched_scripts?.length ? <div className="mt-3"><p className="mb-2 font-semibold uppercase tracking-wide">Matched test scripts</p><div className="flex flex-wrap gap-2">{item.matched_scripts.map((scriptId) => <EntityId key={scriptId} kind="script" value={scriptId} compact />)}</div></div> : null}
                 </div>
               </article>
             );

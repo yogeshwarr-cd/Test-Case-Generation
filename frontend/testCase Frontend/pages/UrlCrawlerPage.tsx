@@ -16,6 +16,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { testCaseApi } from '../services/testCaseApi';
+import { EntityId } from '../components/TraceabilityUI';
 import type { CrawlGenerationResponse, CrawlJob } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
@@ -339,6 +340,7 @@ export function UrlCrawlerPage() {
                   <span className="mt-1 block truncate text-xs opacity-70">
                     {item.page_url ?? item.test_case_id}
                   </span>
+                  <span className="mt-2 block truncate font-mono text-[10px] opacity-80">Test Script ID · {item.script_id}</span>
                 </button>
               ))}
             </aside>
@@ -346,11 +348,10 @@ export function UrlCrawlerPage() {
             {script && (
               <section className="min-w-0 rounded-2xl border border-border bg-card overflow-hidden">
                 <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 p-4">
-                  <div>
+                  <div className="min-w-0">
                     <h2 className="font-semibold">{script.name}</h2>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {script.page_url} &middot; {script.script_id}
-                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{script.page_url}</p>
+                    <div className="mt-2"><EntityId kind="script" value={script.script_id} /></div>
                   </div>
                   <button
                     id={`download-script-${script.script_id}`}

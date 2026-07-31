@@ -9,6 +9,7 @@ import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { WorkflowEvent } from '../types';
 import { confidencePercent, friendlyError } from '../utils';
 import { StatePanel } from '../components/StatePanel';
+import { EntityId, StatusBadge } from '../components/TraceabilityUI';
 
 export function ProgressPage() {
   const router = useRouter();
@@ -111,7 +112,7 @@ export function ProgressPage() {
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Workflow progress</p>
           <h1 className="mt-2 text-2xl font-bold">Generating your test assets</h1>
-          <p className="mt-1 break-all text-sm text-muted-foreground">Workflow ID: {workflowId}</p>
+          <div className="mt-3"><EntityId kind="workflow" value={workflowId} /></div>
         </div>
         <div className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-2 text-xs font-medium">
           {connection === 'connected' ? <Wifi className="h-4 w-4 text-green-500" /> : <WifiOff className="h-4 w-4 text-amber-500" />}
@@ -129,7 +130,7 @@ export function ProgressPage() {
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <Metric label="Elapsed" value={`${Math.floor(elapsed / 60)}m ${elapsed % 60}s`} />
-          <Metric label="Status" value={snapshot?.status?.replaceAll('_', ' ') ?? 'pending'} />
+          <div className="rounded-lg bg-muted/60 p-3"><p className="mb-1.5 text-xs text-muted-foreground">Status</p><StatusBadge status={snapshot?.status ?? 'pending'} /></div>
           <Metric label="Scenario attempts" value={String(snapshot?.scenario_attempt_count ?? '—')} />
           <Metric label="Confidence" value={snapshot?.confidence_score === undefined ? '—' : `${confidencePercent(snapshot.confidence_score)}%`} />
         </div>

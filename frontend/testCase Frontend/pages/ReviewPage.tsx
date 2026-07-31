@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, LoaderCircle, RotateCcw } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
+import { ConfidenceBadge, EntityId, TraceabilityChain } from '../components/TraceabilityUI';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { WorkflowResult } from '../types';
@@ -116,7 +117,7 @@ export function ReviewPage() {
                 const isTestCase = 'test_case_id' in item;
                 const id = isTestCase ? item.test_case_id : item.scenario_id;
                 const score = confidencePercent(validation?.entity_scores?.[id] ?? validation?.confidence_score);
-                return <article key={`${id}-${itemIndex}`} className="rounded-xl border border-border bg-background p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold text-primary">{id}</p><h3 className="mt-1 font-semibold">{item.title}</h3></div><span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">Confidence {score}%</span></div><p className="mt-2 text-sm text-muted-foreground">{item.description}</p>{isTestCase && item.steps?.length ? <ol className="mt-3 space-y-2">{item.steps.map((step, stepIndex) => <li key={`${step.step_number}-${stepIndex}`} className="rounded-lg bg-muted p-3 text-sm"><span className="font-semibold">{step.step_number}. {step.action}</span><p className="mt-1 text-muted-foreground">Expected: {step.expected_result}</p></li>)}</ol> : null}</article>;
+                return <article key={`${id}-${itemIndex}`} className="rounded-xl border border-border/80 bg-background p-4 shadow-sm transition hover:border-primary/25 hover:shadow-md"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0 space-y-2">{isTestCase ? <TraceabilityChain scenarioId={item.scenario_id} testCaseId={item.test_case_id} /> : <EntityId kind="scenario" value={item.scenario_id} />}<h3 className="font-semibold">{item.title}</h3></div><ConfidenceBadge value={score} /></div><p className="mt-3 text-sm leading-6 text-muted-foreground">{item.description}</p>{isTestCase && item.steps?.length ? <ol className="mt-4 space-y-2">{item.steps.map((step, stepIndex) => <li key={`${step.step_number}-${stepIndex}`} className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm"><span className="font-semibold">{step.step_number}. {step.action}</span><p className="mt-1 text-muted-foreground">Expected: {step.expected_result}</p></li>)}</ol> : null}</article>;
               })}
             </div>
           </div>
