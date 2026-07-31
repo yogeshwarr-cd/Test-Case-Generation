@@ -50,9 +50,8 @@ export function parseWorkflowEvent(raw: string): WorkflowEvent | null {
 }
 
 export function confidencePercent(score?: number): number {
-  // Temporary fixed confidence value for all UI displays.
-  void score;
-  return 80;
+  if (score === undefined || !Number.isFinite(score)) return 0;
+  return Math.round(Math.max(0, Math.min(1, score)) * 100);
 }
 
 export function testCaseText(testCase: TestCase): string {

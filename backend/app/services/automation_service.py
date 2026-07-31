@@ -4546,6 +4546,9 @@ class AutomationService:
         classification, category, confidence, application_issue, cause = self._classify_failure(
             failure, mapping, test_case
         )
+        confidence_threshold = float(
+            workflow.get("confidence_threshold", settings.validation_pass_threshold)
+        )
         steps = (test_case or {}).get("steps", [])
         failed_step = next(
             (
@@ -4603,7 +4606,7 @@ class AutomationService:
             "automation_and_environment_ruled_out": classification
             in {"APPLICATION_DEFECT", "MISSING_FEATURE"},
             "confidence_threshold_met": confidence
-            >= settings.automation_defect_confidence_threshold,
+            >= confidence_threshold,
         }
         gate_passed = all(gate_checks.values())
         if application_issue and not gate_passed:
@@ -4744,7 +4747,7 @@ class AutomationService:
             root_cause_category=category,
             confidence=confidence,
             confidence_gate={
-                "threshold": settings.automation_defect_confidence_threshold,
+                "threshold": confidence_threshold,
                 "passed": gate_passed,
                 "checks": gate_checks,
             },

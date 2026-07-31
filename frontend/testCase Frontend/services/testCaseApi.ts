@@ -177,11 +177,11 @@ export const testCaseApi = {
     }, 120000);
   },
 
-  async uploadImage(image: File, imageDescription: string) {
-    const form = new FormData();form.append('image', image);if (imageDescription.trim()) form.append('image_description', imageDescription.trim());
+  async uploadImage(image: File, imageDescription: string, confidenceThreshold = .95) {
+    const form = new FormData();form.append('image', image);form.append('confidence_threshold', String(confidenceThreshold));if (imageDescription.trim()) form.append('image_description', imageDescription.trim());
     const response = await fetch(`${BASE_URL}/api/v1/images/upload`, { method: 'POST', body: form });
     if (!response.ok) { const body = await response.json().catch(() => ({}));throw new Error(String(body.detail ?? `Image upload failed (${response.status})`)); }
-    return response.json() as Promise<{ image_id: string; status: string; screen_type: string; analysis_confidence: number; warnings: string[]; cached: boolean }>;
+    return response.json() as Promise<{ image_id: string; status: string; screen_type: string; analysis_confidence: number; confidence_threshold: number; threshold_met: boolean; warnings: string[]; cached: boolean }>;
   },
   startWorkflow(payload: WorkflowStartRequest) {
     return request<WorkflowStartResponse>('/api/v1/workflows/start', {

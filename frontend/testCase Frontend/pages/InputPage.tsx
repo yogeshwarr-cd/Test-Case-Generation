@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { ArrowRight, FileText, ImagePlus, LoaderCircle, Plus, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
 import { DynamicListField } from '../components/DynamicListField';
+import { ConfidenceRing } from '../components/TraceabilityUI';
 import { EMPTY_PAYLOAD, FIELD_LABELS } from '../constants';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
@@ -21,6 +22,7 @@ export function InputPage() {
   const [payload, setPayload] = useState<ManualInputPayload>(() => structuredClone(EMPTY_PAYLOAD));
   const [submitting, setSubmitting] = useState(false);
   const [mockMode, setMockMode] = useState(false);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(95);
   const [error, setError] = useState('');
   const [userStoryError, setUserStoryError] = useState('');
   const [imageError, setImageError] = useState('');
@@ -113,16 +115,16 @@ export function InputPage() {
     try {
       if (referenceImage) {
         setAnalysisStatus('Analyzing image locally…');
-        const analysis = await testCaseApi.uploadImage(referenceImage, imageDescription);
+        const analysis = await testCaseApi.uploadImage(referenceImage, imageDescription, confidenceThreshold / 100);
         cleaned.image_ids = [analysis.image_id];
-        setAnalysisStatus(`Image analyzed: ${analysis.screen_type} (${Math.round(analysis.analysis_confidence * 100)}% confidence)`);
+        setAnalysisStatus(`Image analyzed: ${analysis.screen_type} (${Math.round(analysis.analysis_confidence * 100)}% confidence · ${analysis.threshold_met ? 'threshold met' : 'below threshold'})`);
       }
       if (documentSession) {
         await testCaseApi.updateDocumentSession(documentSession.session_id, documentStories);
       }
       const response = await testCaseApi.startWorkflow(documentSession
-        ? { source_type: 'manual', document_session_id: documentSession.session_id, mock_mode: mockMode }
-        : { source_type: 'manual', input_payload: cleaned, mock_mode: mockMode });
+        ? { source_type: 'manual', document_session_id: documentSession.session_id, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 }
+        : { source_type: 'manual', input_payload: cleaned, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 });
       setWorkflow(response.workflow_id, response.project_id);
       router.push('/test-case-generation/progress');
     } catch (requestError) {
@@ -134,19 +136,30 @@ export function InputPage() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-card to-card p-6 sm:p-8">
-        <div className="flex items-start gap-4">
-          <div className="rounded-xl bg-primary p-3 text-primary-foreground"><Sparkles className="h-6 w-6" /></div>
-          <div>
+      <div className="relative flex min-h-[56vh] overflow-hidden rounded-[2rem] border border-primary/20 bg-gradient-to-br from-primary/15 via-card/90 to-card p-6 shadow-2xl shadow-primary/10 sm:p-10 lg:p-14">
+        <div className="absolute -right-24 -top-24 h-80 w-80 rounded-full border border-primary/20 bg-primary/5 shadow-[0_0_100px_rgba(14,165,233,.16)]" aria-hidden="true" />
+        <div className="absolute bottom-10 right-10 hidden grid-cols-3 gap-3 lg:grid" aria-hidden="true">{Array.from({ length: 9 }).map((_, index) => <span key={index} className="h-2 w-2 rounded-full bg-primary/30" />)}</div>
+        <div className="relative z-10 flex max-w-5xl items-start gap-4 self-center">
+          <div className="rounded-xl bg-primary p-3 text-primary-foreground shadow-xl shadow-primary/30"><Sparkles className="h-6 w-6" /></div>
+          <div className="min-w-0">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">AI workflow</p>
-            <h1 className="mt-2 text-2xl font-bold sm:text-3xl">Generate test scenarios and test cases</h1>
-            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">Provide user stories and acceptance criteria to generate test coverage and traceability.</p>
+            <h1 className="mt-4 font-bold">Turn product intent into executable confidence.</h1>
+            <p className="mt-6 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">Provide user stories and acceptance criteria to generate test scenarios, traceable test cases, and production-ready automation evidence.</p>
+            <div className="mt-8 flex flex-wrap gap-3 text-xs font-bold uppercase tracking-wider text-muted-foreground"><span>01 · Define</span><span className="text-primary">→</span><span>02 · Generate</span><span className="text-primary">→</span><span>03 · Validate</span><span className="text-primary">→</span><span>04 · Automate</span></div>
           </div>
         </div>
       </div>
 
       <form onSubmit={submit} className="space-y-6">
         {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600 dark:text-red-300">{error}</div>}
+        <section className="rounded-2xl border border-primary/20 bg-card p-5 shadow-sm sm:p-6" aria-labelledby="confidence-threshold-title">
+          <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
+            <div className="max-w-2xl"><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Global quality gate</p><h2 id="confidence-threshold-title" className="mt-2 text-xl font-bold">Confidence threshold</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">This threshold controls scenario validation, test-case validation, regeneration decisions, manual-review gates, and automation evidence analysis for the entire workflow.</p></div>
+            <output htmlFor="confidence-threshold" className="shrink-0"><ConfidenceRing value={confidenceThreshold} threshold={confidenceThreshold} label="Required threshold" size="lg" /></output>
+          </div>
+          <input id="confidence-threshold" type="range" min="1" max="100" step="1" value={confidenceThreshold} onChange={(event) => setConfidenceThreshold(Number(event.target.value))} className="mt-6 h-2 w-full cursor-pointer accent-primary" aria-valuetext={`${confidenceThreshold}% confidence`} />
+          <div className="mt-2 flex justify-between text-xs font-medium text-muted-foreground"><span>Flexible · 1%</span><span>Balanced · 80%</span><span>Strict · 100%</span></div>
+        </section>
         <div className="flex items-center justify-between rounded-2xl border border-border bg-card p-4 shadow-sm">
           <div><p className="font-semibold">Generation mode</p><p className="text-xs text-muted-foreground">Mock uses local sample output. When off, the configured live LLM is used.</p></div>
           <button type="button" role="switch" aria-checked={mockMode} onClick={() => setMockMode((current) => !current)} className={`rounded-xl border px-5 py-2 text-sm font-bold transition ${mockMode ? 'border-primary bg-primary text-primary-foreground' : 'border-input bg-background text-foreground hover:border-primary'}`}>Mock {mockMode ? 'ON' : 'OFF'}</button>

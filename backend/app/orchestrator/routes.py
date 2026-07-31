@@ -22,6 +22,7 @@ def route_scenario_validation(state):
         "generate_test_cases",
         "regenerate_scenarios",
         "scenario_manual_review",
+        pass_threshold=state.get("confidence_threshold", settings.validation_pass_threshold),
     )
 
 def route_testcase_validation(state):
@@ -31,4 +32,5 @@ def route_testcase_validation(state):
         "persist_results",
         "regenerate_test_cases",
         "testcase_manual_review",
+        pass_threshold=state.get("confidence_threshold", settings.validation_pass_threshold),
     )

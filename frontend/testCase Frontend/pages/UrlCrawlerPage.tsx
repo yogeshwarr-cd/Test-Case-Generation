@@ -45,10 +45,18 @@ export function UrlCrawlerPage() {
   useEffect(() => {
     if (!crawlJob?.job_id || !isCrawling) return;
     let disposed = false;
+    let consecutiveFailures = 0;
+    let pollingErrorVisible = false;
+    let timer: number | undefined;
     const poll = async () => {
       try {
         const current = await testCaseApi.getCrawlJob(crawlJob.job_id);
         if (disposed) return;
+        consecutiveFailures = 0;
+        if (pollingErrorVisible) {
+          setError('');
+          pollingErrorVisible = false;
+        }
         setCrawlJob(current);
         if (current.status === 'completed' && current.result) {
           setResult(current.result);
@@ -57,14 +65,20 @@ export function UrlCrawlerPage() {
           setError(current.error || 'The crawl could not be completed.');
         }
       } catch (err) {
-        if (!disposed) setError(friendlyError(err));
+        if (disposed) return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 3) {
+          pollingErrorVisible = true;
+          setError(`Crawl status updates were interrupted. The crawl is still running and reconnection will continue automatically. ${friendlyError(err)}`);
+        }
+      } finally {
+        if (!disposed) timer = window.setTimeout(poll, 1500);
       }
     };
     void poll();
-    const timer = window.setInterval(poll, 1000);
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [crawlJob?.job_id, isCrawling]);
 

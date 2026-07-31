@@ -7,12 +7,12 @@ from app.services.workflow_service import workflow_service
 router=APIRouter(prefix="/workflows",tags=["AI workflows"])
 @router.post("/start",response_model=WorkflowStartResponse,status_code=status.HTTP_202_ACCEPTED,summary="Start test generation workflow")
 async def start_workflow(request:WorkflowStartRequest):
-    s=await workflow_service.start(request);return WorkflowStartResponse(workflow_id=s["workflow_id"],project_id=s["project_id"],status=s["status"])
+    s=await workflow_service.start(request);return WorkflowStartResponse(workflow_id=s["workflow_id"],project_id=s["project_id"],status=s["status"],confidence_threshold=s["confidence_threshold"])
 @router.get("/{workflow_id}",summary="Get workflow status")
 async def get_workflow(workflow_id:uuid.UUID): return workflow_service.get(workflow_id)
 @router.get("/{workflow_id}/result",summary="Get generated results")
 async def get_result(workflow_id:uuid.UUID):
-    s=workflow_service.get(workflow_id);return {k:s.get(k) for k in ("workflow_id","project_id","status","current_stage","errors","manual_intervention_reason","structured_context","scenarios","scenario_validation","test_cases","testcase_validation")}
+    s=workflow_service.get(workflow_id);return {k:s.get(k) for k in ("workflow_id","project_id","status","current_stage","errors","manual_intervention_reason","confidence_threshold","structured_context","scenarios","scenario_validation","test_cases","testcase_validation")}
 @router.get("/{workflow_id}/events",summary="Stream workflow status events")
 async def events(workflow_id:uuid.UUID):
     async def stream():
@@ -24,6 +24,12 @@ async def events(workflow_id:uuid.UUID):
                 "current_stage":s["current_stage"],
                 "scenario_attempt_count":s.get("scenario_attempt_count",0),
                 "testcase_attempt_count":s.get("testcase_attempt_count",0),
+                "confidence_threshold":s.get("confidence_threshold",.95),
+                "confidence_score":(
+                    (s.get("testcase_validation") or {}).get("confidence_score")
+                    if s.get("testcase_validation")
+                    else (s.get("scenario_validation") or {}).get("confidence_score")
+                ),
                 "errors":s.get("errors",[]),
                 "message":(
                     s.get("manual_intervention_reason")

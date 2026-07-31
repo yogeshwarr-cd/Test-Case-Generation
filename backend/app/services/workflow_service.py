@@ -40,8 +40,8 @@ class WorkflowService:
             payload=(await document_service.get(request.document_session_id))["input_payload"]
         else:
             payload=(request.input_payload.model_dump() if request.input_payload else await DatabaseInputSource().load(project_id))
-        cache_key=cache.fingerprint("workflow",{"input":payload,"mock_mode":request.mock_mode,"models":{"generation":settings.groq_generation_model or settings.groq_model,"regeneration":settings.groq_regeneration_model or settings.groq_model}})
-        workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload,request.mock_mode);state["cache_key"]=cache_key;state["cache_hit"]=False
+        cache_key=cache.fingerprint("workflow",{"input":payload,"mock_mode":request.mock_mode,"confidence_threshold":request.confidence_threshold,"models":{"generation":settings.groq_generation_model or settings.groq_model,"regeneration":settings.groq_regeneration_model or settings.groq_model}})
+        workflow_id=uuid.uuid4(); state=initial_state(workflow_id,project_id,request.source_type.value,payload,request.mock_mode,request.confidence_threshold);state["cache_key"]=cache_key;state["cache_hit"]=False
         cached=await cache.get_json(cache_key)
         if cached:
             state.update({key:cached.get(key,value) for key,value in {"structured_context":{},"scenarios":[],"scenario_validation":{},"test_cases":[],"testcase_validation":{}}.items()})
@@ -91,12 +91,12 @@ class WorkflowService:
             index=next(i for i,x in enumerate(state["scenarios"]) if str(x["scenario_id"])==request.entity_id); original=state["scenarios"][index]
             payload={"context":state["structured_context"],"existing_scenarios":[original],"validation":{"regeneration_instructions":[request.feedback]}}
             generated=(await ScenarioGenerationAgent().execute(payload,ctx)).model_dump(mode="json")["scenarios"][0];generated["scenario_id"]=original["scenario_id"];state["scenarios"][index]=generated
-            state["scenario_validation"]=(await ScenarioValidationAgent().execute({"context":state["structured_context"],"scenarios":{"scenarios":state["scenarios"]}},ctx)).model_dump(mode="json"); result=generated
+            state["scenario_validation"]=(await ScenarioValidationAgent().execute({"context":state["structured_context"],"scenarios":{"scenarios":state["scenarios"]},"confidence_threshold":state.get("confidence_threshold",settings.validation_pass_threshold)},ctx)).model_dump(mode="json"); result=generated
         else:
             index=next(i for i,x in enumerate(state["test_cases"]) if str(x["test_case_id"])==request.entity_id); original=state["test_cases"][index]; related=[x for x in state["scenarios"] if str(x["scenario_id"])==str(original["scenario_id"])]
             payload={"scenarios":related,"context":state["structured_context"],"existing_test_cases":[original],"validation":{"regeneration_instructions":[request.feedback]}}
             generated=(await TestCaseGenerationAgent().execute(payload,ctx)).model_dump(mode="json")["test_cases"][0];generated["test_case_id"]=original["test_case_id"];generated["scenario_id"]=original["scenario_id"];state["test_cases"][index]=generated
-            state["testcase_validation"]=(await TestCaseValidationAgent().execute({"scenarios":{"scenarios":state["scenarios"]},"test_cases":{"test_cases":state["test_cases"]}},ctx)).model_dump(mode="json"); result=generated
+            state["testcase_validation"]=(await TestCaseValidationAgent().execute({"scenarios":{"scenarios":state["scenarios"]},"test_cases":{"test_cases":state["test_cases"]},"confidence_threshold":state.get("confidence_threshold",settings.validation_pass_threshold)},ctx)).model_dump(mode="json"); result=generated
         return {"status":"completed","item":result,"result":{k:state.get(k) for k in ("scenarios","scenario_validation","test_cases","testcase_validation")}}
     async def approve_review(self,wid,request):
         state=self.get(wid)
@@ -117,7 +117,7 @@ class WorkflowService:
             state=await nodes.generate_test_cases_node(state)
             while True:
                 state=await nodes.validate_test_cases_node(state)
-                if state["testcase_validation"].get("confidence_score",0)>=settings.validation_pass_threshold: state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);break
+                if state["testcase_validation"].get("confidence_score",0)>=state.get("confidence_threshold",settings.validation_pass_threshold): state=await nodes.persist_results_node(state);state=await nodes.complete_workflow_node(state);break
                 if state.get("testcase_attempt_count",0)>=settings.max_validation_attempts: state=await nodes.testcase_manual_review_node(state);break
                 state=await nodes.regenerate_test_cases_node(state)
         except Exception as exc:

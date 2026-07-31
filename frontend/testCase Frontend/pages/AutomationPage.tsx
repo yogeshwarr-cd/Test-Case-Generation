@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { CheckCircle2, Download, LoaderCircle, Play, XCircle } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
-import { EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
+import { ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
@@ -52,10 +52,18 @@ export function AutomationPage() {
   useEffect(() => {
     if (!crawlJob?.job_id || !crawlRunning) return;
     let disposed = false;
+    let consecutiveFailures = 0;
+    let pollingErrorVisible = false;
+    let timer: number | undefined;
     const poll = async () => {
       try {
         const current = await testCaseApi.getWorkflowCrawlJob(crawlJob.job_id);
         if (disposed) return;
+        consecutiveFailures = 0;
+        if (pollingErrorVisible) {
+          setError('');
+          pollingErrorVisible = false;
+        }
         setCrawlJob(current);
         if (current.status === 'completed') {
           if (current.crawl) setCrawl(current.crawl);
@@ -67,14 +75,20 @@ export function AutomationPage() {
           setError(current.error || 'The application crawl failed.');
         }
       } catch (requestError) {
-        if (!disposed) setError(friendlyError(requestError));
+        if (disposed) return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 3) {
+          pollingErrorVisible = true;
+          setError(`Crawl status updates were interrupted. The crawl is still running and reconnection will continue automatically. ${friendlyError(requestError)}`);
+        }
+      } finally {
+        if (!disposed) timer = window.setTimeout(poll, 1500);
       }
     };
     void poll();
-    const timer = window.setInterval(poll, 1000);
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [crawlJob?.job_id, crawlRunning]);
 
@@ -371,7 +385,7 @@ function DeveloperReportCard({ report }: { report: DeveloperExecutionReport }) {
   ];
   return <div className="mt-4 space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
     <ReportSection title="Issue Title"><h4 className="text-base font-semibold">{report.issue_title}</h4></ReportSection>
-    {report.classification && <ReportSection title="Evidence Classification"><p className="font-semibold">{report.classification} · {Math.round((report.confidence ?? 0) * 100)}% confidence{report.developer_issue_created ? ' · developer issue created' : ' · no developer issue created'}</p></ReportSection>}
+    {report.classification && <ReportSection title="Evidence Classification"><div className="flex flex-wrap items-center gap-4"><ConfidenceRing value={report.confidence} label="Evidence confidence" size="sm" /><p className="font-semibold">{report.classification}{report.developer_issue_created ? ' · developer issue created' : ' · no developer issue created'}</p></div></ReportSection>}
     {failure && <ReportSection title="Failure Summary"><div className="grid gap-2 md:grid-cols-2">
       <p><strong>Category:</strong> {failure.failure_category}</p><p><strong>Stage:</strong> {failure.failure_stage ?? 'Unknown'}</p>
       <p><strong>Test case:</strong> {failure.test_case_id} · {failure.test_case_title}</p><p><strong>Scenario:</strong> {String(failure.test_scenario?.title ?? failure.test_scenario?.scenario_id ?? 'Not mapped')}</p>

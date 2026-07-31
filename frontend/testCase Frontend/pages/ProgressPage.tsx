@@ -9,7 +9,7 @@ import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { WorkflowEvent } from '../types';
 import { confidencePercent, friendlyError } from '../utils';
 import { StatePanel } from '../components/StatePanel';
-import { EntityId, StatusBadge } from '../components/TraceabilityUI';
+import { ConfidenceRing, EntityId, StatusBadge } from '../components/TraceabilityUI';
 
 export function ProgressPage() {
   const router = useRouter();
@@ -132,7 +132,8 @@ export function ProgressPage() {
           <Metric label="Elapsed" value={`${Math.floor(elapsed / 60)}m ${elapsed % 60}s`} />
           <div className="rounded-lg bg-muted/60 p-3"><p className="mb-1.5 text-xs text-muted-foreground">Status</p><StatusBadge status={snapshot?.status ?? 'pending'} /></div>
           <Metric label="Scenario attempts" value={String(snapshot?.scenario_attempt_count ?? '—')} />
-          <Metric label="Confidence" value={snapshot?.confidence_score === undefined ? '—' : `${confidencePercent(snapshot.confidence_score)}%`} />
+          <div className="flex items-center justify-center rounded-lg bg-muted/60 p-3"><ConfidenceRing value={snapshot?.confidence_score} threshold={snapshot?.confidence_threshold ?? .95} label="Live confidence" size="sm" /></div>
+          <Metric label="Required threshold" value={`${confidencePercent(snapshot?.confidence_threshold ?? .95)}%`} />
         </div>
       </section>
 

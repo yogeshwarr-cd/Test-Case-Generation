@@ -48,8 +48,30 @@ export function StatusBadge({ status }: { status?: string | null }) {
   return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold capitalize ${tone}`}><Icon className="h-3.5 w-3.5" />{normalized}</span>;
 }
 
-export function ConfidenceBadge({ value }: { value?: number | null }) {
+function confidenceValue(value?: number | null) {
   const percent = Math.max(0, Math.min(100, Math.round((value ?? 0) <= 1 ? (value ?? 0) * 100 : (value ?? 0))));
-  const tone = percent >= 95 ? 'text-green-700 dark:text-green-300' : percent >= 75 ? 'text-amber-700 dark:text-amber-300' : 'text-red-700 dark:text-red-300';
-  return <span className={`inline-flex items-center gap-2 rounded-full border border-border bg-background px-2.5 py-1 text-xs font-semibold ${tone}`}><span className="h-1.5 w-12 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-current" style={{ width: `${percent}%` }} /></span>{percent}% confidence</span>;
+  return percent;
+}
+
+export function ConfidenceRing({ value, threshold = 95, label = 'Confidence', size = 'md' }: { value?: number | null; threshold?: number; label?: string; size?: 'sm' | 'md' | 'lg' }) {
+  const percent = confidenceValue(value);
+  const required = confidenceValue(threshold);
+  const passed = percent >= required;
+  const dimensions = size === 'sm' ? 'h-20 w-20' : size === 'lg' ? 'h-36 w-36' : 'h-24 w-24';
+  const scoreSize = size === 'lg' ? 'text-3xl' : size === 'sm' ? 'text-lg' : 'text-2xl';
+  const color = passed ? '#22c55e' : percent >= 70 ? '#f59e0b' : '#ef4444';
+  return (
+    <div className="group inline-flex flex-col items-center gap-2" role="meter" aria-label={`${label}: ${percent}%`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} title={`${label}: ${percent}% · Required: ${required}%`}>
+      <div className={`relative grid shrink-0 place-items-center rounded-full p-[7px] shadow-[0_12px_35px_rgba(2,6,23,.16)] transition-all duration-300 group-hover:-translate-y-1 group-hover:scale-105 group-hover:shadow-xl group-hover:shadow-primary/20 ${dimensions}`} style={{ background: `conic-gradient(${color} 0deg, ${percent >= 60 ? '#84cc16' : color} ${percent * 2.4}deg, ${percent >= 80 ? '#22c55e' : color} ${percent * 3.6}deg, color-mix(in srgb, var(--muted) 80%, transparent) ${percent * 3.6}deg 360deg)` }}>
+        <div className="grid h-full w-full place-items-center rounded-full border border-white/20 bg-card/95 shadow-inner backdrop-blur-xl">
+          <div className="text-center leading-none"><span className={`${scoreSize} font-black tracking-tight`} style={{ color }}>{percent}%</span><span className="mt-1 block text-[9px] font-bold uppercase tracking-[0.15em] text-muted-foreground">{passed ? 'Target met' : `${required}% required`}</span></div>
+        </div>
+      </div>
+      <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</span>
+    </div>
+  );
+}
+
+export function ConfidenceBadge({ value, threshold = 95 }: { value?: number | null; threshold?: number }) {
+  return <ConfidenceRing value={value} threshold={threshold} size="sm" />;
 }

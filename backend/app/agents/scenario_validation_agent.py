@@ -40,4 +40,5 @@ class ScenarioValidationAgent(BaseAgent[ValidationResult]):
                     recommendation=f"Populate the missing {label} mappings",
                 ))
         score=round(sum(entity_scores.values())/len(entity_scores),4) if entity_scores else 0.0
-        return ValidationResult(confidence_score=score,score_breakdown=vals,entity_scores=entity_scores,status=ValidationStatus.passed if score>=.95 else ValidationStatus.failed,issues=issues,failed_entity_ids=[ss[i].scenario_id for i in duplicates],regeneration_instructions=[x.recommendation for x in issues if x.recommendation])
+        threshold=float(input_data.get("confidence_threshold",.95))
+        return ValidationResult(confidence_score=score,score_breakdown=vals,entity_scores=entity_scores,status=ValidationStatus.passed if score>=threshold else ValidationStatus.failed,issues=issues,failed_entity_ids=[ss[i].scenario_id for i in duplicates],regeneration_instructions=[x.recommendation for x in issues if x.recommendation])

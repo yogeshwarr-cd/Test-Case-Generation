@@ -38,6 +38,7 @@ export interface WorkflowStartRequest {
   input_payload?: ManualInputPayload;
   document_session_id?: string;
   mock_mode?: boolean;
+  confidence_threshold?: number;
 }
 
 export interface ParsedDocumentStory {
@@ -59,6 +60,7 @@ export interface WorkflowStartResponse {
   project_id: string;
   status: WorkflowStatus;
   message?: string;
+  confidence_threshold?: number;
 }
 
 export interface ValidationIssue {
@@ -141,6 +143,7 @@ export interface WorkflowEvent {
   scenario_attempt_count?: number;
   testcase_attempt_count?: number;
   errors?: string[];
+  confidence_threshold?: number;
 }
 
 export interface WorkflowResult {
@@ -153,6 +156,7 @@ export interface WorkflowResult {
   test_cases: TestCase[];
   testcase_validation?: ValidationResult | null;
   manual_intervention_reason?: string;
+  confidence_threshold?: number;
 }
 
 export interface ResumeRequest {

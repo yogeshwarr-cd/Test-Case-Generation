@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, LoaderCircle, RotateCcw } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
-import { ConfidenceBadge, EntityId, TraceabilityChain } from '../components/TraceabilityUI';
+import { ConfidenceBadge, ConfidenceRing, EntityId, TraceabilityChain } from '../components/TraceabilityUI';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { WorkflowResult } from '../types';
@@ -22,12 +22,19 @@ export function ReviewPage() {
 
   useEffect(() => hydrate(), [hydrate]);
   useEffect(() => {
-    if (!workflowId || data) return;
+    if (!workflowId) return;
+    let cancelled = false;
     testCaseApi.getWorkflowResult(workflowId).then((response) => {
+      if (cancelled) return;
       setData(response);
       setResult(response);
-    }).catch((requestError) => setError(friendlyError(requestError))).finally(() => setLoading(false));
-  }, [data, setResult, workflowId]);
+    }).catch((requestError) => {
+      if (!cancelled) setError(friendlyError(requestError));
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [setResult, workflowId]);
 
   const stage = snapshot?.status === 'testcase_manual_review' || data?.current_stage === 'testcase_manual_review' ? 'testcase_manual_review' : 'scenario_manual_review';
   const validation = stage === 'scenario_manual_review' ? data?.scenario_validation : data?.testcase_validation;
@@ -90,7 +97,8 @@ export function ReviewPage() {
       <div className="grid gap-6 lg:grid-cols-[1.1fr_.9fr]">
         <section className="space-y-5 rounded-2xl border border-border bg-card p-5 sm:p-6">
           <div className="grid gap-3 sm:grid-cols-3">
-            <Metric label="Confidence" value={`${confidencePercent(validation?.confidence_score)}%`} />
+            <div className="flex items-center justify-center rounded-xl bg-muted/40 p-3"><ConfidenceRing value={validation?.confidence_score} threshold={data?.confidence_threshold ?? .95} label="Review confidence" /></div>
+            <Metric label="Required threshold" value={`${confidencePercent(data?.confidence_threshold ?? .95)}%`} />
             <Metric label="Validation" value={validation?.status ?? 'Manual review'} />
             <Metric label="Generated items" value={String(generated?.length ?? 0)} />
           </div>
@@ -136,7 +144,7 @@ export function ReviewPage() {
             <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-muted p-3 text-xs">{preview}</pre>
           </div>
           <div className="flex flex-wrap gap-3">
-            <button onClick={approve} disabled={submitting || !generated?.length} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-60">
+            <button onClick={approve} disabled={submitting} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-wait disabled:opacity-60">
               {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Approve generated {stage === 'scenario_manual_review' ? 'scenarios' : 'test cases'}
             </button>
             <button onClick={resume} disabled={submitting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-60">
