@@ -22,6 +22,9 @@ export function cleanPayload(payload: ManualInputPayload): ManualInputPayload {
 export function friendlyError(error: unknown): string {
   const message = error instanceof Error ? error.message : 'An unexpected error occurred.';
   const lower = message.toLowerCase();
+  if (lower.includes('abort') || lower.includes('timeout') || lower.includes('timed out')) {
+    return 'The Playwright suite exceeded the execution window. The run was not restarted. Reduce the suite size or try again when the target application is responding faster.';
+  }
   if (lower.includes('429') || lower.includes('rate') || lower.includes('quota')) {
     return 'The AI provider is busy or its quota has been reached. Please wait and try again.';
   }
@@ -34,7 +37,7 @@ export function friendlyError(error: unknown): string {
   if (lower.includes('network') || lower.includes('fetch') || lower.includes('failed to')) {
     return 'The Test Case Generation service is unavailable. Check the service and your connection.';
   }
-  return 'The request could not be completed. Please try again.';
+  return message || 'The request could not be completed. Please try again.';
 }
 
 export function parseWorkflowEvent(raw: string): WorkflowEvent | null {

@@ -29,7 +29,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             status: 'active',
             doc_count: 0,
             story_count: 0,
-            updated_at: 'Just now',
+            updated_at: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+            last_modified: new Date().toISOString(),
           };
           return { workspaces: [newWorkspace, ...state.workspaces] };
         }),

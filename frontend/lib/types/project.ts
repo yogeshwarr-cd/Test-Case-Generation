@@ -15,6 +15,8 @@ export interface Workspace {
   doc_count: number;
   story_count: number;
   updated_at: string;
+  created_at?: string;
+  last_modified?: string;
 }
 
 export type WorkspaceStatus = Workspace['status'];

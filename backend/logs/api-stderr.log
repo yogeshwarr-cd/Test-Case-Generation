@@ -1,9 +1,4 @@
-INFO:     Will watch for changes in these directories: ['E:\\Cloud Destinations\\Test Case Generation\\backend']
-INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
-INFO:     Started reloader process [18316] using WatchFiles
-INFO:     Started server process [20556]
+INFO:     Started server process [16908]
 INFO:     Waiting for application startup.
-Database health check failed: OSError
-Database connection failed: PostgreSQL is not reachable at ep-billowing-grass-atkw4nta-pooler.c-9.us-east-1.aws.neon.tech:5432
 INFO:     Application startup complete.
-WARNING:  WatchFiles detected changes in 'app\llm\client.py'. Reloading...
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)

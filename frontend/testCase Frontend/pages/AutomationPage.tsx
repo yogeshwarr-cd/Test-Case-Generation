@@ -1,15 +1,17 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { CheckCircle2, Download, LoaderCircle, Play, XCircle } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
 import { testCaseApi } from '../services/testCaseApi';
-import { useTestCaseWorkflowStore } from '../store/workflowStore';
+import { loadTestProjectArtifacts, saveTestProjectArtifacts, useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
 export function AutomationPage() {
+  const historyMode = useSearchParams().get('view') === 'history';
   const { workflowId, hydrate } = useTestCaseWorkflowStore();
   const [applicationUrl, setApplicationUrl] = useState('');
   const [authenticationEmail, setAuthenticationEmail] = useState('');
@@ -31,7 +33,21 @@ export function AutomationPage() {
     crawlJob && ['queued', 'running', 'stopping'].includes(crawlJob.status),
   );
 
+  useEffect(() => {
+    if (workflowId) saveTestProjectArtifacts(workflowId, generation, report, comparison);
+  }, [comparison, generation, report, workflowId]);
+
   useEffect(() => hydrate(), [hydrate]);
+  useEffect(() => {
+    if (!workflowId) return;
+    const saved = loadTestProjectArtifacts(workflowId);
+    if (!saved) return;
+    queueMicrotask(() => {
+      if (saved.generation) { setGeneration(saved.generation); setApplicationUrl(saved.generation.application_url); }
+      if (saved.report) { setReport(saved.report); if (historyMode) setShowTestReport(true); }
+      if (saved.comparison) setComparison(saved.comparison);
+    });
+  }, [historyMode, workflowId]);
   useEffect(() => {
     if (!humanSessionId || !humanSessionState || !['waiting_for_human', 'recording', 'generating_scripts', 'validating_scripts', 'executing_scripts'].includes(humanSessionState)) return;
     const timer = window.setInterval(async () => {
@@ -248,12 +264,12 @@ export function AutomationPage() {
     <div className="space-y-6">
       <div>
         <p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Playwright automation</p>
-        <h1 className="mt-2 text-2xl font-bold">Generate and execute test scripts</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Playwright remains the primary engine. Optional Seacrawl recovery is limited to failed locator actions.</p>
+        <h1 className="mt-2 text-2xl font-bold">{historyMode ? 'Saved scripts and execution results' : 'Generate and execute test scripts'}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{historyMode ? 'Read-only output from the previously completed run. This view cannot start a crawl or execution.' : 'Playwright remains the primary engine. Optional Seacrawl recovery is limited to failed locator actions.'}</p>
       </div>
 
       {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600">{error}</div>}
-      <section className="rounded-2xl border border-border bg-card p-5">
+      {!historyMode && <section className="rounded-2xl border border-border bg-card p-5">
         <label htmlFor="application-url" className="text-sm font-semibold">Deployed application URL</label>
         <div className="mt-2 flex flex-col gap-3 sm:flex-row">
           <input id="application-url" type="url" value={applicationUrl} onChange={(event) => { setApplicationUrl(event.target.value); setCrawl(null); setGeneration(null); }} placeholder="https://app.example.com" className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
@@ -264,7 +280,7 @@ export function AutomationPage() {
           <div><label htmlFor="playwright-email" className="text-sm font-semibold">Email <span className="font-normal text-muted-foreground">(optional)</span></label><input id="playwright-email" type="email" autoComplete="username" value={authenticationEmail} onChange={(event) => setAuthenticationEmail(event.target.value)} placeholder="sample@gmail.com" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" /></div>
           <div><label htmlFor="playwright-password" className="text-sm font-semibold">Password <span className="font-normal text-muted-foreground">(optional)</span></label><input id="playwright-password" type="password" autoComplete="current-password" value={authenticationPassword} onChange={(event) => setAuthenticationPassword(event.target.value)} placeholder="12345678" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" /></div>
         </div>
-      </section>
+      </section>}
 
       {crawlRunning && <section className="rounded-2xl border border-primary/20 bg-primary/5 p-5">
         <div className="flex items-center gap-2 font-semibold text-primary"><LoaderCircle className="h-5 w-5 animate-spin" /> Crawling application</div>
@@ -316,7 +332,7 @@ export function AutomationPage() {
             </section>}
           </div>}
 
-          <section className="rounded-2xl border border-border bg-card p-5">
+          {!historyMode && <section className="rounded-2xl border border-border bg-card p-5">
             <h2 className="font-semibold">Execution mode</h2>
             <div className="mt-3 flex flex-wrap gap-3">
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-4 py-3"><input type="radio" checked={mode === 'automated'} onChange={() => setMode('automated')} /> Automated execution (default)</label>
@@ -335,7 +351,7 @@ export function AutomationPage() {
                 <button disabled={busy || !['waiting_for_human', 'recording'].includes(humanSession.state)} onClick={cancelHumanExecution} className="rounded-lg border border-red-500/30 px-4 py-2 text-sm font-semibold text-red-600 disabled:opacity-50">Cancel Session</button>
               </div>
             </div>}
-          </section>
+          </section>}
           {humanSession?.generated_scripts?.length ? <section className="space-y-4 rounded-2xl border border-green-500/30 bg-green-500/5 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>

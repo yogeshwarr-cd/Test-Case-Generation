@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { AnimatePresence, motion, useMotionValue, useReducedMotion, useSpring } from 'framer-motion';
-import { FileCode2, FlaskConical, Globe, Home, Sparkles } from 'lucide-react';
+import { FileCode2, FlaskConical, FolderKanban, Globe, Home, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { ScrollToBottomButton } from './ScrollToBottomButton';
 import styles from './PremiumShell.module.css';
@@ -57,6 +57,7 @@ export function FeatureShell({ children }: { children: ReactNode }) {
                 const active = exact ? pathname === href : pathname.startsWith(href);
                 return <Link key={href} href={href} aria-current={active ? 'page' : undefined} className={`${styles.navLink} ${active ? styles.navActive : ''}`}><Icon className="h-4 w-4" /><span>{label}</span></Link>;
               })}
+              <Link href="/dashboard" className={styles.navLink} aria-label="View all projects"><FolderKanban className="h-4 w-4" /><span>Projects</span></Link>
               <Link href="/" className={styles.navLink} aria-label="Main application home"><Home className="h-4 w-4" /><span>Home</span></Link>
             </nav>
             <ThemeToggle />
