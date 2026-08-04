@@ -13,6 +13,7 @@ interface WorkflowStore {
   setWorkflow: (workflowId: string, projectId?: string | null) => void;
   setSnapshot: (snapshot: WorkflowEvent) => void;
   setResult: (result: WorkflowResult | null) => void;
+  deleteProject: (workflowId: string) => void;
   hydrate: () => void;
   clear: () => void;
 }
@@ -88,6 +89,24 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
       saveProjects(projects);
     }
     set({ result, projects });
+  },
+  deleteProject: (workflowId) => {
+    const projects = readProjects().filter((item) => item.workflowId !== workflowId);
+    saveProjects(projects);
+    localStorage.removeItem(artifactsKey(workflowId));
+    try {
+      const active = JSON.parse(sessionStorage.getItem(WORKFLOW_STORAGE_KEY) ?? 'null') as { workflowId?: string } | null;
+      if (active?.workflowId === workflowId) {
+        sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
+        sessionStorage.removeItem(WORKFLOW_SNAPSHOT_KEY);
+      }
+    } catch {
+      sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
+      sessionStorage.removeItem(WORKFLOW_SNAPSHOT_KEY);
+    }
+    set((state) => state.workflowId === workflowId
+      ? { projects, workflowId: null, projectId: null, snapshot: null, result: null }
+      : { projects });
   },
   hydrate: () => {
     try {
