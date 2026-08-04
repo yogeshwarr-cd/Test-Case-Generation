@@ -110,6 +110,7 @@ class Settings(BaseSettings):
     automation_artifacts_path: str = "./artifacts/automation"
     automation_navigation_timeout_seconds: float = 15.0
     automation_action_timeout_seconds: float = 5.0
+    automation_execution_workers: int = 3
     automation_navigation_settle_timeout_seconds: float = 1.5
     automation_wait_for_network_idle: bool = False
     automation_defect_confidence_threshold: float = 0.80

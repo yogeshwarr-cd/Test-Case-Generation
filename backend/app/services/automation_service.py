@@ -3626,14 +3626,44 @@ class AutomationService:
         }
 
     async def execute(
-        self, request: ExecuteScriptsRequest, *, _dedicated_loop: bool = False
+        self, request: ExecuteScriptsRequest, *, _dedicated_loop: bool = False,
+        _parallel_child: bool = False,
     ) -> ExecutionReport:
         if sys.platform == "win32" and not settings.app_mock_mode and not _dedicated_loop:
             return await _on_playwright_loop(
-                lambda: self.execute(request, _dedicated_loop=True)
+                lambda: self.execute(request, _dedicated_loop=True, _parallel_child=_parallel_child)
             )
         generation = await self.generation(request.generation_id)
         response: ScriptGenerationResponse = generation["response"]
+        worker_count = max(1, min(settings.automation_execution_workers, len(response.scripts)))
+        if request.mode == "automated" and not settings.app_mock_mode and not _parallel_child and worker_count > 1:
+            started = time.perf_counter()
+            chunks = [response.scripts[index::worker_count] for index in range(worker_count)]
+
+            async def run_chunk(index: int, scripts: list[GeneratedScript]) -> ExecutionReport:
+                child_id = f"{request.generation_id}-worker-{index}-{uuid.uuid4()}"
+                self._generations[child_id] = {
+                    **generation,
+                    "response": response.model_copy(update={"scripts": scripts}),
+                }
+                try:
+                    return await self.execute(
+                        request.model_copy(update={"generation_id": child_id}),
+                        _dedicated_loop=True,
+                        _parallel_child=True,
+                    )
+                finally:
+                    self._generations.pop(child_id, None)
+
+            worker_reports = await asyncio.gather(*(
+                run_chunk(index, scripts) for index, scripts in enumerate(chunks) if scripts
+            ))
+            by_script = {result.script_id: result for report in worker_reports for result in report.results}
+            ordered_results = [by_script[script.script_id] for script in response.scripts if script.script_id in by_script]
+            return self._save_report(
+                request, ordered_results, time.perf_counter() - started,
+                generation["directory"], generation,
+            )
         authentication_token = f"playwright-{uuid.uuid4()}"
         playwright_test_config.clear()
         authentication: dict[str, str] | None = None

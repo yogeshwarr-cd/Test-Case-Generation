@@ -70,13 +70,17 @@ class ScenarioGenerationAgent(BaseAgent[ScenarioBatch]):
                 str(item["id"]) for item in compact_context.get("acceptance_criteria", [])
                 if isinstance(item, dict) and item.get("id")
             ]
+            def source_ids(values, available, fallback):
+                valid = set(available)
+                if not valid:
+                    return []
+                mapped = [str(value) for value in values if str(value) in valid]
+                return list(dict.fromkeys(mapped or fallback))
             for scenario in result.scenarios:
-                scenario.user_story_ids = scenario.user_story_ids or story_ids
-                scenario.requirement_ids = scenario.requirement_ids or requirement_ids
-                scenario.feature_ids = scenario.feature_ids or feature_ids
-                scenario.acceptance_criteria_ids = (
-                    scenario.acceptance_criteria_ids or acceptance_criteria_ids
-                )
+                scenario.user_story_ids = source_ids(scenario.user_story_ids, story_ids, story_ids)
+                scenario.requirement_ids = source_ids(scenario.requirement_ids, requirement_ids, requirement_ids)
+                scenario.feature_ids = source_ids(scenario.feature_ids, feature_ids, feature_ids)
+                scenario.acceptance_criteria_ids = source_ids(scenario.acceptance_criteria_ids, acceptance_criteria_ids, acceptance_criteria_ids)
                 scenario.source_references = (
                     list(dict.fromkeys((scenario.source_references or story_ids) + [str(x) for x in context_dict.get("image_ids", [])]))
                 )

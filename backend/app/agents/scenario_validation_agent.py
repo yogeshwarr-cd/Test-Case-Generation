@@ -26,7 +26,7 @@ class ScenarioValidationAgent(BaseAgent[ValidationResult]):
         for i,s in enumerate(ss):
             req_quality=mapping_quality(req,s.requirement_ids); ac_quality=mapping_quality(ac,s.acceptance_criteria_ids) if ac else 0.0
             traceability=sum((req_quality,ac_quality,float(bool(s.user_story_ids))))/3
-            completeness=sum((content_quality(s.description,120),content_quality(s.expected_business_outcome,80),float(bool(s.preconditions)),float(bool(s.test_data_requirements))))/4
+            completeness=sum((content_quality(s.description,60),content_quality(s.expected_business_outcome,40),float(bool(s.preconditions)),float(bool(s.test_data_requirements))))/4
             entity_vals={"requirement_coverage":req_quality,"acceptance_criteria_coverage":ac_quality,"traceability":traceability,"completeness":completeness,"consistency":sum((req_quality,ac_quality))/2,"technical_feasibility":sum((float(bool(s.preconditions)),float(bool(s.test_data_requirements))))/2,"duplicate_hallucination_control":float(i not in duplicates)}
             entity_breakdowns.append(entity_vals)
             entity_scores[str(s.scenario_id)]=weighted_score(entity_vals,SCENARIO_WEIGHTS)

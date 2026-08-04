@@ -16,8 +16,8 @@ class TestCaseValidationAgent(BaseAgent[ValidationResult]):
         entity_scores={}; entity_breakdowns=[]
         for i,c in enumerate(cases):
             scenario_quality=float(c.scenario_id in sids); ac_quality=mapping_quality(ac,c.acceptance_criteria_ids) if ac else 0.0
-            step_quality=sum(content_quality(step.action,60) for step in c.steps)/len(c.steps) if c.steps else 0.0
-            expected_quality=sum(content_quality(step.expected_result,80) for step in c.steps)/len(c.steps) if c.steps else 0.0
+            step_quality=sum(content_quality(step.action,30) for step in c.steps)/len(c.steps) if c.steps else 0.0
+            expected_quality=sum(content_quality(step.expected_result,40) for step in c.steps)/len(c.steps) if c.steps else 0.0
             traceability=sum((scenario_quality,ac_quality,float(bool(c.requirement_ids))))/3
             consistency=sum((scenario_quality,ac_quality,mapping_quality({x for s in scenarios for x in s.requirement_ids},c.requirement_ids)))/3
             entity_vals={"scenario_coverage":scenario_quality,"acceptance_criteria_coverage":ac_quality,"step_completeness":step_quality,"expected_result_quality":expected_quality,"traceability":traceability,"consistency_accuracy":consistency,"duplicate_hallucination_control":float(i not in duplicates)}

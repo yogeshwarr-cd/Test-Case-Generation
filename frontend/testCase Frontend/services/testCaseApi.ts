@@ -100,7 +100,7 @@ export const testCaseApi = {
     return request<ExecutionReport>('/api/v1/automation/executions', {
       method: 'POST',
       body: JSON.stringify({ generation_id: generationId, mode, authentication }),
-    }, 30000);
+    }, 1800000);
   },
 
   startWorkflowCrawlJob(workflowId: string, applicationUrl: string) {

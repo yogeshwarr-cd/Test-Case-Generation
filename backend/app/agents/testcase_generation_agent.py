@@ -73,6 +73,11 @@ class TestCaseGenerationAgent(BaseAgent[TestCaseBatch]):
                     by_scenario[scenario_id] = match
             ordered = [by_scenario[str(scenario["scenario_id"])] for scenario in batch]
             for test_case in ordered:
+                source_scenario = next(item for item in batch if str(item["scenario_id"]) == str(test_case.scenario_id))
+                for field in ("requirement_ids", "acceptance_criteria_ids"):
+                    available = [str(value) for value in source_scenario.get(field, [])]
+                    mapped = [str(value) for value in getattr(test_case, field) if str(value) in set(available)]
+                    setattr(test_case, field, list(dict.fromkeys(mapped or available)))
                 test_case.source_references=list(dict.fromkeys(test_case.source_references+[str(x) for x in context_dict.get("image_ids",[])]))
             generated.extend(ordered)
         return TestCaseBatch(test_cases=generated)

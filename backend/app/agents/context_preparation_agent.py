@@ -41,6 +41,15 @@ class ContextPreparationAgent(BaseAgent[StructuredContext]):
         if not payload["user_stories"]: raise ValueError("At least one user story is required")
         for key, prefix in PREFIXES.items():
             payload[key] = _structured_items(payload[key], prefix)
+        stories = payload["user_stories"]
+        criteria = payload["acceptance_criteria"]
+        for index, criterion in enumerate(criteria):
+            if criterion.get("user_story_id"):
+                continue
+            if len(stories) == 1:
+                criterion["user_story_id"] = str(stories[0]["id"])
+            elif len(criteria) == len(stories):
+                criterion["user_story_id"] = str(stories[index]["id"])
         visual_context=[]
         for image_id in payload.get("image_ids",[]):
             record=ImagePipeline.get(image_id)
