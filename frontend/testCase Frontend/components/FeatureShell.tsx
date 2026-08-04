@@ -11,9 +11,9 @@ import { ScrollToBottomButton } from './ScrollToBottomButton';
 import styles from './PremiumShell.module.css';
 
 const navigation = [
-  { href: '/test-case-generation', label: 'Create', icon: Sparkles, exact: true },
-  { href: '/dashboard', label: 'Projects', icon: FolderKanban, exact: false },
   { href: '/', label: 'Home', icon: Home, exact: true },
+  { href: '/dashboard', label: 'Projects', icon: FolderKanban, exact: false },
+  { href: '/test-case-generation', label: 'Create', icon: Sparkles, exact: true },
 ];
 
 export function FeatureShell({ children }: { children: ReactNode }) {
