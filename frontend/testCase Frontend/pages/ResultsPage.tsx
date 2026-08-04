@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, ChevronDown, ChevronUp, Clipboard, Download, RefreshCw, X } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
+import { Modal } from '@/components/common/Modal';
 import { ConfidenceBadge, ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
@@ -25,6 +26,7 @@ export function ResultsPage() {
   const [notice, setNotice] = useState('');
   const [regenerationTarget, setRegenerationTarget] = useState<{ kind: 'scenario' | 'testCase'; id: string; title: string } | null>(null);
   const [improvements, setImprovements] = useState('');
+  const [regenerationError, setRegenerationError] = useState('');
   const [decisions, setDecisions] = useState<Record<string, 'approved' | 'rejected'>>({});
   const pageSize = 10;
 
@@ -52,27 +54,40 @@ export function ResultsPage() {
     router.push('/test-case-generation');
   };
   const regenerate = async () => {
-    if (!regenerationTarget || !improvements.trim()) return;
+    const feedback = improvements.trim();
+    if (!regenerationTarget || feedback.length < 10) {
+      setRegenerationError('Please provide at least 10 characters describing what should be improved.');
+      return;
+    }
     const { kind, id } = regenerationTarget;
     setRegenerating(id);
     setNotice('');
+    setRegenerationError('');
     try {
       if (!activeWorkflowId) throw new Error('Workflow is unavailable.');
-      const response = await testCaseApi.regenerateWorkflowItem(activeWorkflowId, kind, id, improvements.trim());
-      setData((current) => current ? { ...current, ...response.result } : current);
-      setResult(data ? { ...data, ...response.result } : null);
+      const response = await testCaseApi.regenerateWorkflowItem(activeWorkflowId, kind, id, feedback);
+      const nextData = data ? { ...data, ...response.result } : null;
+      setData(nextData);
+      setResult(nextData);
       setNotice(`${kind === 'scenario' ? 'Scenario' : 'Test case'} regenerated and revalidated successfully.`);
-    } catch (requestError) {
-      setNotice(friendlyError(requestError));
-    } finally {
-      setRegenerating('');
       setRegenerationTarget(null);
       setImprovements('');
+    } catch (requestError) {
+      setRegenerationError(friendlyError(requestError));
+    } finally {
+      setRegenerating('');
     }
   };
   const requestRegeneration = (kind: 'scenario' | 'testCase', id: string, title: string) => {
     setRegenerationTarget({ kind, id, title });
     setImprovements('');
+    setRegenerationError('');
+  };
+  const closeRegeneration = () => {
+    if (regenerating) return;
+    setRegenerationTarget(null);
+    setImprovements('');
+    setRegenerationError('');
   };
   const decide = async (id: string, decision: 'approved' | 'rejected') => {
     if (!activeWorkflowId) return;
@@ -137,19 +152,22 @@ export function ResultsPage() {
       </div>
       {notice && <div role="status" className="rounded-lg border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary">{notice}</div>}
       {regenerationTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="regeneration-title">
-          <div className="w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-2xl">
-            <h2 id="regeneration-title" className="text-lg font-bold">Regenerate {regenerationTarget.kind === 'scenario' ? 'scenario' : 'test case'}</h2>
+        <Modal isOpen onClose={closeRegeneration} title={`Regenerate ${regenerationTarget.kind === 'scenario' ? 'scenario' : 'test case'}`}>
+          <form onSubmit={(event) => { event.preventDefault(); void regenerate(); }}>
             <p className="mt-1 text-sm text-muted-foreground">{regenerationTarget.title}</p>
             <label className="mt-5 block text-sm font-semibold" htmlFor="regeneration-improvements">What should be improved?</label>
-            <textarea id="regeneration-improvements" autoFocus value={improvements} onChange={(event) => setImprovements(event.target.value)} placeholder="Example: Add boundary conditions, clearer expected results, and invalid input coverage." rows={5} className="mt-2 w-full resize-y rounded-lg border border-input bg-background p-3 text-sm outline-none focus:border-primary" />
-            <p className="mt-2 text-xs text-muted-foreground">These instructions will be sent to the backend and attached to this item&apos;s regeneration request.</p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => { setRegenerationTarget(null); setImprovements(''); }} className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted">Cancel</button>
-              <button disabled={!improvements.trim() || Boolean(regenerating)} onClick={regenerate} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${regenerating ? 'animate-spin' : ''}`} /> Regenerate</button>
+            <textarea id="regeneration-improvements" autoFocus required minLength={10} disabled={Boolean(regenerating)} value={improvements} onChange={(event) => { setImprovements(event.target.value); setRegenerationError(''); }} placeholder="Example: Add boundary conditions, clearer expected results, and invalid input coverage." rows={5} aria-describedby="regeneration-help regeneration-error" aria-invalid={Boolean(regenerationError)} className="mt-2 w-full resize-y rounded-lg border border-input bg-background p-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-wait disabled:opacity-60" />
+            <div className="mt-2 flex items-start justify-between gap-3 text-xs">
+              <p id="regeneration-help" className="text-muted-foreground">The selected item will be completely regenerated and revalidated using this feedback.</p>
+              <span className={improvements.trim().length < 10 ? 'text-muted-foreground' : 'text-green-600'}>{improvements.trim().length}/10 minimum</span>
             </div>
-          </div>
-        </div>
+            {regenerationError && <p id="regeneration-error" role="alert" className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600">{regenerationError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" disabled={Boolean(regenerating)} onClick={closeRegeneration} className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted disabled:opacity-50">Cancel</button>
+              <button type="submit" disabled={improvements.trim().length < 10 || Boolean(regenerating)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${regenerating ? 'animate-spin' : ''}`} /> {regenerating ? 'Regenerating…' : 'Regenerate completely'}</button>
+            </div>
+          </form>
+        </Modal>
       )}
 
       {(tab === 'scenarios' || tab === 'testCases') && (
