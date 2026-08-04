@@ -96,10 +96,11 @@ export const testCaseApi = {
     generationId: string,
     mode: 'automated' | 'manual',
     authentication?: { email: string; password: string },
+    executionProfile: 'fast' | 'standard' | 'diagnostic' = 'fast',
   ) {
     return request<ExecutionReport>('/api/v1/automation/executions', {
       method: 'POST',
-      body: JSON.stringify({ generation_id: generationId, mode, authentication }),
+      body: JSON.stringify({ generation_id: generationId, mode, authentication, execution_profile: executionProfile }),
     }, 1800000);
   },
 

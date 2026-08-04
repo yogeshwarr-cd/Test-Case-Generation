@@ -3714,6 +3714,9 @@ class AutomationService:
 
         started = time.perf_counter()
         results: list[ScriptExecutionResult] = []
+        fast_execution = request.execution_profile == "fast"
+        diagnostic_execution = request.execution_profile == "diagnostic"
+        worker_storage_state: dict[str, Any] | None = None
         state = generation["workflow"]
         cases = {str(item["test_case_id"]): item for item in state.get("test_cases", [])}
         run_seacrawl_calls = 0
@@ -3735,8 +3738,23 @@ class AutomationService:
                 console_logs: list[str] = []
                 network_errors: list[str] = []
                 # ---- Use a browser context so we can capture traces (req 11) ----
-                context = await browser.new_context()
-                await context.tracing.start(screenshots=True, snapshots=True, sources=False)
+                context = await browser.new_context(
+                    storage_state=worker_storage_state,
+                )
+                if fast_execution:
+                    async def block_heavy_resources(route: Any) -> None:
+                        if route.request.resource_type in {"font", "media"}:
+                            await route.abort()
+                        else:
+                            await route.continue_()
+                    await context.route("**/*", block_heavy_resources)
+                trace_started = not fast_execution
+                if trace_started:
+                    await context.tracing.start(
+                        screenshots=True,
+                        snapshots=True,
+                        sources=diagnostic_execution,
+                    )
                 page = await context.new_page()
                 page.on("console", lambda message, logs=console_logs: logs.append(message.text))
                 page.on(
@@ -3809,9 +3827,21 @@ class AutomationService:
                     else:
                         await self._wait_for_page_stable(page)
                     failure_category = "Authentication Failure"
-                    authentication_evidence = await self._authenticate_if_required(
-                        page, authentication, target_url
-                    )
+                    if authentication and worker_storage_state is not None:
+                        authentication_evidence = {
+                            "required": True,
+                            "attempted": False,
+                            "succeeded": True,
+                            "session_reused": True,
+                            "redirected_url": page.url,
+                            "expected_protected_url": target_url,
+                        }
+                    else:
+                        authentication_evidence = await self._authenticate_if_required(
+                            page, authentication, target_url
+                        )
+                        if authentication and authentication_evidence.get("succeeded"):
+                            worker_storage_state = await context.storage_state()
                     navigation_details["actual_destination"] = page.url
                     navigation_details["redirected_url"] = (
                         authentication_evidence.get("redirected_url")
@@ -3837,6 +3867,7 @@ class AutomationService:
                         )
                     # ---- Auto-dismiss overlays once after landing (req 8) ----
                     await self._dismiss_overlays(page)
+                    last_overlay_url = page.url
 
                     per_test_calls = 0
                     for step in (
@@ -3857,7 +3888,9 @@ class AutomationService:
                         element = f"Requested target: {phrase}"
 
                         # ---- Pre-step overlay dismissal (req 8) ----
-                        await self._dismiss_overlays(page)
+                        if not fast_execution or page.url != last_overlay_url:
+                            await self._dismiss_overlays(page)
+                            last_overlay_url = page.url
                         failure_category = "Locator Failure"
                         try:
                             context_element = self._context_element(action, disc_dicts)
@@ -3984,9 +4017,18 @@ class AutomationService:
                             }
                             await self._assert_expected(page, expected or "")
 
-                    quality_checks = await self._quality_checks(
-                        page, generation["directory"], script.script_id, network_errors
-                    )
+                    if fast_execution:
+                        quality_checks = {
+                            "accessibility": {"checked": False, "potential_violations": []},
+                            "visual_regression": {"checked": False, "changed": False},
+                            "api_contract": {"checked": True, "failed_responses": list(network_errors)},
+                            "backend_observability": {"console_and_failed_request_capture": True},
+                            "execution_profile": "fast",
+                        }
+                    else:
+                        quality_checks = await self._quality_checks(
+                            page, generation["directory"], script.script_id, network_errors
+                        )
                     traceability = self._traceability(script)
                     traceability["quality_checks"] = quality_checks
                     results.append(
@@ -4002,7 +4044,8 @@ class AutomationService:
                     )
                     # Stop trace cleanly on pass (no need to save)
                     try:
-                        await context.tracing.stop()
+                        if trace_started:
+                            await context.tracing.stop()
                     except Exception:
                         pass
 
@@ -4106,8 +4149,9 @@ class AutomationService:
                     # ---- Playwright trace (req 11) ----
                     trace_path: Path | None = None
                     try:
-                        trace_path = generation["directory"] / f"{script.script_id}-failure-trace.zip"
-                        await context.tracing.stop(path=str(trace_path))
+                        if trace_started:
+                            trace_path = generation["directory"] / f"{script.script_id}-failure-trace.zip"
+                            await context.tracing.stop(path=str(trace_path))
                     except Exception:
                         trace_path = None
 
