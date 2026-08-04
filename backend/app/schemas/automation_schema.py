@@ -126,6 +126,7 @@ class PlaywrightAuthentication(BaseModel):
 class ExecuteScriptsRequest(BaseModel):
     generation_id: str
     mode: Literal["automated", "manual"] = "automated"
+    execution_profile: Literal["fast", "standard", "diagnostic"] = "standard"
     authentication: PlaywrightAuthentication | None = None
 
 

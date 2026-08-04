@@ -20,6 +20,7 @@ export function AutomationPage() {
   const [crawl, setCrawl] = useState<CrawlAnalysis | null>(null);
   const [report, setReport] = useState<ExecutionReport | null>(null);
   const [mode, setMode] = useState<'automated' | 'manual'>('automated');
+  const [executionProfile, setExecutionProfile] = useState<'fast' | 'standard' | 'diagnostic'>('fast');
   const [selectedScript, setSelectedScript] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -178,7 +179,7 @@ export function AutomationPage() {
       ? { email: authenticationEmail.trim(), password: authenticationPassword }
       : undefined;
     setBusy(true); setError(''); setShowTestReport(false);
-    try { setReport(await testCaseApi.executeScripts(generation.generation_id, 'automated', authentication)); }
+    try { setReport(await testCaseApi.executeScripts(generation.generation_id, 'automated', authentication, executionProfile)); }
     catch (requestError) {
       if (requestError instanceof Error && requestError.message.includes('(404)') && workflowId && applicationUrl.trim()) {
         try {
@@ -194,7 +195,7 @@ export function AutomationPage() {
           );
           setGeneration(refreshed);
           setSelectedScript(0);
-          setReport(await testCaseApi.executeScripts(refreshed.generation_id, 'automated', authentication));
+          setReport(await testCaseApi.executeScripts(refreshed.generation_id, 'automated', authentication, executionProfile));
         } catch (retryError) { setError(friendlyError(retryError)); }
       } else { setError(friendlyError(requestError)); }
     }
@@ -232,6 +233,7 @@ export function AutomationPage() {
         humanSession.generation_id,
         'automated',
         authentication,
+        executionProfile,
       ));
     } catch (requestError) {
       setError(friendlyError(requestError));
@@ -279,6 +281,15 @@ export function AutomationPage() {
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div><label htmlFor="playwright-email" className="text-sm font-semibold">Email <span className="font-normal text-muted-foreground">(optional)</span></label><input id="playwright-email" type="email" autoComplete="username" value={authenticationEmail} onChange={(event) => setAuthenticationEmail(event.target.value)} placeholder="sample@gmail.com" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" /></div>
           <div><label htmlFor="playwright-password" className="text-sm font-semibold">Password <span className="font-normal text-muted-foreground">(optional)</span></label><input id="playwright-password" type="password" autoComplete="current-password" value={authenticationPassword} onChange={(event) => setAuthenticationPassword(event.target.value)} placeholder="12345678" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" /></div>
+        </div>
+        <div className="mt-4">
+          <label htmlFor="execution-profile" className="text-sm font-semibold">Execution profile</label>
+          <select id="execution-profile" value={executionProfile} onChange={(event) => setExecutionProfile(event.target.value as 'fast' | 'standard' | 'diagnostic')} className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary sm:max-w-md">
+            <option value="fast">Fast — functional checks and failure screenshots</option>
+            <option value="standard">Standard — visual checks and failure traces</option>
+            <option value="diagnostic">Diagnostic — complete trace and evidence collection</option>
+          </select>
+          <p className="mt-1 text-xs text-muted-foreground">Fast is recommended for routine runs. Use Diagnostic when investigating a failure.</p>
         </div>
       </section>}
 
