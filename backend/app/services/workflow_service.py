@@ -88,15 +88,21 @@ class WorkflowService:
     async def regenerate_entity(self,wid,request):
         state=self.get(wid); ctx=ExecutionContext(request_id=str(wid),workflow_id=str(wid),metadata={"mock_mode":state.get("mock_mode",False)})
         if request.entity_type=="scenario":
-            index=next(i for i,x in enumerate(state["scenarios"]) if str(x["scenario_id"])==request.entity_id); original=state["scenarios"][index]
+            index=next((i for i,x in enumerate(state.get("scenarios",[])) if str(x["scenario_id"])==request.entity_id),None)
+            if index is None: raise ValueError(f"Scenario {request.entity_id} was not found in this workflow")
+            original=state["scenarios"][index]
             payload={"context":state["structured_context"],"existing_scenarios":[original],"validation":{"regeneration_instructions":[request.feedback]}}
             generated=(await ScenarioGenerationAgent().execute(payload,ctx)).model_dump(mode="json")["scenarios"][0];generated["scenario_id"]=original["scenario_id"];state["scenarios"][index]=generated
             state["scenario_validation"]=(await ScenarioValidationAgent().execute({"context":state["structured_context"],"scenarios":{"scenarios":state["scenarios"]},"confidence_threshold":state.get("confidence_threshold",settings.validation_pass_threshold)},ctx)).model_dump(mode="json"); result=generated
         else:
-            index=next(i for i,x in enumerate(state["test_cases"]) if str(x["test_case_id"])==request.entity_id); original=state["test_cases"][index]; related=[x for x in state["scenarios"] if str(x["scenario_id"])==str(original["scenario_id"])]
+            index=next((i for i,x in enumerate(state.get("test_cases",[])) if str(x["test_case_id"])==request.entity_id),None)
+            if index is None: raise ValueError(f"Test case {request.entity_id} was not found in this workflow")
+            original=state["test_cases"][index]; related=[x for x in state["scenarios"] if str(x["scenario_id"])==str(original["scenario_id"])]
             payload={"scenarios":related,"context":state["structured_context"],"existing_test_cases":[original],"validation":{"regeneration_instructions":[request.feedback]}}
             generated=(await TestCaseGenerationAgent().execute(payload,ctx)).model_dump(mode="json")["test_cases"][0];generated["test_case_id"]=original["test_case_id"];generated["scenario_id"]=original["scenario_id"];state["test_cases"][index]=generated
             state["testcase_validation"]=(await TestCaseValidationAgent().execute({"scenarios":{"scenarios":state["scenarios"]},"test_cases":{"test_cases":state["test_cases"]},"confidence_threshold":state.get("confidence_threshold",settings.validation_pass_threshold)},ctx)).model_dump(mode="json"); result=generated
+        state.setdefault("regeneration_history",[]).append({"entity_type":request.entity_type,"entity_id":request.entity_id,"feedback":request.feedback,"regenerated_at":datetime.now(timezone.utc).isoformat()})
+        self._persist_state(state)
         return {"status":"completed","item":result,"result":{k:state.get(k) for k in ("scenarios","scenario_validation","test_cases","testcase_validation")}}
     async def approve_review(self,wid,request):
         state=self.get(wid)

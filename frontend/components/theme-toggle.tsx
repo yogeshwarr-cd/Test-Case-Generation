@@ -1,36 +1,22 @@
 "use client";
 
-import * as React from "react";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 
 export function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = React.useState(false);
-
-  React.useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  if (!mounted) {
-    return (
-      <div className="w-7 h-7 rounded-full border border-border flex items-center justify-center bg-transparent">
-        <div className="w-[14px] h-[14px]" />
-      </div>
-    );
-  }
+  const { resolvedTheme, setTheme } = useTheme();
 
   return (
     <button
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-      className="relative w-7 h-7 rounded-full border border-border flex items-center justify-center bg-background hover:bg-muted text-foreground transition-colors hover:text-primary"
-      aria-label="Toggle theme"
+      type="button"
+      onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+      className="relative flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-background text-foreground transition-colors hover:bg-muted hover:text-primary"
+      aria-label="Toggle color theme"
+      title="Toggle color theme"
+      suppressHydrationWarning
     >
-      {theme === "dark" ? (
-        <Sun className="h-[14px] w-[14px] transition-all" />
-      ) : (
-        <Moon className="h-[14px] w-[14px] transition-all" />
-      )}
+      <Sun className="hidden h-4 w-4 dark:block" aria-hidden="true" />
+      <Moon className="h-4 w-4 dark:hidden" aria-hidden="true" />
       <span className="sr-only">Toggle theme</span>
     </button>
   );

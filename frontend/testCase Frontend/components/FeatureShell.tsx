@@ -5,15 +5,13 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { AnimatePresence, motion, useMotionValue, useReducedMotion, useSpring } from 'framer-motion';
-import { FileCode2, FlaskConical, FolderKanban, Globe, Home, Sparkles } from 'lucide-react';
+import { FlaskConical, FolderKanban, Home, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { ScrollToBottomButton } from './ScrollToBottomButton';
 import styles from './PremiumShell.module.css';
 
 const navigation = [
   { href: '/test-case-generation', label: 'Create', icon: Sparkles, exact: true },
-  { href: '/test-case-generation/results', label: 'Results', icon: FileCode2 },
-  { href: '/test-case-generation/url-crawler', label: 'URL Crawler', icon: Globe },
 ];
 
 export function FeatureShell({ children }: { children: ReactNode }) {
