@@ -285,11 +285,11 @@ export interface TraceabilityComparisonReport {
   comparison_id: string;
   execution_id: string;
   generation_id: string;
-  summary: { total_artifacts: number; covered: number; missing: number; coverage_percentage: number };
+  summary: { total_artifacts: number; covered: number; partial?: number; missing: number; coverage_percentage: number; thresholds?: { missing_below: number; covered_above: number } };
   scenario_coverage: Array<{
     id: string;
     title: string;
-    status: 'covered' | 'missing';
+    status: 'covered' | 'partial' | 'missing';
     coverage_percentage: number;
     matched_scripts: string[];
     missing_terms: string[];
@@ -297,7 +297,7 @@ export interface TraceabilityComparisonReport {
   test_case_coverage: Array<{
     id: string;
     title: string;
-    status: 'covered' | 'missing';
+    status: 'covered' | 'partial' | 'missing';
     coverage_percentage: number;
     matched_scripts: string[];
     missing_terms: string[];
@@ -305,7 +305,7 @@ export interface TraceabilityComparisonReport {
   gaps: Array<{
     artifact_id: string;
     artifact_title: string;
-    status?: 'covered' | 'missing';
+    status?: 'covered' | 'partial' | 'missing';
     gap_type: string;
     coverage_percentage?: number;
     details: string;

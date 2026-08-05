@@ -24,6 +24,7 @@ from app.services.automation_service import (
     _best_page_url,
     _canonical_page_url,
     _challenge_evidence,
+    _coverage_status,
     _link_skip_reason,
     _python_source,
     _step_execution_kind,
@@ -31,6 +32,19 @@ from app.services.automation_service import (
     _validate_css_selector,
     _validate_generated_source,
 )
+
+
+@pytest.mark.parametrize(
+    ("percentage", "expected"),
+    [(0, "missing"), (19.99, "missing"), (20, "partial"), (60, "partial"), (60.01, "covered"), (100, "covered")],
+)
+def test_coverage_status_boundaries(percentage, expected):
+    assert _coverage_status(percentage, 20, 60) == expected
+
+
+def test_coverage_status_rejects_reversed_thresholds():
+    with pytest.raises(ValueError, match="must not exceed"):
+        _coverage_status(50, 61, 60)
 
 
 def test_step_execution_kind_requires_concrete_action_or_assertion():

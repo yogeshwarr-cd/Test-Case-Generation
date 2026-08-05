@@ -55,6 +55,17 @@ logger = logging.getLogger(__name__)
 SCRIPT_ARTIFACT_SUFFIX = ".pwscript"
 
 
+def _coverage_status(percentage: float, missing_threshold: float, covered_threshold: float) -> str:
+    """Classify a percentage using inclusive partial-coverage boundaries."""
+    if missing_threshold > covered_threshold:
+        raise ValueError("Missing coverage threshold must not exceed covered threshold")
+    if percentage < missing_threshold:
+        return "missing"
+    if percentage <= covered_threshold:
+        return "partial"
+    return "covered"
+
+
 async def _on_playwright_loop(factory: Callable[[], Awaitable[R]]) -> R:
     """Run Playwright on a subprocess-capable loop on Windows.
 
@@ -5370,18 +5381,17 @@ class AutomationService:
             str(script.test_case_id) for script in response.scripts
         }
         statuses = {result.script_id: result.status for result in execution.results}
+        missing_threshold = settings.automation_coverage_missing_threshold
+        covered_threshold = settings.automation_coverage_covered_threshold
         evidence: dict[str, set[str]] = {}
-        executed_words: set[str] = set()
         for script in response.scripts:
             words = _meaningful_words(" ".join([
-                script.name, script.page_url or "",
+                script.name, script.page_url or "", script.source,
                 *[" ".join(str(element.get(key) or "") for key in (
                     "name", "label", "placeholder", "visible_text", "href", "role"
                 )) for element in script.page_elements],
             ]))
             evidence[script.script_id] = words
-            if statuses.get(script.script_id) in {"passed", "failed"}:
-                executed_words |= words
 
         def coverage(item: dict[str, Any], id_key: str) -> dict[str, Any]:
             text = " ".join([
@@ -5390,28 +5400,34 @@ class AutomationService:
                   for step in item.get("steps", [])],
             ])
             expected = _meaningful_words(text)
+            item_id = str(item.get(id_key) or "")
+            matching_scripts = [
+                script for script in response.scripts
+                if str(script.test_case_id if id_key == "test_case_id" else script.scenario_id) == item_id
+                and statuses.get(script.script_id) in {"passed", "failed"}
+            ]
+            executed_words = set().union(*(evidence[script.script_id] for script in matching_scripts)) if matching_scripts else set()
             overlap = expected & executed_words
             percentage = round(len(overlap) / len(expected) * 100, 2) if expected else 0
-            item_id = str(item.get(id_key) or "")
             unsupported_item = unsupported.get(item_id)
+            evidence_issue = None
             if crawl_report.get("status") == "crawl_blocked":
-                classification = "crawl_blocked"
+                evidence_issue = "crawl_blocked"
             elif crawl_report.get("status") != "crawl_completed":
-                classification = "crawl_incomplete"
+                evidence_issue = "crawl_incomplete"
             elif unsupported_item:
-                classification = unsupported_item["classification"]
+                evidence_issue = unsupported_item["classification"]
             elif id_key == "test_case_id" and item_id not in generated_test_case_ids:
-                classification = "missing_from_generated_script"
-            elif percentage == 0:
-                classification = "missing_from_generated_script"
-            else:
-                classification = "covered"
+                evidence_issue = "missing_from_generated_script"
+            status = _coverage_status(percentage, missing_threshold, covered_threshold)
+            classification = {"missing": "missing_evidence", "partial": "partially_covered", "covered": "covered"}[status]
             return {
                 "id": item_id, "title": str(item.get("title") or ""),
-                "status": "covered" if percentage > 0 else "missing",
+                "status": status,
                 "classification": classification,
+                "evidence_issue": evidence_issue,
                 "coverage_percentage": percentage,
-                "matched_scripts": [sid for sid, words in evidence.items() if expected & words],
+                "matched_scripts": [script.script_id for script in matching_scripts if expected & evidence[script.script_id]],
                 "missing_terms": sorted(expected - executed_words),
             }
 
@@ -5425,18 +5441,21 @@ class AutomationService:
             "gap_type": item["classification"],
             "coverage_percentage": item["coverage_percentage"],
             "details": f"Missing UI evidence: {', '.join(item['missing_terms'][:12])}" if item["missing_terms"] else "No missing terms",
-        } for item in artifacts if item["status"] == "missing"]
+        } for item in artifacts if item["status"] != "covered"]
         inconsistencies = [{
             "script_id": result.script_id, "type": "execution_failure",
             "details": result.error_message or "Page execution failed.",
         } for result in execution.results if result.status == "failed"]
         covered = sum(item["status"] == "covered" for item in artifacts)
+        partial = sum(item["status"] == "partial" for item in artifacts)
+        missing = sum(item["status"] == "missing" for item in artifacts)
         report = TraceabilityComparisonReport(
             comparison_id=f"cmp-{uuid.uuid4()}", execution_id=execution_id,
             generation_id=execution.generation_id,
             summary={"total_artifacts": len(artifacts), "covered": covered,
-                     "missing": sum(item["status"] == "missing" for item in artifacts),
-                     "coverage_percentage": round(covered / len(artifacts) * 100, 2) if artifacts else 0},
+                     "partial": partial, "missing": missing,
+                     "coverage_percentage": round(sum(item["coverage_percentage"] for item in artifacts) / len(artifacts), 2) if artifacts else 0,
+                     "thresholds": {"missing_below": missing_threshold, "covered_above": covered_threshold}},
             scenario_coverage=scenarios, test_case_coverage=cases,
             gaps=gaps, inconsistencies=inconsistencies,
         )

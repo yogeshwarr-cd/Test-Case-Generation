@@ -114,6 +114,8 @@ class Settings(BaseSettings):
     automation_navigation_settle_timeout_seconds: float = 1.5
     automation_wait_for_network_idle: bool = False
     automation_defect_confidence_threshold: float = 0.80
+    automation_coverage_missing_threshold: float = Field(default=20.0, ge=0, le=100)
+    automation_coverage_covered_threshold: float = Field(default=60.0, ge=0, le=100)
     automation_require_reproducible_failure: bool = True
     automation_crawl_page_limit: int = 250
     automation_crawl_depth_limit: int = 15

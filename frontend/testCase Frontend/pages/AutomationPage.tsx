@@ -503,7 +503,7 @@ type ComparisonDisplayItem = {
 };
 
 function TraceabilityComparisonSection({ comparison }: { comparison: TraceabilityComparisonReport }) {
-  const [filter, setFilter] = useState<'missing' | 'covered' | 'all'>('missing');
+  const [filter, setFilter] = useState<'missing' | 'partial' | 'covered' | 'all'>('missing');
 
   const allArtifacts: ComparisonDisplayItem[] = [
     ...(comparison.scenario_coverage || []),
@@ -511,19 +511,25 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
   ];
 
   const getStatus = (item: { status?: string; gap_type?: string; coverage_percentage?: number }) => {
-    if (item.status === 'partial') return 'covered';
     if (item.status) return item.status;
     if (item.gap_type === 'uncovered') return 'missing';
-    if (item.gap_type === 'partially covered') return 'covered';
-    if ((item.coverage_percentage ?? 0) > 0) return 'covered';
+    if (item.gap_type === 'partially covered' || item.gap_type === 'partially_covered') return 'partial';
+    const percentage = item.coverage_percentage ?? 0;
+    if (percentage > (comparison.summary.thresholds?.covered_above ?? 60)) return 'covered';
+    if (percentage >= (comparison.summary.thresholds?.missing_below ?? 20)) return 'partial';
     return 'missing';
   };
   const totalArtifacts = allArtifacts.length || comparison.summary.total_artifacts;
   const coveredCount = allArtifacts.length
     ? allArtifacts.filter((item) => getStatus(item) === 'covered').length
     : comparison.summary.covered;
-  const missingCount = Math.max(totalArtifacts - coveredCount, 0);
-  const coveragePercentage = totalArtifacts ? Math.round((coveredCount / totalArtifacts) * 10000) / 100 : 0;
+  const partialCount = allArtifacts.length
+    ? allArtifacts.filter((item) => getStatus(item) === 'partial').length
+    : (comparison.summary.partial ?? 0);
+  const missingCount = allArtifacts.length
+    ? allArtifacts.filter((item) => getStatus(item) === 'missing').length
+    : comparison.summary.missing;
+  const coveragePercentage = comparison.summary.coverage_percentage;
 
   const getFilteredItems = () => {
     if (filter === 'missing') {
@@ -531,6 +537,9 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
     }
     if (filter === 'covered') {
       return allArtifacts.filter((a) => getStatus(a) === 'covered');
+    }
+    if (filter === 'partial') {
+      return allArtifacts.filter((a) => getStatus(a) === 'partial');
     }
     if (filter === 'all') {
       return allArtifacts.length > 0 ? allArtifacts : comparison.gaps;
@@ -549,6 +558,9 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
           <p className="mt-1 text-xs text-muted-foreground">
             DOM UI evidence comparison against test scenarios and test cases.
           </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Covered &gt; {comparison.summary.thresholds?.covered_above ?? 60}% · Partially Covered {comparison.summary.thresholds?.missing_below ?? 20}–{comparison.summary.thresholds?.covered_above ?? 60}% · Missing Evidence &lt; {comparison.summary.thresholds?.missing_below ?? 20}%
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-xl border border-primary/20 bg-primary/10 px-4 py-2 text-sm font-bold text-primary">
@@ -558,7 +570,7 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <button
           type="button"
           onClick={() => setFilter('all')}
@@ -568,6 +580,17 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
         >
           <p className="text-xs font-semibold uppercase text-muted-foreground">Total Artifacts</p>
           <p className="mt-1 text-2xl font-bold">{totalArtifacts}</p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setFilter('partial')}
+          className={`rounded-xl border p-4 text-left transition ${
+            filter === 'partial' ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500' : 'border-border bg-background hover:bg-muted'
+          }`}
+        >
+          <p className="text-xs font-semibold uppercase text-amber-600 dark:text-amber-400">Partially Covered</p>
+          <p className="mt-1 text-2xl font-bold text-amber-600 dark:text-amber-400">{partialCount}</p>
         </button>
 
         <button
@@ -600,6 +623,7 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
         {([
           { key: 'missing', label: `Missing Only (${missingCount})` },
           { key: 'covered', label: `Covered Only (${coveredCount})` },
+          { key: 'partial', label: `Partially Covered (${partialCount})` },
           { key: 'all', label: `All Artifacts (${totalArtifacts})` },
         ] as const).map((tab) => (
           <button
@@ -638,14 +662,16 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
                 className={`rounded-xl border p-4 text-sm shadow-sm transition ${
                   status === 'missing'
                     ? 'border-red-500/40 bg-red-500/5'
-                    : 'border-green-500/40 bg-green-500/5'
+                    : status === 'partial'
+                      ? 'border-amber-500/40 bg-amber-500/5'
+                      : 'border-green-500/40 bg-green-500/5'
                 }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-2">
                   <div className="flex items-center gap-2">
                     {status === 'missing' && (
                       <span className="inline-flex items-center gap-1.5 rounded-full border border-red-500/40 bg-red-500/15 px-3 py-1 text-xs font-bold text-red-700 dark:text-red-300">
-                        <XCircle className="h-3.5 w-3.5" /> MISSING (0%)
+                        <XCircle className="h-3.5 w-3.5" /> MISSING EVIDENCE ({coveragePct}%)
                       </span>
                     )}
                     {status === 'covered' && (
@@ -653,20 +679,25 @@ function TraceabilityComparisonSection({ comparison }: { comparison: Traceabilit
                         <CheckCircle2 className="h-3.5 w-3.5" /> COVERED ({coveragePct}%)
                       </span>
                     )}
+                    {status === 'partial' && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/15 px-3 py-1 text-xs font-bold text-amber-700 dark:text-amber-300">
+                        PARTIALLY COVERED ({coveragePct}%)
+                      </span>
+                    )}
 
                     <EntityId kind={isTestCase ? 'case' : 'scenario'} value={id} compact />
                   </div>
 
                   <span className="text-xs font-bold uppercase tracking-wider">
-                    Label: <strong className={status === 'missing' ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}>{status}</strong>
+                    Label: <strong className={status === 'missing' ? 'text-red-600 dark:text-red-400' : status === 'partial' ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}>{status}</strong>
                   </span>
                 </div>
 
                 <h3 className="mt-3 font-bold text-base">{title}</h3>
 
                 <div className="mt-2 text-xs text-muted-foreground">
-                  {(item.classification || item.gap_type) && status === 'missing' && (
-                    <p className="mb-1 font-semibold text-red-600">
+                  {(item.classification || item.gap_type) && status !== 'covered' && (
+                    <p className={`mb-1 font-semibold ${status === 'partial' ? 'text-amber-600' : 'text-red-600'}`}>
                       Classification: {(item.classification || item.gap_type || '').replaceAll('_', ' ')}
                     </p>
                   )}
