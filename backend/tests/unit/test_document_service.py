@@ -31,6 +31,48 @@ def test_parse_stories_preserves_criteria_relationships():
     assert payload["acceptance_criteria"][-1]["user_story_id"] == "US-2"
 
 
+def test_parse_stories_heading_structure_and_multiline_criteria():
+    doc = """
+Practice Page Requirements Document
+
+US-1: View Practice Page
+User Story
+As a user, I want to access the Practice page so that I can interact with the available automation testing elements.
+
+Acceptance Criteria
+- The Practice page loads successfully.
+- The page title is displayed correctly.
+- All major UI sections are visible.
+
+US-2: Verify Page Content
+User Story
+As a user, I want to view all practice sections and UI elements so that I can perform different testing activities.
+
+Acceptance Criteria
+- Practice components are displayed.
+- No UI section is missing.
+- The page is scrollable without layout issues.
+"""
+    stories = parse_stories(doc)
+    assert len(stories) == 2
+
+    assert stories[0]["id"] == "US-1"
+    assert stories[0]["text"] == "As a user, I want to access the Practice page so that I can interact with the available automation testing elements."
+    assert stories[0]["acceptance_criteria"] == [
+        "The Practice page loads successfully.",
+        "The page title is displayed correctly.",
+        "All major UI sections are visible.",
+    ]
+
+    assert stories[1]["id"] == "US-2"
+    assert stories[1]["text"] == "As a user, I want to view all practice sections and UI elements so that I can perform different testing activities."
+    assert stories[1]["acceptance_criteria"] == [
+        "Practice components are displayed.",
+        "No UI section is missing.",
+        "The page is scrollable without layout issues.",
+    ]
+
+
 def test_parse_rejects_missing_stories_and_missing_criteria():
     with pytest.raises(HTTPException, match="No user stories"):
         parse_stories("Acceptance Criteria: It works")
@@ -60,3 +102,4 @@ def test_extract_docx_without_writing_uploaded_bytes_to_disk():
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         output.getvalue(),
     ) == "User Story: Login"
+
