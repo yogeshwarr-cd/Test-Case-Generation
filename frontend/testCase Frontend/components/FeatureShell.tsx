@@ -1,25 +1,44 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { AnimatePresence, motion, useMotionValue, useReducedMotion, useSpring } from 'framer-motion';
-import { FlaskConical, FolderKanban, Home, Menu, PanelLeftClose, PanelLeftOpen, Sparkles, X } from 'lucide-react';
+import {
+  Bell,
+  Code2,
+  FileCheck2,
+  FolderKanban,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  Sparkles,
+  X
+} from 'lucide-react';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { NewProjectModal } from '@/components/projects/NewProjectModal';
 import { ScrollToBottomButton } from './ScrollToBottomButton';
 import styles from './PremiumShell.module.css';
 
 const navigation = [
-  { href: '/', label: 'Home', icon: Home, exact: true },
-  { href: '/dashboard', label: 'Projects', icon: FolderKanban, exact: false },
-  { href: '/test-case-generation', label: 'Create', icon: Sparkles, exact: true },
+  { href: '/dashboard', label: 'Dashboard', icon: FolderKanban, exact: true },
+  { href: '/test-case-generation', label: 'New Generator', icon: Plus, exact: true },
+  { href: '/test-case-generation/results', label: 'Generated Tests', icon: FileCheck2, exact: false },
+  { href: '/test-case-generation/automation', label: 'Playwright Studio', icon: Code2, exact: false },
+  { href: '/test-case-generation/url-crawler', label: 'App Crawler', icon: Sparkles, exact: false },
 ];
 
 export function FeatureShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState('');
+
   const reducedMotion = useReducedMotion();
   const pointerX = useMotionValue(0);
   const pointerY = useMotionValue(0);
@@ -36,6 +55,13 @@ export function FeatureShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('pointermove', move);
   }, [pointerX, pointerY, reducedMotion]);
 
+  const handleGlobalSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (globalQuery.trim()) {
+      router.push(`/dashboard?q=${encodeURIComponent(globalQuery.trim())}`);
+    }
+  };
+
   return (
     <div className={styles.experience}>
       <div className={styles.ambient} aria-hidden="true">
@@ -44,51 +70,170 @@ export function FeatureShell({ children }: { children: ReactNode }) {
         <div className={styles.ring} />
       </div>
 
-      <button type="button" className={styles.mobileMenuButton} onClick={() => setMobileOpen(true)} aria-label="Open navigation" aria-expanded={mobileOpen}><Menu className="h-5 w-5" /></button>
+      <button type="button" className={styles.mobileMenuButton} onClick={() => setMobileOpen(true)} aria-label="Open navigation" aria-expanded={mobileOpen}>
+        <Menu className="h-5 w-5" />
+      </button>
+
       {mobileOpen && <button type="button" className={styles.sidebarBackdrop} onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
 
+      {/* STORYFORGE AI INSPIRED DARK SLATE SIDEBAR */}
       <aside className={`${styles.sidebar} ${collapsed ? styles.sidebarCollapsed : ''} ${mobileOpen ? styles.sidebarOpen : ''}`} aria-label="Primary navigation">
         <div className={styles.sidebarBrand}>
-          <span className={styles.brandMark}><FlaskConical className="h-5 w-5" /></span>
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-orange-500 via-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-500/30 shrink-0">
+            <Sparkles className="h-5 w-5" />
+          </span>
           <div className={styles.brandCopy}>
-            <Image src="/images_and_videos/logo.png" alt="BA Accelerator" width={128} height={34} priority className="h-7 w-auto object-contain dark:invert dark:brightness-200" />
-            <span>Generate · Validate · Execute</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-extrabold tracking-tight text-white text-base">BA Accelerator</span>
+              <span className="rounded-md bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-bold text-purple-300">AI</span>
+            </div>
+            <span className="text-[11px] text-slate-400 font-medium">Application Validator</span>
           </div>
-          <button type="button" className={styles.mobileClose} onClick={() => setMobileOpen(false)} aria-label="Close navigation"><X className="h-5 w-5" /></button>
+          <button type="button" className={styles.mobileClose} onClick={() => setMobileOpen(false)} aria-label="Close navigation">
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
         <div className={styles.sidebarDivider} />
-        <p className={styles.sidebarLabel}>Workspace</p>
+        <p className={styles.sidebarLabel}>BA & QA Workspace</p>
+
         <nav className={styles.sidebarNav}>
           {navigation.map(({ href, label, icon: Icon, exact }) => {
             const active = exact ? pathname === href : pathname.startsWith(href);
-            return <Link key={href} href={href} onClick={() => setMobileOpen(false)} title={collapsed ? label : undefined} aria-current={active ? 'page' : undefined} className={`${styles.sidebarLink} ${active ? styles.sidebarActive : ''}`}><Icon className="h-5 w-5 shrink-0" /><span>{label}</span></Link>;
+            return (
+              <Link
+                key={href}
+                href={href}
+                onClick={() => setMobileOpen(false)}
+                title={collapsed ? label : undefined}
+                aria-current={active ? 'page' : undefined}
+                className={`${styles.sidebarLink} ${active ? styles.sidebarActive : ''}`}
+              >
+                <Icon className="h-5 w-5 shrink-0" />
+                <span>{label}</span>
+              </Link>
+            );
           })}
         </nav>
 
         <div className={styles.sidebarFooter}>
-          <div className={styles.themeRow}><ThemeToggle /><span>Appearance</span></div>
-          <button type="button" className={styles.collapseButton} onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={collapsed ? 'Expand sidebar' : undefined}>
-            {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}<span>{collapsed ? 'Expand' : 'Collapse sidebar'}</span>
+          <button
+            type="button"
+            className={styles.collapseButton}
+            onClick={() => setCollapsed((value) => !value)}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? 'Expand sidebar' : undefined}
+          >
+            {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
+            <span>{collapsed ? 'Expand' : 'Collapse'}</span>
           </button>
         </div>
       </aside>
 
-      <main className={`${styles.main} ${collapsed ? styles.mainCollapsed : ''}`}>
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={pathname}
-            className={styles.route}
-            initial={reducedMotion ? false : { opacity: 0, y: 22, filter: 'blur(8px)' }}
-            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
-            exit={reducedMotion ? undefined : { opacity: 0, y: -12, filter: 'blur(5px)' }}
-            transition={{ duration: reducedMotion ? 0 : 0.55, ease: [0.22, 1, 0.36, 1] }}
-          >
-            {children}
-          </motion.div>
-        </AnimatePresence>
-      </main>
+      {/* TOP NAVIGATION BAR & CONTENT WRAPPER */}
+      <div className={`flex flex-col min-h-screen transition-all duration-300 ${collapsed ? 'lg:pl-20' : 'lg:pl-[280px]'}`}>
+        {/* Top Navbar */}
+        <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-border/60 bg-background/80 px-6 backdrop-blur-md transition-colors">
+          <form onSubmit={handleGlobalSearch} className="relative w-full max-w-md hidden sm:block">
+            <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={globalQuery}
+              onChange={(e) => setGlobalQuery(e.target.value)}
+              placeholder="Search projects, user stories, Playwright scripts..."
+              className="h-10 w-full rounded-full border border-border/70 bg-card/60 pl-10 pr-12 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition"
+            />
+            <span className="absolute right-3.5 top-1/2 -translate-y-1/2 rounded border border-border/80 bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">⌘K</span>
+          </form>
+
+          <div className="flex items-center gap-3 ml-auto">
+            {/* Quick Create Action */}
+            <button
+              onClick={() => setShowNewProjectModal(true)}
+              className="hidden md:inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-orange-500 to-purple-600 px-4 py-2 text-xs font-bold text-white shadow-md shadow-orange-500/15 hover:opacity-95 transition"
+            >
+              <Plus className="h-3.5 w-3.5" /> New Project
+            </button>
+
+            {/* Notification Bell Dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="relative grid h-9 w-9 place-items-center rounded-full border border-border/70 bg-card/80 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+                aria-label="Notifications"
+              >
+                <Bell className="h-4 w-4" />
+                <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-orange-500 ring-2 ring-background" />
+              </button>
+
+              <AnimatePresence>
+                {showNotifications && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                    className="absolute right-0 mt-2 w-80 rounded-2xl border border-border bg-card p-4 shadow-xl z-50"
+                  >
+                    <div className="flex items-center justify-between border-b border-border/60 pb-3">
+                      <span className="text-xs font-bold uppercase tracking-wider text-foreground">Notifications</span>
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">3 New</span>
+                    </div>
+                    <div className="mt-3 space-y-2.5 text-xs">
+                      <div className="rounded-xl bg-muted/40 p-2.5 border border-border/40">
+                        <p className="font-semibold text-foreground">Playwright Test Suite Ready</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Project Aegis Portal generated 14 automated scripts.</p>
+                        <span className="text-[10px] text-primary font-medium mt-1 block">2 mins ago</span>
+                      </div>
+                      <div className="rounded-xl bg-muted/40 p-2.5 border border-border/40">
+                        <p className="font-semibold text-foreground">User Stories Validated</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">INVEST criteria passed for 32 requirements.</p>
+                        <span className="text-[10px] text-muted-foreground mt-1 block">1 hour ago</span>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            <ThemeToggle />
+
+            {/* Profile Avatar Section */}
+            <div className="flex items-center gap-2.5 pl-2 border-l border-border/60">
+              <div className="h-9 w-9 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 p-0.5 shadow-sm">
+                <img
+                  src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=120"
+                  alt="Sarah Jenkins"
+                  className="h-full w-full rounded-full object-cover"
+                />
+              </div>
+              <div className="hidden lg:flex flex-col text-left">
+                <span className="text-xs font-bold text-foreground leading-tight">Sarah Jenkins</span>
+                <span className="text-[10px] font-medium text-muted-foreground">Lead Product Owner & BA</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Route Content Container */}
+        <main className="flex-1 p-4 md:p-8">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={pathname}
+              className={styles.route}
+              initial={reducedMotion ? false : { opacity: 0, y: 16, filter: 'blur(6px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={reducedMotion ? undefined : { opacity: 0, y: -10, filter: 'blur(4px)' }}
+              transition={{ duration: reducedMotion ? 0 : 0.4, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {children}
+            </motion.div>
+          </AnimatePresence>
+        </main>
+      </div>
+
       <ScrollToBottomButton />
+      <NewProjectModal isOpen={showNewProjectModal} onClose={() => setShowNewProjectModal(false)} />
     </div>
   );
 }

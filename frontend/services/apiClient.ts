@@ -78,6 +78,17 @@ export const apiClient = {
     return handleResponse(response, requestUrl);
   },
 
+  delete: async (url: string, options?: RequestInit) => {
+    const requestUrl = buildUrl(url);
+    const response = await fetch(requestUrl, {
+      method: 'DELETE',
+      headers: getHeaders(),
+      ...options,
+    });
+    if (response.status === 204) return true;
+    return handleResponse(response, requestUrl);
+  },
+
   postMultipart: async (url: string, formData: FormData, options?: RequestInit) => {
     const requestUrl = buildUrl(url);
     const headers = new Headers(getHeaders(true));
