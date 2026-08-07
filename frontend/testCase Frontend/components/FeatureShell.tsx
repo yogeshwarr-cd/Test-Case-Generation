@@ -84,10 +84,10 @@ export function FeatureShell({ children }: { children: ReactNode }) {
           </span>
           <div className={styles.brandCopy}>
             <div className="flex items-center gap-1.5">
-              <span className="font-extrabold tracking-tight text-white text-base">BA Accelerator</span>
+              <span className="font-extrabold tracking-tight text-white text-base">TestCase Engine</span>
               <span className="rounded-md bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-bold text-purple-300">AI</span>
             </div>
-            <span className="text-[11px] text-slate-400 font-medium">Application Validator</span>
+            <span className="text-[11px] text-slate-400 font-medium">Test Script Generator</span>
           </div>
           <button type="button" className={styles.mobileClose} onClick={() => setMobileOpen(false)} aria-label="Close navigation">
             <X className="h-5 w-5" />
@@ -95,7 +95,7 @@ export function FeatureShell({ children }: { children: ReactNode }) {
         </div>
 
         <div className={styles.sidebarDivider} />
-        <p className={styles.sidebarLabel}>BA & QA Workspace</p>
+        <p className={styles.sidebarLabel}>Test Automation Workspace</p>
 
         <nav className={styles.sidebarNav}>
           {navigation.map(({ href, label, icon: Icon, exact }) => {
@@ -209,7 +209,7 @@ export function FeatureShell({ children }: { children: ReactNode }) {
               </div>
               <div className="hidden lg:flex flex-col text-left">
                 <span className="text-xs font-bold text-foreground leading-tight">Sarah Jenkins</span>
-                <span className="text-[10px] font-medium text-muted-foreground">Lead Product Owner & BA</span>
+                <span className="text-[10px] font-medium text-muted-foreground">Lead QA Automation Engineer</span>
               </div>
             </div>
           </div>

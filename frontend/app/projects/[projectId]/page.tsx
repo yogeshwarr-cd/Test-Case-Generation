@@ -32,10 +32,6 @@ import { useTestCaseWorkflowStore, loadTestProjectArtifacts } from '@/testCase F
 
 type ArtifactTab =
   | 'documents'
-  | 'epics'
-  | 'features'
-  | 'stories'
-  | 'acceptance'
   | 'scenarios'
   | 'testcases'
   | 'scripts'
@@ -52,7 +48,7 @@ export default function DedicatedProjectWorkspacePage() {
 
   const [state, setState] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<ArtifactTab>('documents');
+  const [activeTab, setActiveTab] = useState<ArtifactTab>('scenarios');
   const [copiedScriptIndex, setCopiedScriptIndex] = useState<number | null>(null);
   const [filterQuery, setFilterQuery] = useState('');
 
@@ -83,60 +79,71 @@ export default function DedicatedProjectWorkspacePage() {
   const epics = useMemo(() => {
     const raw = state.epics as Array<Record<string, unknown>> | undefined;
     if (raw && raw.length) return raw;
-    return [
-      { id: 'EPC-01', title: 'User Access Control & Security', description: 'Core authentication, MFA token verification, and role-based permissions.', featureCount: 3, status: 'In Scope' },
-      { id: 'EPC-02', title: 'Project Management & Collaboration', description: 'Workspace creation, team member invites, and asset sharing.', featureCount: 4, status: 'In Scope' },
-      { id: 'EPC-03', title: 'AI Test Automation Engine', description: 'Automated scenario extraction and Playwright code generation.', featureCount: 5, status: 'In Scope' }
-    ];
+    return [];
   }, [state]);
 
   const features = useMemo(() => {
     const raw = state.features as Array<Record<string, unknown>> | undefined;
     if (raw && raw.length) return raw;
-    return [
-      { id: 'FT-01', epicId: 'EPC-01', name: 'SSO & Passwordless Login', priority: 'High', storiesCount: 4 },
-      { id: 'FT-02', epicId: 'EPC-01', name: 'MFA Verification Flow', priority: 'High', storiesCount: 3 },
-      { id: 'FT-03', epicId: 'EPC-02', name: 'Project Workspace Dashboard', priority: 'Medium', storiesCount: 5 },
-      { id: 'FT-04', epicId: 'EPC-03', name: 'Playwright TS Generator', priority: 'Critical', storiesCount: 6 }
-    ];
+    return [];
   }, [state]);
 
   const userStories = useMemo(() => {
-    const raw = (state.user_stories || state.stories) as Array<Record<string, unknown>> | undefined;
+    const gen = savedArtifacts?.generation as any;
+    const raw = (state.user_stories || state.stories || gen?.user_stories) as Array<Record<string, unknown>> | undefined;
     if (raw && raw.length) return raw;
-    return [
-      { id: 'US-101', title: 'Multi-Factor Authentication', role: 'Security Admin', want: 'enable SMS & TOTP MFA', soThat: 'account logins require secondary verification', points: 5, status: 'Validated' },
-      { id: 'US-102', title: 'Playwright Script Export', role: 'QA Engineer', want: 'export generated Playwright scripts as TypeScript files', soThat: 'they can run directly in CI/CD pipelines', points: 8, status: 'Validated' },
-      { id: 'US-103', title: 'Traceability Matrix View', role: 'Lead BA', want: 'inspect requirement-to-test case mappings', soThat: 'test coverage gaps are identified before release', points: 3, status: 'Validated' }
-    ];
-  }, [state]);
+    return [];
+  }, [state, savedArtifacts]);
 
   const acceptanceCriteria = useMemo(() => {
-    return [
-      { id: 'AC-101', storyId: 'US-101', given: 'A user navigates to the login page', when: 'They enter valid credentials and submit', then: 'System prompts for 6-digit TOTP token', invest: 'Passed' },
-      { id: 'AC-102', storyId: 'US-101', given: 'An invalid TOTP token is entered', when: 'Verification button is clicked', then: 'An error message "Invalid authentication code" appears', invest: 'Passed' },
-      { id: 'AC-103', storyId: 'US-102', given: 'Test suite generation is complete', when: 'User clicks "Download Playwright Package"', then: 'A ZIP archive with .spec.ts files is downloaded', invest: 'Passed' }
-    ];
-  }, []);
+    const gen = savedArtifacts?.generation as any;
+    const raw = (state.acceptance_criteria || gen?.acceptance_criteria) as Array<Record<string, unknown>> | undefined;
+    if (raw && raw.length) return raw;
+    return [];
+  }, [state, savedArtifacts]);
 
   const testScenarios = useMemo(() => {
-    const raw = (state.test_scenarios || state.scenarios) as Array<Record<string, unknown>> | undefined;
+    const gen = savedArtifacts?.generation as any;
+    const raw = (state.test_scenarios || state.scenarios || gen?.scenarios) as Array<Record<string, unknown>> | undefined;
     if (raw && raw.length) return raw;
     return [
-      { id: 'TSC-01', name: 'Verify successful login with valid TOTP code', type: 'Positive', priority: 'High' },
-      { id: 'TSC-02', name: 'Verify rate-limiting after 3 failed MFA attempts', type: 'Security / Edge', priority: 'Critical' },
-      { id: 'TSC-03', name: 'Verify Playwright script execution under 500ms timeout', type: 'Performance', priority: 'Medium' }
+      { id: 'TS-01', name: 'Verify MFA TOTP submission with valid 6-digit code', type: 'Positive' },
+      { id: 'TS-02', name: 'Verify MFA TOTP submission with expired session token', type: 'Negative / Boundary' },
+      { id: 'TS-03', name: 'Verify RBAC access restriction for guest users', type: 'Security' },
+      { id: 'TS-04', name: 'Verify project creation with SRS document upload', type: 'Integration' }
     ];
-  }, [state]);
+  }, [state, savedArtifacts]);
 
   const testCases = useMemo(() => {
-    const raw = state.test_cases as Array<Record<string, unknown>> | undefined;
+    const gen = savedArtifacts?.generation as any;
+    const raw = (state.test_cases || state.testcases || gen?.test_cases) as Array<Record<string, unknown>> | undefined;
     if (raw && raw.length) return raw;
     return [
-      { id: 'TC-01', scenarioId: 'TSC-01', title: 'Login with valid credentials & valid TOTP', steps: ['Navigate to /login', 'Enter username and password', 'Click Login', 'Enter valid 6-digit TOTP', 'Click Verify'], expected: 'Redirect to /dashboard with session cookie set', status: 'Passed' },
-      { id: 'TC-02', scenarioId: 'TSC-02', title: 'Lock account after 3 invalid MFA submissions', steps: ['Navigate to /login', 'Enter valid credentials', 'Enter invalid code 3 times'], expected: 'Display "Account temporarily locked" banner', status: 'Passed' }
+      {
+        id: 'TC-01',
+        title: 'User Login with Valid Credentials & TOTP Verification',
+        steps: [
+          'Navigate to /login URL',
+          'Enter registered email address and password',
+          'Click Login button',
+          'Enter TOTP code on Security Verification screen',
+          'Assert redirection to /dashboard'
+        ],
+        expectedResult: 'User successfully logs in and dashboard renders'
+      },
+      {
+        id: 'TC-02',
+        title: 'Project Creation & Document Parsing Workflow',
+        steps: [
+          'Navigate to Dashboard',
+          'Click "+ New Project" button',
+          'Fill Project Name and upload SRS PDF file',
+          'Click Start AI Generation'
+        ],
+        expectedResult: 'Project created and initial test scenario extraction begins'
+      }
     ];
-  }, [state]);
+  }, [state, savedArtifacts]);
 
   const playwrightScripts = useMemo(() => {
     const raw = (state.playwright_scripts || state.generated_scripts || savedArtifacts?.generation?.scripts) as Array<Record<string, unknown>> | undefined;
@@ -195,16 +202,12 @@ test.describe('Project Creation', () => {
   };
 
   const tabsConfig: { id: ArtifactTab; label: string; icon: React.ElementType; count: number }[] = [
-    { id: 'documents', label: 'Uploaded Documents', icon: FileText, count: documents.length },
-    { id: 'epics', label: 'Epics', icon: Layers3, count: epics.length },
-    { id: 'features', label: 'Features', icon: Boxes, count: features.length },
-    { id: 'stories', label: 'User Stories', icon: BookOpenCheck, count: userStories.length },
-    { id: 'acceptance', label: 'Acceptance Criteria', icon: CheckSquare2, count: acceptanceCriteria.length },
+    { id: 'documents', label: 'Uploaded Specs', icon: FileText, count: documents.length },
     { id: 'scenarios', label: 'Test Scenarios', icon: ShieldCheck, count: testScenarios.length },
     { id: 'testcases', label: 'Test Cases', icon: FileCheck2, count: testCases.length },
     { id: 'scripts', label: 'Playwright Scripts', icon: Code2, count: playwrightScripts.length },
     { id: 'execution', label: 'Execution Reports', icon: PlayCircle, count: executionReports.length },
-    { id: 'traceability', label: 'Traceability Matrix', icon: GitBranch, count: userStories.length },
+    { id: 'traceability', label: 'Traceability Matrix', icon: GitBranch, count: testCases.length },
     { id: 'history', label: 'Version History', icon: Clock3, count: 4 },
     { id: 'validation', label: 'Validation Results', icon: Sparkles, count: 3 },
   ];
@@ -254,7 +257,7 @@ test.describe('Project Creation', () => {
               {workspace?.name || testProject?.name || projectId.replace(/-/g, ' ')}
             </h1>
             <p className="mt-2 max-w-2xl text-xs text-muted-foreground leading-relaxed md:text-sm">
-              {workspace?.description || 'All generated requirements, user stories, INVEST validations, and Playwright automation scripts collected in real time.'}
+              {workspace?.description || 'All generated test scenarios, functional test cases, step-by-step validations, and Playwright automation scripts collected in real time.'}
             </p>
           </div>
 
@@ -266,7 +269,7 @@ test.describe('Project Creation', () => {
             <div className="h-8 w-px bg-border/60" />
             <div className="text-right">
               <span className="block text-2xl font-extrabold text-primary">100%</span>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">INVEST Validated</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Test Coverage</span>
             </div>
           </div>
         </div>
@@ -278,11 +281,11 @@ test.describe('Project Creation', () => {
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-6">
           {[
             { step: 1, label: 'Doc Intake', tab: 'documents' },
-            { step: 2, label: 'Segmentation', tab: 'epics' },
-            { step: 3, label: 'Epics & Stories', tab: 'stories' },
-            { step: 4, label: 'Test Scenarios', tab: 'scenarios' },
-            { step: 5, label: 'Playwright Scripts', tab: 'scripts' },
-            { step: 6, label: 'Traceability & Reports', tab: 'traceability' },
+            { step: 2, label: 'Test Scenarios', tab: 'scenarios' },
+            { step: 3, label: 'Test Cases', tab: 'testcases' },
+            { step: 4, label: 'Playwright Scripts', tab: 'scripts' },
+            { step: 5, label: 'Execution Reports', tab: 'execution' },
+            { step: 6, label: 'Traceability Matrix', tab: 'traceability' },
           ].map((st) => {
             const isActive = activeTab === st.tab;
             return (
@@ -378,107 +381,7 @@ test.describe('Project Creation', () => {
             </div>
           )}
 
-          {/* TAB 2: EPICS */}
-          {activeTab === 'epics' && (
-            <div className="space-y-4">
-              <div className="pb-3 border-b border-border/60">
-                <h3 className="text-base font-bold">Generated Project Epics</h3>
-                <p className="text-xs text-muted-foreground">High-level epic boundaries extracted from intake documents</p>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-3">
-                {epics.map((epic, idx) => (
-                  <div key={idx} className="rounded-2xl border border-border/70 bg-background/60 p-5 shadow-sm space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] font-mono font-bold text-purple-400">{String(epic.id)}</span>
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">{String(epic.status)}</span>
-                    </div>
-                    <h4 className="text-sm font-bold">{String(epic.title)}</h4>
-                    <p className="text-xs text-muted-foreground leading-relaxed">{String(epic.description)}</p>
-                    <div className="pt-2 border-t border-border/40 text-[11px] text-muted-foreground font-medium">
-                      Contains {Number(epic.featureCount || 3)} features
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
-          {/* TAB 3: FEATURES */}
-          {activeTab === 'features' && (
-            <div className="space-y-4">
-              <div className="pb-3 border-b border-border/60">
-                <h3 className="text-base font-bold">Features & Components</h3>
-                <p className="text-xs text-muted-foreground">Component breakdown mapped to target epics</p>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                {features.map((feat, idx) => (
-                  <div key={idx} className="flex items-center justify-between rounded-2xl border border-border/70 bg-background/60 p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-orange-500/10 text-orange-500">
-                        <Boxes className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-bold">{String(feat.name)}</h4>
-                        <span className="text-[11px] text-muted-foreground font-mono">Epic {String(feat.epicId)}</span>
-                      </div>
-                    </div>
-                    <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-bold text-primary">
-                      {String(feat.priority)} Priority
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 4: USER STORIES */}
-          {activeTab === 'stories' && (
-            <div className="space-y-4">
-              <div className="pb-3 border-b border-border/60">
-                <h3 className="text-base font-bold">Agile User Stories</h3>
-                <p className="text-xs text-muted-foreground">Structured user stories formatted for backlog planning</p>
-              </div>
-              <div className="space-y-3">
-                {userStories.map((story, idx) => (
-                  <div key={idx} className="rounded-2xl border border-border/70 bg-background/60 p-4 space-y-2">
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center gap-2">
-                        <span className="rounded-lg bg-orange-500/10 px-2 py-0.5 text-xs font-mono font-bold text-orange-500">{String(story.id)}</span>
-                        <h4 className="text-sm font-bold">{String(story.title)}</h4>
-                      </div>
-                      <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-bold text-emerald-500">INVEST Validated</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed font-mono bg-muted/30 p-2.5 rounded-xl border border-border/40">
-                      <strong>As a</strong> {String(story.role)}, <strong>I want to</strong> {String(story.want)}, <strong>So that</strong> {String(story.soThat)}.
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 5: ACCEPTANCE CRITERIA */}
-          {activeTab === 'acceptance' && (
-            <div className="space-y-4">
-              <div className="pb-3 border-b border-border/60">
-                <h3 className="text-base font-bold">Acceptance Criteria (Given / When / Then)</h3>
-                <p className="text-xs text-muted-foreground">Functional validation criteria mapped per user story</p>
-              </div>
-              <div className="space-y-3">
-                {acceptanceCriteria.map((ac, idx) => (
-                  <div key={idx} className="rounded-2xl border border-border/70 bg-background/60 p-4 space-y-1.5 text-xs">
-                    <div className="flex justify-between items-center">
-                      <span className="font-mono font-bold text-primary">{ac.id} (Story {ac.storyId})</span>
-                      <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-500">Passed</span>
-                    </div>
-                    <p><strong className="text-emerald-500">GIVEN</strong> {ac.given}</p>
-                    <p><strong className="text-orange-500">WHEN</strong> {ac.when}</p>
-                    <p><strong className="text-purple-500">THEN</strong> {ac.then}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* TAB 6: TEST SCENARIOS */}
           {activeTab === 'scenarios' && (
