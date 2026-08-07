@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { AnimatePresence, motion, useMotionValue, useReducedMotion, useSpring } from 'framer-motion';
 import {
-  Bell,
   Code2,
   FileCheck2,
   FolderKanban,
@@ -35,7 +34,6 @@ export function FeatureShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [globalQuery, setGlobalQuery] = useState('');
 
@@ -155,46 +153,7 @@ export function FeatureShell({ children }: { children: ReactNode }) {
               <Plus className="h-3.5 w-3.5" /> New Project
             </button>
 
-            {/* Notification Bell Dropdown */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowNotifications(!showNotifications)}
-                className="relative grid h-9 w-9 place-items-center rounded-full border border-border/70 bg-card/80 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                aria-label="Notifications"
-              >
-                <Bell className="h-4 w-4" />
-                <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-orange-500 ring-2 ring-background" />
-              </button>
 
-              <AnimatePresence>
-                {showNotifications && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 8, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 8, scale: 0.95 }}
-                    className="absolute right-0 mt-2 w-80 rounded-2xl border border-border bg-card p-4 shadow-xl z-50"
-                  >
-                    <div className="flex items-center justify-between border-b border-border/60 pb-3">
-                      <span className="text-xs font-bold uppercase tracking-wider text-foreground">Notifications</span>
-                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">3 New</span>
-                    </div>
-                    <div className="mt-3 space-y-2.5 text-xs">
-                      <div className="rounded-xl bg-muted/40 p-2.5 border border-border/40">
-                        <p className="font-semibold text-foreground">Playwright Test Suite Ready</p>
-                        <p className="text-[11px] text-muted-foreground mt-0.5">Project Aegis Portal generated 14 automated scripts.</p>
-                        <span className="text-[10px] text-primary font-medium mt-1 block">2 mins ago</span>
-                      </div>
-                      <div className="rounded-xl bg-muted/40 p-2.5 border border-border/40">
-                        <p className="font-semibold text-foreground">User Stories Validated</p>
-                        <p className="text-[11px] text-muted-foreground mt-0.5">INVEST criteria passed for 32 requirements.</p>
-                        <span className="text-[10px] text-muted-foreground mt-1 block">1 hour ago</span>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
 
             <ThemeToggle />
 
