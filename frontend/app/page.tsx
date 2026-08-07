@@ -159,7 +159,7 @@ export default function LandingPage() {
         <div className="relative z-10 max-w-6xl mx-auto w-full flex flex-col items-start min-h-[calc(90vh-220px)]">
           <div className="flex flex-col items-start max-w-2xl">
             <span className="inline-flex items-center gap-2 rounded-full bg-purple-500/10 px-3.5 py-1.5 text-xs font-bold uppercase tracking-wider text-purple-500 border border-purple-500/20 mb-4">
-              <Sparkles className="h-3.5 w-3.5" /> Next-Gen Enterprise BA & QA Engine
+              <Sparkles className="h-3.5 w-3.5" /> Next-Gen AI Test Case & Script Engine
             </span>
             <motion.h1 
               className="text-foreground font-extrabold text-4xl sm:text-5xl lg:text-6xl leading-tight text-left tracking-tight"
@@ -175,7 +175,7 @@ export default function LandingPage() {
             </motion.h1>
             
             <p className="text-muted-foreground text-base leading-relaxed text-left mt-6">
-              Transform PRD documents into validated Agile user stories, acceptance criteria, INVEST quality metrics, and executable Playwright automation test scripts in seconds.
+              Transform software requirement specifications into comprehensive test scenarios, functional test cases, and executable Playwright automation test scripts in seconds.
             </p>
           </div>
           

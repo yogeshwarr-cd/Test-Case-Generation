@@ -50,7 +50,7 @@ function DashboardContent() {
 
   const { projects, workflowId, hydrate, setWorkflow, setResult, deleteProject } = useTestCaseWorkflowStore();
   const [query, setQuery] = useState(initialQuery);
-  const [activeTab, setActiveTab] = useState<'Dashboard' | 'Projects' | 'Documents' | 'Stories' | 'Epics' | 'Analytics' | 'AI Assistant'>('Dashboard');
+  const [activeTab, setActiveTab] = useState<'Dashboard' | 'Projects' | 'Test Suites' | 'Automation' | 'Analytics'>('Dashboard');
   const [statusFilter, setStatusFilter] = useState<'all' | 'in_progress' | 'completed' | 'blocked'>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -137,7 +137,7 @@ function DashboardContent() {
             Hello, Yogeshwar
           </h1>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            Welcome back to your workspace. Let’s forge high-quality test suites & user stories today.
+            Welcome back to your workspace. Let’s forge high-quality test suites & automation scripts today.
           </p>
         </div>
 
@@ -153,7 +153,7 @@ function DashboardContent() {
 
       {/* CATEGORY FILTER TABS */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {(['Dashboard', 'Projects', 'Documents', 'Stories', 'Epics', 'Analytics', 'AI Assistant'] as const).map((tab) => {
+        {(['Dashboard', 'Projects', 'Test Suites', 'Automation', 'Analytics'] as const).map((tab) => {
           const isActive = activeTab === tab;
           return (
             <button
