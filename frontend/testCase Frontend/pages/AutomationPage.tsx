@@ -2,10 +2,11 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { CheckCircle2, Download, LoaderCircle, Play, XCircle } from 'lucide-react';
+import Image from 'next/image';
+import { CheckCircle2, Download, LoaderCircle, Play, X, XCircle } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
-import { testCaseApi } from '../services/testCaseApi';
+import { automationArtifactPdfUrl, automationArtifactUrl, testCaseApi } from '../services/testCaseApi';
 import { loadTestProjectArtifacts, saveAutomationActivity, saveTestProjectArtifacts, useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionJob, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
 import { downloadFile, friendlyError } from '../utils';
@@ -470,12 +471,13 @@ export function AutomationPage() {
         </>
       )}
 
-      {report && <><ExecutionDashboard report={report} generation={generation} /><div className="flex flex-wrap justify-end gap-3">{report.mode === 'automated' && <button disabled={busy} onClick={compare} className="rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">Compare with Test Cases &amp; Scenarios</button>}<button onClick={() => setShowDeveloperReport((visible) => !visible)} className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-3 text-sm font-bold text-primary">{showDeveloperReport ? 'Hide Developer Report' : 'Developer Report'}</button><button onClick={() => setShowTestReport(true)} className="inline-flex items-center gap-2 rounded-lg border border-border px-5 py-3 text-sm font-bold"><Download className="h-4 w-4" /> Generate Test Report</button></div>{showDeveloperReport && <DeveloperReports report={report} />}{comparison && <TraceabilityComparisonSection comparison={comparison} />}{showTestReport && <DetailedTestReport report={report} />}</>}
+      {report && <><ExecutionDashboard report={report} generation={generation} /><div className="flex flex-wrap justify-end gap-3">{report.mode === 'automated' && <button disabled={busy} onClick={compare} className="rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">Compare with Test Cases &amp; Scenarios</button>}<button onClick={() => setShowDeveloperReport((visible) => !visible)} className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-3 text-sm font-bold text-primary">{showDeveloperReport ? 'Hide Developer Report' : 'Developer Report'}</button><button onClick={() => setShowTestReport((visible) => !visible)} className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-3 text-sm font-bold text-primary">{showTestReport ? 'Hide QA Report' : 'QA Report'}</button></div>{showDeveloperReport && <DeveloperReports report={report} />}{showTestReport && <DetailedTestReport report={report} />}{comparison && <TraceabilityComparisonSection comparison={comparison} />}</>}
     </div>
   );
 }
 
 function ExecutionDashboard({ report, generation }: { report: ExecutionReport; generation: ScriptGeneration | null }) {
+  const [preview, setPreview] = useState<{ path: string; name: string } | null>(null);
   return <section className="space-y-5">
     <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Execution dashboard</p><h2 className="mt-2 text-xl font-bold">Run results</h2></div>
     <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -483,13 +485,12 @@ function ExecutionDashboard({ report, generation }: { report: ExecutionReport; g
     </div>
     <div className="space-y-3">{report.results.map((result, index) => {
       const failure = result.failure;
-      const qaReport = report.qa_diagnostic_reports?.find((item) => item.script_id === result.script_id);
       const generatedScript = generation?.scripts.find((item) => item.script_id === result.script_id);
       const performedSteps = generatedScript?.executable_steps ?? [];
       const importantMessage = result.status === 'passed'
         ? `Completed successfully in ${result.duration_seconds}s.`
         : failure?.failure_reason || result.error_message || (result.status === 'skipped' ? 'Execution was skipped.' : 'Execution failed.');
-      const evidence = [failure?.screenshot, failure?.dom_snapshot, failure?.trace_path, failure?.intelligence?.evidence?.screenshot, failure?.intelligence?.evidence?.dom_snapshot, failure?.intelligence?.evidence?.playwright_trace, ...(qaReport?.screenshots ?? []), qaReport?.dom_snapshot, qaReport?.playwright_trace].filter((value): value is string => Boolean(value));
+      const evidence = [failure?.screenshot, failure?.dom_snapshot, failure?.trace_path, failure?.intelligence?.evidence?.screenshot, failure?.intelligence?.evidence?.dom_snapshot, failure?.intelligence?.evidence?.playwright_trace].filter((value): value is string => Boolean(value));
       return <details key={`${result.script_id}-${index}`} className="group overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm transition open:border-primary/25 open:shadow-md">
         <summary className="flex cursor-pointer list-none items-start justify-between gap-4 p-4 marker:hidden sm:p-5">
           <div className="flex min-w-0 gap-3">
@@ -507,7 +508,7 @@ function ExecutionDashboard({ report, generation }: { report: ExecutionReport; g
             <Detail label="Page URL" value={failure?.page_url} />
             <Detail label="Expected page URL" value={failure?.expected_page_url} />
             <Detail label="Page title" value={failure?.page_title} />
-            <Detail label="Locator / XPath" value={failure?.exact_locator || failure?.intelligence?.evidence?.failed_locator || qaReport?.locator} />
+            <Detail label="Locator / XPath" value={failure?.exact_locator || failure?.intelligence?.evidence?.failed_locator} />
             <Detail label="Expected result" value={failure?.expected_result || failure?.intelligence?.expected_behavior} />
             <Detail label="Actual result" value={failure?.actual_result || failure?.intelligence?.actual_behavior} />
             <Detail label="Failure reason" value={failure?.failure_reason} />
@@ -515,13 +516,18 @@ function ExecutionDashboard({ report, generation }: { report: ExecutionReport; g
             <Detail label="HTTP response" value={failure?.http_response_status != null ? String(failure.http_response_status) : undefined} />
           </div>
           <section><h4 className="text-sm font-semibold">Steps performed</h4>{failure?.failed_action && <p className="mt-2 rounded-lg border border-border bg-background p-3 text-sm"><span className="font-medium">Failed action:</span> {failure.failed_action}</p>}{performedSteps.length ? <ol className="mt-2 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">{performedSteps.map((step, stepIndex) => <li key={stepIndex} className="pl-1"><pre className="whitespace-pre-wrap break-words font-sans">{typeof step === 'string' ? step : JSON.stringify(step, null, 2)}</pre></li>)}</ol> : failure?.reproduction_steps?.length ? <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">{failure.reproduction_steps.map((step, stepIndex) => <li key={`${step}-${stepIndex}`}>{step}</li>)}</ol> : <p className="mt-2 text-sm text-muted-foreground">No step-level execution data was captured.</p>}</section>
-          {evidence.length > 0 && <section><h4 className="text-sm font-semibold">Screenshots and evidence</h4><div className="mt-2 flex flex-wrap gap-2">{Array.from(new Set(evidence)).map((path, evidenceIndex) => <a key={`${path}-${evidenceIndex}`} href={path} target="_blank" rel="noreferrer" className="max-w-full truncate rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-primary hover:bg-muted">{path.split(/[\\/]/).pop() || `Evidence ${evidenceIndex + 1}`}</a>)}</div></section>}
+          {evidence.length > 0 && <section><h4 className="text-sm font-semibold">Screenshots and evidence</h4><div className="mt-2 flex flex-wrap gap-2">{Array.from(new Set(evidence)).map((path, evidenceIndex) => { const name = path.split(/[\\/]/).pop() || `Evidence ${evidenceIndex + 1}`; const isImage = /\.(png|jpe?g|webp|gif)$/i.test(path); return isImage ? <button type="button" key={`${path}-${evidenceIndex}`} onClick={() => setPreview({ path, name })} className="max-w-full truncate rounded-lg border border-primary/30 bg-background px-3 py-2 text-xs font-medium text-primary hover:bg-primary/5">{name}</button> : <a key={`${path}-${evidenceIndex}`} href={automationArtifactUrl(path)} target="_blank" rel="noreferrer" className="max-w-full truncate rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-primary hover:bg-muted">{name}</a>; })}</div></section>}
           {failure && <section><h4 className="text-sm font-semibold">Additional execution information</h4><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-xs">{JSON.stringify({ failure_stage: failure.failure_stage, failure_category: failure.failure_category, locator_details: failure.locator_details, alternate_locators_attempted: failure.alternate_locators_attempted, locator_diagnosis: failure.locator_diagnosis, assertion_details: failure.assertion_details, navigation_details: failure.navigation_details, input_details: failure.input_details, application_state_details: failure.application_state_details, console_logs: failure.console_logs, network_errors: failure.network_errors, stack_trace: failure.stack_trace, traceability: result.traceability }, null, 2)}</pre></section>}
           {!failure && Object.keys(result.traceability ?? {}).length > 0 && <section><h4 className="text-sm font-semibold">Traceability details</h4><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-xs">{JSON.stringify(result.traceability, null, 2)}</pre></section>}
-          {qaReport && <section><h4 className="text-sm font-semibold">QA diagnostics</h4><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-xs">{JSON.stringify(qaReport, null, 2)}</pre></section>}
         </div>
       </details>;
     })}</div>
+    {preview && <div role="dialog" aria-modal="true" aria-label={`Screenshot preview: ${preview.name}`} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4" onClick={() => setPreview(null)}>
+      <div className="relative flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/20 bg-background shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3"><p className="min-w-0 truncate text-sm font-semibold">{preview.name}</p><div className="flex shrink-0 items-center gap-2"><a href={automationArtifactPdfUrl(preview.path)} download className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-semibold text-primary hover:bg-muted"><Download className="h-4 w-4" /><span className="hidden sm:inline">Download as PDF</span></a><button type="button" onClick={() => setPreview(null)} aria-label="Close screenshot preview" className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-muted hover:text-foreground"><X className="h-5 w-5" /></button></div></div>
+        <div className="overflow-auto bg-black/5 p-3"><Image src={automationArtifactUrl(preview.path)} loader={({ src }) => src} alt={preview.name} width={1600} height={1000} unoptimized className="mx-auto h-auto max-h-[80vh] w-auto max-w-full object-contain" /></div>
+      </div>
+    </div>}
   </section>;
 }
 

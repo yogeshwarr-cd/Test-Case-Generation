@@ -1,5 +1,6 @@
 from fastapi import APIRouter
-from fastapi.responses import FileResponse
+from fastapi import Query
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.schemas.automation_schema import (
     CompareExecutionRequest,
@@ -16,6 +17,21 @@ router = APIRouter(prefix="/automation", tags=["Test automation"])
 @router.get("/health", summary="Check Playwright, browser, and optional Seacrawl readiness")
 async def health():
     return await automation_service.health()
+
+
+@router.get("/artifacts", summary="View a Playwright execution evidence artifact")
+async def evidence_artifact(path: str = Query(min_length=1)):
+    return FileResponse(automation_service.evidence_artifact_path(path))
+
+
+@router.get("/artifacts/pdf", summary="Download a screenshot evidence artifact as PDF")
+async def evidence_artifact_pdf(path: str = Query(min_length=1)):
+    content, filename = automation_service.evidence_artifact_pdf(path)
+    return StreamingResponse(
+        content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/url-crawl", summary="Crawl a URL and generate Playwright test scripts for every discovered page")

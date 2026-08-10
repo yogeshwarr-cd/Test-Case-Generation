@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ast
 import hashlib
+import io
 import json
 import logging
 import re
@@ -2571,6 +2572,39 @@ class AutomationService:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(str(stored["source"]), encoding="utf-8")
         return path
+
+    def evidence_artifact_path(self, artifact_path: str) -> Path:
+        """Resolve a report artifact without allowing access outside the artifact root."""
+        root = self.artifact_root.resolve()
+        candidate = Path(artifact_path)
+        candidates = [candidate.resolve()] if candidate.is_absolute() else [
+            candidate.resolve(),
+            (root / candidate).resolve(),
+        ]
+        for resolved in candidates:
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                continue
+            if resolved.is_file():
+                return resolved
+        raise AutomationNotFound("Evidence artifact was not found.")
+
+    def evidence_artifact_pdf(self, artifact_path: str) -> tuple[io.BytesIO, str]:
+        """Convert a supported screenshot artifact to a downloadable PDF."""
+        from PIL import Image
+
+        path = self.evidence_artifact_path(artifact_path)
+        if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            raise AutomationError("Only screenshot image artifacts can be converted to PDF.")
+        with Image.open(path) as source:
+            frame = source.convert("RGBA")
+            background = Image.new("RGB", frame.size, "white")
+            background.paste(frame, mask=frame.getchannel("A"))
+            output = io.BytesIO()
+            background.save(output, format="PDF", resolution=144.0)
+        output.seek(0)
+        return output, f"{path.stem}.pdf"
 
     async def generation(self, generation_id: str) -> dict[str, Any]:
         if generation_id in self._generations:

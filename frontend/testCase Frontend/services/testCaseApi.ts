@@ -20,6 +20,12 @@ import { parseWorkflowEvent } from '../utils';
 
 const BASE_URL = (process.env.NEXT_PUBLIC_TESTCASE_API_BASE_URL ?? 'http://127.0.0.1:8001').replace(/\/$/, '');
 
+export const automationArtifactUrl = (path: string) =>
+  `${BASE_URL}/api/v1/automation/artifacts?path=${encodeURIComponent(path)}`;
+
+export const automationArtifactPdfUrl = (path: string) =>
+  `${BASE_URL}/api/v1/automation/artifacts/pdf?path=${encodeURIComponent(path)}`;
+
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 30000): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);

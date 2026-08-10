@@ -315,6 +315,23 @@ def test_dom_coverage_gate_rejects_generic_verification_steps():
     assert _test_case_supported(test_case, elements) is False
 
 
+def test_evidence_screenshot_can_be_downloaded_as_pdf(tmp_path, monkeypatch):
+    from PIL import Image
+
+    monkeypatch.setattr(
+        "app.services.automation_service.settings.automation_artifacts_path",
+        str(tmp_path),
+    )
+    service = AutomationService()
+    screenshot = tmp_path / "failure.png"
+    Image.new("RGBA", (20, 10), (255, 0, 0, 128)).save(screenshot)
+
+    content, filename = service.evidence_artifact_pdf(str(screenshot))
+
+    assert filename == "failure.pdf"
+    assert content.read(4) == b"%PDF"
+
+
 def test_generated_source_is_playwright_page_object_and_contains_traceable_id():
     source = _python_source(
         {
