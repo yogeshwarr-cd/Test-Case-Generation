@@ -10,10 +10,11 @@ interface WorkflowStore {
   snapshot: WorkflowEvent | null;
   result: WorkflowResult | null;
   projects: TestProjectRecord[];
-  setWorkflow: (workflowId: string, projectId?: string | null) => void;
+  setWorkflow: (workflowId: string, projectId?: string | null, projectName?: string) => void;
   setSnapshot: (snapshot: WorkflowEvent) => void;
   setResult: (result: WorkflowResult | null) => void;
   deleteProject: (workflowId: string) => void;
+  renameProject: (workflowId: string, newName: string) => void;
   hydrate: () => void;
   clear: () => void;
 }
@@ -67,12 +68,17 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
   snapshot: null,
   result: null,
   projects: [],
-  setWorkflow: (workflowId, projectId = null) => {
+  setWorkflow: (workflowId, projectId = null, projectName?: string) => {
     sessionStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify({ workflowId, projectId }));
     const projects = readProjects();
-    if (!projects.some((item) => item.workflowId === workflowId)) {
+    const existingIndex = projects.findIndex((item) => item.workflowId === workflowId);
+    if (existingIndex < 0) {
       const now = new Date().toISOString();
-      projects.unshift({ workflowId, projectId, name: `Test project ${String(projectId || workflowId).slice(0, 8)}`, status: 'processing', createdAt: now, updatedAt: now, scenarioCount: 0, testCaseCount: 0, scriptCount: 0 });
+      const name = projectName && projectName.trim() ? projectName.trim() : `Test project ${String(projectId || workflowId).slice(0, 8)}`;
+      projects.unshift({ workflowId, projectId, name, status: 'processing', createdAt: now, updatedAt: now, scenarioCount: 0, testCaseCount: 0, scriptCount: 0 });
+      saveProjects(projects);
+    } else if (projectName && projectName.trim()) {
+      projects[existingIndex].name = projectName.trim();
       saveProjects(projects);
     }
     set({ workflowId, projectId, projects });
@@ -89,6 +95,15 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
       saveProjects(projects);
     }
     set({ result, projects });
+  },
+  renameProject: (workflowId, newName) => {
+    const projects = readProjects();
+    const index = projects.findIndex((item) => item.workflowId === workflowId);
+    if (index >= 0) {
+      projects[index] = { ...projects[index], name: newName, updatedAt: new Date().toISOString() };
+      saveProjects(projects);
+    }
+    set({ projects });
   },
   deleteProject: (workflowId) => {
     const projects = readProjects().filter((item) => item.workflowId !== workflowId);
