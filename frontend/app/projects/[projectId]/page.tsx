@@ -5,13 +5,8 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  AlertTriangle,
   ArrowLeft,
-  ArrowRight,
-  BookOpenCheck,
-  Boxes,
   CheckCircle2,
-  CheckSquare2,
   Clock3,
   Code2,
   Copy,
@@ -19,7 +14,6 @@ import {
   FileCheck2,
   FileText,
   GitBranch,
-  Layers3,
   PlayCircle,
   Plus,
   ShieldCheck,
@@ -28,7 +22,9 @@ import {
 } from 'lucide-react';
 import { api } from '@/services/api';
 import { useWorkspaceStore } from '@/store/workspaceStore';
-import { useTestCaseWorkflowStore, loadTestProjectArtifacts } from '@/testCase Frontend/store/workflowStore';
+import { testCaseApi } from '@/testCase Frontend/services/testCaseApi';
+import { useTestCaseWorkflowStore, loadTestProjectArtifacts, saveTestProjectArtifacts, type SavedTestProjectArtifacts } from '@/testCase Frontend/store/workflowStore';
+import type { WorkflowResult } from '@/testCase Frontend/types';
 
 type ArtifactTab =
   | 'documents'
@@ -43,157 +39,100 @@ type ArtifactTab =
 export default function DedicatedProjectWorkspacePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const workspace = useWorkspaceStore((store) => store.workspaces.find((item) => item.id === projectId));
-  const { projects } = useTestCaseWorkflowStore();
+  const { projects, hydrate } = useTestCaseWorkflowStore();
   const testProject = projects.find((p) => p.projectId === projectId || p.workflowId === projectId);
 
   const [state, setState] = useState<Record<string, unknown>>({});
-  const [loading, setLoading] = useState(true);
+  const [workflowResult, setWorkflowResult] = useState<WorkflowResult | null>(null);
+  const [savedArtifacts, setSavedArtifacts] = useState<SavedTestProjectArtifacts | null>(null);
+  const [executionStatus, setExecutionStatus] = useState('not_run');
   const [activeTab, setActiveTab] = useState<ArtifactTab>('scenarios');
   const [copiedScriptIndex, setCopiedScriptIndex] = useState<number | null>(null);
-  const [filterQuery, setFilterQuery] = useState('');
+
+  useEffect(() => hydrate(), [hydrate]);
 
   useEffect(() => {
     if (!projectId) return;
     api.getWorkflowState(projectId)
       .then((res) => setState(res.state || {}))
-      .catch(() => undefined)
-      .finally(() => setLoading(false));
+      .catch(() => setState({}));
   }, [projectId]);
 
-  // Load saved artifacts from workflow store as fallback
-  const savedArtifacts = useMemo(() => {
-    if (!testProject?.workflowId) return null;
-    return loadTestProjectArtifacts(testProject.workflowId);
-  }, [testProject]);
+  useEffect(() => {
+    const workflowId = testProject?.workflowId;
+    if (!workflowId) {
+      queueMicrotask(() => {
+        setWorkflowResult(null);
+        setSavedArtifacts(null);
+        setExecutionStatus('not_run');
+      });
+      return;
+    }
+    let disposed = false;
+    const refresh = async () => {
+      let artifacts = loadTestProjectArtifacts(workflowId);
+      let currentExecutionStatus = artifacts?.report?.execution_status || 'not_run';
+      if (artifacts?.crawlJobId) {
+        try {
+          const crawlJob = await testCaseApi.getWorkflowCrawlJob(artifacts.crawlJobId);
+          artifacts = { ...artifacts, crawl: crawlJob.crawl ?? artifacts.crawl, generation: crawlJob.generation ?? artifacts.generation };
+        } catch {}
+      }
+      if (artifacts?.executionJobId) {
+        try {
+          const executionJob = await testCaseApi.getExecutionJob(artifacts.executionJobId);
+          currentExecutionStatus = executionJob.status;
+          artifacts = { ...artifacts, report: executionJob.report ?? artifacts.report };
+        } catch {}
+      }
+      if (artifacts) saveTestProjectArtifacts(workflowId, artifacts.generation, artifacts.report, artifacts.comparison, artifacts.crawl);
+      if (!disposed) {
+        setSavedArtifacts(artifacts);
+        setExecutionStatus(currentExecutionStatus);
+      }
+      try {
+        const result = await testCaseApi.getWorkflowResult(workflowId);
+        if (!disposed && result.project_id === (testProject.projectId || projectId)) setWorkflowResult(result);
+      } catch {
+        if (!disposed) setWorkflowResult(null);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [projectId, testProject?.projectId, testProject?.workflowId]);
 
-  // Extract lists from backend state or mock fallbacks for complete demo showcase
+  // Every collection below is scoped to the selected project. There are no demo fallbacks.
   const documents = useMemo(() => {
     const raw = (state.documents || state.uploaded_documents || state.source_documents) as Array<Record<string, unknown>> | undefined;
-    if (raw && raw.length) return raw;
-    return [
-      { id: 'doc-01', name: 'Software Requirements Specification (SRS).pdf', size: '2.4 MB', status: 'processed', uploadedAt: '2 hours ago', type: 'PDF' },
-      { id: 'doc-02', name: 'User Authentication & RBAC Spec.docx', size: '1.1 MB', status: 'processed', uploadedAt: '3 hours ago', type: 'DOCX' }
-    ];
+    return raw ?? [];
   }, [state]);
-
-  const epics = useMemo(() => {
-    const raw = state.epics as Array<Record<string, unknown>> | undefined;
-    if (raw && raw.length) return raw;
-    return [];
-  }, [state]);
-
-  const features = useMemo(() => {
-    const raw = state.features as Array<Record<string, unknown>> | undefined;
-    if (raw && raw.length) return raw;
-    return [];
-  }, [state]);
-
-  const userStories = useMemo(() => {
-    const gen = savedArtifacts?.generation as any;
-    const raw = (state.user_stories || state.stories || gen?.user_stories) as Array<Record<string, unknown>> | undefined;
-    if (raw && raw.length) return raw;
-    return [];
-  }, [state, savedArtifacts]);
-
-  const acceptanceCriteria = useMemo(() => {
-    const gen = savedArtifacts?.generation as any;
-    const raw = (state.acceptance_criteria || gen?.acceptance_criteria) as Array<Record<string, unknown>> | undefined;
-    if (raw && raw.length) return raw;
-    return [];
-  }, [state, savedArtifacts]);
 
   const testScenarios = useMemo(() => {
-    const gen = savedArtifacts?.generation as any;
-    const raw = (state.test_scenarios || state.scenarios || gen?.scenarios) as Array<Record<string, unknown>> | undefined;
-    if (raw && raw.length) return raw;
-    return [
-      { id: 'TS-01', name: 'Verify MFA TOTP submission with valid 6-digit code', type: 'Positive' },
-      { id: 'TS-02', name: 'Verify MFA TOTP submission with expired session token', type: 'Negative / Boundary' },
-      { id: 'TS-03', name: 'Verify RBAC access restriction for guest users', type: 'Security' },
-      { id: 'TS-04', name: 'Verify project creation with SRS document upload', type: 'Integration' }
-    ];
-  }, [state, savedArtifacts]);
+    if (workflowResult?.scenarios?.length) return workflowResult.scenarios as unknown as Array<Record<string, unknown>>;
+    return ((state.test_scenarios || state.scenarios) as Array<Record<string, unknown>> | undefined) ?? [];
+  }, [state, workflowResult]);
 
   const testCases = useMemo(() => {
-    const gen = savedArtifacts?.generation as any;
-    const raw = (state.test_cases || state.testcases || gen?.test_cases) as Array<Record<string, unknown>> | undefined;
-    if (raw && raw.length) return raw;
-    return [
-      {
-        id: 'TC-01',
-        title: 'User Login with Valid Credentials & TOTP Verification',
-        steps: [
-          'Navigate to /login URL',
-          'Enter registered email address and password',
-          'Click Login button',
-          'Enter TOTP code on Security Verification screen',
-          'Assert redirection to /dashboard'
-        ],
-        expectedResult: 'User successfully logs in and dashboard renders'
-      },
-      {
-        id: 'TC-02',
-        title: 'Project Creation & Document Parsing Workflow',
-        steps: [
-          'Navigate to Dashboard',
-          'Click "+ New Project" button',
-          'Fill Project Name and upload SRS PDF file',
-          'Click Start AI Generation'
-        ],
-        expectedResult: 'Project created and initial test scenario extraction begins'
-      }
-    ];
-  }, [state, savedArtifacts]);
+    if (workflowResult?.test_cases?.length) return workflowResult.test_cases as unknown as Array<Record<string, unknown>>;
+    return ((state.test_cases || state.testcases) as Array<Record<string, unknown>> | undefined) ?? [];
+  }, [state, workflowResult]);
 
   const playwrightScripts = useMemo(() => {
-    const raw = (state.playwright_scripts || state.generated_scripts || savedArtifacts?.generation?.scripts) as Array<Record<string, unknown>> | undefined;
-    if (raw && raw.length) return raw;
-    return [
-      {
-        fileName: 'auth_mfa.spec.ts',
-        description: 'Automated test suite for Multi-Factor Authentication flow',
-        code: `import { test, expect } from '@playwright/test';
-
-test.describe('MFA Authentication Flow', () => {
-  test('should successfully complete TOTP verification', async ({ page }) => {
-    await page.goto('/login');
-    await page.fill('#email', 'admin@aegisportal.com');
-    await page.fill('#password', 'SecurePass123!');
-    await page.click('button[type="submit"]');
-
-    await expect(page.locator('h2')).toContainText('Security Verification');
-    await page.fill('input[name="totp"]', '123456');
-    await page.click('button:has-text("Verify")');
-
-    await expect(page).toHaveURL('/dashboard');
-  });
-});`
-      },
-      {
-        fileName: 'project_creation.spec.ts',
-        description: 'Automated test suite for project creation and document upload',
-        code: `import { test, expect } from '@playwright/test';
-
-test.describe('Project Creation', () => {
-  test('should create new project with uploaded SRS document', async ({ page }) => {
-    await page.goto('/dashboard');
-    await page.click('button:has-text("New Project")');
-    await page.fill('input[placeholder*="Project Name"]', 'Aegis Enterprise Portal');
-    await page.click('button:has-text("Start AI Generation")');
-
-    await expect(page.locator('.toast')).toContainText('Project created');
-  });
-});`
-      }
-    ];
-  }, [state, savedArtifacts]);
+    return (savedArtifacts?.generation?.scripts as unknown as Array<Record<string, unknown>> | undefined) ?? [];
+  }, [savedArtifacts]);
 
   const executionReports = useMemo(() => {
     if (savedArtifacts?.report) return [savedArtifacts.report];
-    return [
-      { execution_id: 'exec_latest_01', total_scripts: 14, passed_scripts: 13, failed_scripts: 1, duration_ms: 14200, success_percentage: 92.8, timestamp: new Date().toISOString() }
-    ];
+    return [];
   }, [savedArtifacts]);
+
+  const latestReport = executionReports[0];
+  const projectStatus = workflowResult?.status || testProject?.status || workspace?.status || 'not_started';
+  const historyItems = useMemo(() => (
+    ((state.audit_log || state.execution_history) as Array<Record<string, unknown>> | undefined) ?? []
+  ), [state]);
+  const validations = [workflowResult?.scenario_validation, workflowResult?.testcase_validation].filter(Boolean);
 
   const handleCopyCode = (code: string, index: number) => {
     navigator.clipboard.writeText(code);
@@ -208,8 +147,8 @@ test.describe('Project Creation', () => {
     { id: 'scripts', label: 'Playwright Scripts', icon: Code2, count: playwrightScripts.length },
     { id: 'execution', label: 'Execution Reports', icon: PlayCircle, count: executionReports.length },
     { id: 'traceability', label: 'Traceability Matrix', icon: GitBranch, count: testCases.length },
-    { id: 'history', label: 'Version History', icon: Clock3, count: 4 },
-    { id: 'validation', label: 'Validation Results', icon: Sparkles, count: 3 },
+    { id: 'history', label: 'Version History', icon: Clock3, count: historyItems.length },
+    { id: 'validation', label: 'Validation Results', icon: Sparkles, count: validations.length },
   ];
 
   return (
@@ -247,7 +186,7 @@ test.describe('Project Creation', () => {
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Active Workspace
+                {projectStatus.replaceAll('_', ' ')}
               </span>
               <span className="rounded-full bg-purple-500/10 px-2.5 py-0.5 text-[11px] font-mono text-purple-400">
                 ID: {projectId}
@@ -257,7 +196,7 @@ test.describe('Project Creation', () => {
               {workspace?.name || testProject?.name || projectId.replace(/-/g, ' ')}
             </h1>
             <p className="mt-2 max-w-2xl text-xs text-muted-foreground leading-relaxed md:text-sm">
-              {workspace?.description || 'All generated test scenarios, functional test cases, step-by-step validations, and Playwright automation scripts collected in real time.'}
+              {workspace?.description || 'No project description provided.'}
             </p>
           </div>
 
@@ -268,12 +207,22 @@ test.describe('Project Creation', () => {
             </div>
             <div className="h-8 w-px bg-border/60" />
             <div className="text-right">
-              <span className="block text-2xl font-extrabold text-primary">100%</span>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Test Coverage</span>
+              <span className="block text-lg font-extrabold capitalize text-primary">{executionStatus.replaceAll('_', ' ')}</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Execution Status</span>
             </div>
           </div>
         </div>
       </div>
+
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+        <WorkspaceMetric label="Test Scenarios" value={testScenarios.length} />
+        <WorkspaceMetric label="Test Cases" value={testCases.length} />
+        <WorkspaceMetric label="Generated Scripts" value={playwrightScripts.length} />
+        <WorkspaceMetric label="Total Executed" value={latestReport?.total_scripts ?? 0} />
+        <WorkspaceMetric label="Passed" value={latestReport?.passed_scripts ?? 0} tone="green" />
+        <WorkspaceMetric label="Failed" value={latestReport?.failed_scripts ?? 0} tone="red" />
+        <WorkspaceMetric label="Skipped" value={latestReport?.skipped_scripts ?? 0} tone="amber" />
+      </section>
 
       {/* INTERACTIVE WORKFLOW PROGRESS PIPELINE VISUALIZATION (STEPPER) */}
       <section className="rounded-2xl border border-border/80 bg-card/60 p-4 shadow-sm backdrop-blur-sm">
@@ -365,13 +314,13 @@ test.describe('Project Creation', () => {
                   <div key={idx} className="flex items-start justify-between rounded-2xl border border-border/70 bg-background/60 p-4 shadow-sm hover:border-primary/40 transition">
                     <div className="flex items-start gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/10 text-sky-500 font-bold text-xs">
-                        {String(doc.type || 'DOC')}
+                        {String(doc.type || '—')}
                       </div>
                       <div>
                         <h4 className="text-sm font-bold text-foreground">{String(doc.name)}</h4>
-                        <p className="text-xs text-muted-foreground mt-0.5">{String(doc.size || '1.2 MB')} · Uploaded {String(doc.uploadedAt || 'Recently')}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{String(doc.size || 'Size unavailable')} · {String(doc.uploadedAt || doc.created_at || 'Upload time unavailable')}</p>
                         <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-600">
-                          <CheckCircle2 className="h-3 w-3" /> Extracted & Validated
+                          <CheckCircle2 className="h-3 w-3" /> {String(doc.status || 'Status unavailable')}
                         </span>
                       </div>
                     </div>
@@ -393,9 +342,9 @@ test.describe('Project Creation', () => {
               <div className="grid gap-3 sm:grid-cols-2">
                 {testScenarios.map((sc, idx) => (
                   <div key={idx} className="rounded-2xl border border-border/70 bg-background/60 p-4 space-y-2">
-                    <span className="font-mono text-xs font-bold text-purple-400">{String(sc.id)}</span>
-                    <h4 className="text-xs font-bold text-foreground">{String(sc.name)}</h4>
-                    <span className="inline-block rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">{String(sc.type)}</span>
+                    <span className="font-mono text-xs font-bold text-purple-400">{String(sc.scenario_id || sc.id || '')}</span>
+                    <h4 className="text-xs font-bold text-foreground">{String(sc.title || sc.name || '')}</h4>
+                    <span className="inline-block rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">{String(sc.scenario_type || sc.type || '')}</span>
                   </div>
                 ))}
               </div>
@@ -413,20 +362,20 @@ test.describe('Project Creation', () => {
                 {testCases.map((tc, idx) => (
                   <div key={idx} className="rounded-2xl border border-border/70 bg-background/60 p-5 space-y-3">
                     <div className="flex justify-between items-center">
-                      <span className="font-mono text-xs font-bold text-orange-500">{String(tc.id)}</span>
-                      <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-bold text-emerald-500">Ready</span>
+                      <span className="font-mono text-xs font-bold text-orange-500">{String(tc.test_case_id || tc.id || '')}</span>
+                      <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-bold text-emerald-500">{String(tc.validation_status || 'Generated')}</span>
                     </div>
                     <h4 className="text-sm font-bold">{String(tc.title)}</h4>
                     <div className="space-y-1 text-xs text-muted-foreground">
                       <p className="font-semibold text-foreground">Execution Steps:</p>
                       <ol className="list-decimal list-inside space-y-1 pl-1">
-                        {Array.isArray(tc.steps) && tc.steps.map((st: string, sIdx: number) => (
-                          <li key={sIdx}>{st}</li>
+                        {Array.isArray(tc.steps) && tc.steps.map((st: unknown, sIdx: number) => (
+                          <li key={sIdx}>{typeof st === 'string' ? st : String((st as Record<string, unknown>).action || '')}{typeof st === 'object' && st && (st as Record<string, unknown>).expected_result ? ` — Expected: ${String((st as Record<string, unknown>).expected_result)}` : ''}</li>
                         ))}
                       </ol>
                     </div>
                     <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400 pt-2 border-t border-border/40">
-                      <strong>Expected Result:</strong> {String(tc.expected)}
+                      <strong>Description:</strong> {String(tc.description || '')}
                     </p>
                   </div>
                 ))}
@@ -452,17 +401,17 @@ test.describe('Project Creation', () => {
                   <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
                     <div className="flex items-center gap-2">
                       <Code2 className="h-4 w-4 text-purple-400" />
-                      <span className="font-mono text-xs font-bold text-purple-300">{String(scr.fileName)}</span>
+                      <span className="font-mono text-xs font-bold text-purple-300">{String(scr.name || scr.script_id || '')}</span>
                     </div>
                     <button
-                      onClick={() => handleCopyCode(String(scr.code), idx)}
+                      onClick={() => handleCopyCode(String(scr.source || ''), idx)}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-3 py-1.5 text-[11px] font-bold text-slate-300 hover:text-white hover:bg-slate-700 transition"
                     >
                       <Copy className="h-3.5 w-3.5" /> {copiedScriptIndex === idx ? 'Copied!' : 'Copy Code'}
                     </button>
                   </div>
                   <pre className="p-4 text-xs font-mono overflow-x-auto leading-relaxed text-slate-300">
-                    {String(scr.code)}
+                    {String(scr.source || '')}
                   </pre>
                 </div>
               ))}
@@ -476,17 +425,25 @@ test.describe('Project Creation', () => {
                 <h3 className="text-base font-bold">Execution Reports & Evidence</h3>
                 <p className="text-xs text-muted-foreground">Pass/fail statistics and duration logs</p>
               </div>
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                <div className="rounded-2xl border border-border bg-muted/20 p-4 text-center">
+                  <span className="block text-3xl font-extrabold">{latestReport?.total_scripts ?? 0}</span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Total Scripts</span>
+                </div>
                 <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-center">
-                  <span className="block text-3xl font-extrabold text-emerald-500">13</span>
+                  <span className="block text-3xl font-extrabold text-emerald-500">{latestReport?.passed_scripts ?? 0}</span>
                   <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Passed Scripts</span>
                 </div>
                 <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 p-4 text-center">
-                  <span className="block text-3xl font-extrabold text-rose-500">1</span>
+                  <span className="block text-3xl font-extrabold text-rose-500">{latestReport?.failed_scripts ?? 0}</span>
                   <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Failed Scripts</span>
                 </div>
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-center">
+                  <span className="block text-3xl font-extrabold text-amber-500">{latestReport?.skipped_scripts ?? 0}</span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Skipped Scripts</span>
+                </div>
                 <div className="rounded-2xl border border-purple-500/20 bg-purple-500/5 p-4 text-center">
-                  <span className="block text-3xl font-extrabold text-purple-500">92.8%</span>
+                  <span className="block text-3xl font-extrabold text-purple-500">{latestReport ? `${latestReport.success_percentage}%` : '—'}</span>
                   <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Success Rate</span>
                 </div>
               </div>
@@ -512,15 +469,17 @@ test.describe('Project Creation', () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/40 font-mono">
-                    {userStories.map((us, idx) => (
-                      <tr key={idx} className="hover:bg-muted/30">
-                        <td className="py-3 px-3 text-primary font-bold">REQ-00{idx + 1}</td>
-                        <td className="py-3 px-3 font-sans font-medium">{String(us.title)}</td>
-                        <td className="py-3 px-3 text-purple-400">TC-0{idx + 1}</td>
-                        <td className="py-3 px-3 text-emerald-400">auth_mfa.spec.ts</td>
-                        <td className="py-3 px-3 text-right font-bold text-emerald-500">100% Covered</td>
+                    {testCases.map((testCase, idx) => {
+                      const testCaseId = String(testCase.test_case_id || testCase.id || '');
+                      const script = playwrightScripts.find((item) => String(item.test_case_id || '') === testCaseId);
+                      return <tr key={`${testCaseId}-${idx}`} className="hover:bg-muted/30">
+                        <td className="py-3 px-3 text-primary font-bold">{Array.isArray(testCase.requirement_ids) ? testCase.requirement_ids.join(', ') : '—'}</td>
+                        <td className="py-3 px-3 font-sans font-medium">{Array.isArray(testCase.user_story_ids) ? testCase.user_story_ids.join(', ') : '—'}</td>
+                        <td className="py-3 px-3 text-purple-400">{testCaseId}</td>
+                        <td className="py-3 px-3 text-emerald-400">{String(script?.name || script?.script_id || 'Not generated')}</td>
+                        <td className="py-3 px-3 text-right font-bold text-emerald-500">{script ? 'Covered' : 'Not covered'}</td>
                       </tr>
-                    ))}
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -535,20 +494,17 @@ test.describe('Project Creation', () => {
                 <p className="text-xs text-muted-foreground">Snapshot revisions of generated test suites</p>
               </div>
               <div className="space-y-3 text-xs">
-                {[
-                  { version: 'v1.2.0', title: 'Added Playwright execution reports & test script bundle', time: '10 mins ago', author: 'AI Generator Agent' },
-                  { version: 'v1.1.0', title: 'Extracted 42 user stories & INVEST acceptance criteria', time: '1 hour ago', author: 'Sarah Jenkins' },
-                  { version: 'v1.0.0', title: 'Initial SRS intake document processing complete', time: '3 hours ago', author: 'System Intake' }
-                ].map((v, idx) => (
+                {historyItems.map((event, idx) => (
                   <div key={idx} className="flex justify-between items-center rounded-2xl border border-border/60 p-4">
                     <div>
-                      <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-mono font-bold text-primary">{v.version}</span>
-                      <h4 className="text-xs font-bold text-foreground mt-1">{v.title}</h4>
-                      <p className="text-[11px] text-muted-foreground mt-0.5">By {v.author}</p>
+                      <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-mono font-bold text-primary">{String(event.id || event.node_name || idx + 1)}</span>
+                      <h4 className="text-xs font-bold text-foreground mt-1">{String(event.message || event.summary || event.status || '')}</h4>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">{String(event.actor || event.node_name || 'System')}</p>
                     </div>
-                    <span className="text-[11px] text-muted-foreground font-mono">{v.time}</span>
+                    <span className="text-[11px] text-muted-foreground font-mono">{String(event.timestamp || event.completed_at || event.started_at || '')}</span>
                   </div>
                 ))}
+                {!historyItems.length && <p className="rounded-xl border border-dashed border-border p-4 text-muted-foreground">No project history is available.</p>}
               </div>
             </div>
           )}
@@ -560,19 +516,14 @@ test.describe('Project Creation', () => {
                 <h3 className="text-base font-bold">AI Validation & INVEST Quality Score</h3>
                 <p className="text-xs text-muted-foreground">Automated quality check report for user stories and scenarios</p>
               </div>
-              <div className="grid gap-4 sm:grid-cols-3">
-                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-center">
-                  <span className="block text-3xl font-extrabold text-emerald-500">100%</span>
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">INVEST Criteria</span>
-                </div>
-                <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-center">
-                  <span className="block text-3xl font-extrabold text-sky-500">98.4%</span>
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Completeness</span>
-                </div>
-                <div className="rounded-2xl border border-purple-500/20 bg-purple-500/5 p-4 text-center">
-                  <span className="block text-3xl font-extrabold text-purple-500">0</span>
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Ambiquity Warnings</span>
-                </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {validations.map((validation, index) => <div key={index} className="rounded-2xl border border-border bg-muted/20 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{index === 0 ? 'Scenario validation' : 'Test-case validation'}</p>
+                  <p className="mt-2 text-3xl font-extrabold text-primary">{Math.round((validation?.confidence_score ?? 0) * 100)}%</p>
+                  <p className="mt-1 text-sm capitalize">Status: {validation?.status || 'Not available'}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Issues: {validation?.issues?.length ?? 0}</p>
+                </div>)}
+                {!validations.length && <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">No validation results are available.</p>}
               </div>
             </div>
           )}
@@ -580,4 +531,9 @@ test.describe('Project Creation', () => {
       </AnimatePresence>
     </div>
   );
+}
+
+function WorkspaceMetric({ label, value, tone = 'default' }: { label: string; value: number | string; tone?: 'default' | 'green' | 'red' | 'amber' }) {
+  const color = tone === 'green' ? 'text-emerald-500' : tone === 'red' ? 'text-rose-500' : tone === 'amber' ? 'text-amber-500' : 'text-foreground';
+  return <div className="rounded-2xl border border-border/80 bg-card p-4 shadow-sm"><p className={`text-2xl font-extrabold ${color}`}>{value}</p><p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p></div>;
 }

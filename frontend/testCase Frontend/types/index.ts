@@ -148,6 +148,7 @@ export interface WorkflowEvent {
 
 export interface WorkflowResult {
   workflow_id: string;
+  project_id?: string;
   status: WorkflowStatus;
   current_stage?: string;
   structured_context?: StructuredContext | null;
