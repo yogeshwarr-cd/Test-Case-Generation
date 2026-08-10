@@ -50,7 +50,9 @@ class Settings(BaseSettings):
     groq_regeneration_model: str = ""
     groq_max_concurrent_requests: int = 1
     groq_max_output_tokens: int = 6000
-    groq_min_request_interval_seconds: float = 55.0
+    # The 120B on-demand tier is limited to 8K TPM. Thirty seconds avoids
+    # retry storms while remaining substantially faster than the old 55s gap.
+    groq_min_request_interval_seconds: float = 30.0
     groq_quota_cooldown_seconds: float = 65.0
     cerebras_api_key: str = ""
     cerebras_fallback_api_key: str = ""
@@ -68,19 +70,20 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = 45.0
     llm_temperature: float = 0.2
     llm_max_output_tokens: int = 6000
-    llm_generation_max_output_tokens: int = 1500
+    llm_generation_max_output_tokens: int = 2500
     llm_validation_max_output_tokens: int = 2000
     llm_regeneration_max_output_tokens: int = 3000
     llm_structured_output_repair_enabled: bool = False
     llm_scenario_batch_size: int = 5
     llm_testcase_batch_size: int = 4
     validation_pass_threshold: float = 0.95
-    max_validation_attempts: int = 1
+    # One initial generation plus up to two confidence-improving regenerations.
+    max_validation_attempts: int = 3
     cerebras_max_concurrent_requests: int = 1
     cerebras_provider_retry_count: int = 0
     cerebras_initial_backoff_seconds: float = 2.0
     cerebras_max_backoff_seconds: float = 10.0
-    cerebras_min_request_interval_seconds: float = 15.0
+    cerebras_min_request_interval_seconds: float = 5.0
     cerebras_quota_cooldown_seconds: float = 60.0
     llm_provider_retry_count: int = 3
     llm_rate_limit_backoff_seconds: float = 2.0

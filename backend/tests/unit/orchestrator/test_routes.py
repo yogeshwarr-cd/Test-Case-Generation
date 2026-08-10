@@ -6,4 +6,4 @@ def test_workflow_threshold_controls_scenario_route():
     assert route_scenario_validation(state)=="generate_test_cases"
 def test_workflow_threshold_controls_testcase_route():
     state={"testcase_validation":{"confidence_score":.82},"testcase_attempt_count":1,"confidence_threshold":.9}
-    assert route_testcase_validation(state)=="testcase_manual_review"
+    assert route_testcase_validation(state)=="regenerate_test_cases"
