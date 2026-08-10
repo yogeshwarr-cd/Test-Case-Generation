@@ -19,6 +19,7 @@ import {
   Trash2,
   AlertTriangle,
   CheckSquare,
+  Pencil,
   X,
 } from 'lucide-react';
 import { useTestCaseWorkflowStore, TestProjectRecord } from '@/testCase Frontend/store/workflowStore';
@@ -49,7 +50,7 @@ function DashboardContent() {
   const searchParams = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
 
-  const { projects, workflowId, hydrate, setWorkflow, setResult, deleteProject } = useTestCaseWorkflowStore();
+  const { projects, workflowId, hydrate, setWorkflow, setResult, deleteProject, renameProject } = useTestCaseWorkflowStore();
   const [query, setQuery] = useState(initialQuery);
   const [statusFilter, setStatusFilter] = useState<'all' | 'in_progress' | 'completed' | 'blocked'>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
@@ -59,6 +60,25 @@ function DashboardContent() {
   // ── Selection mode state ─────────────────────────────────────────────────
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // ── Rename mode state ───────────────────────────────────────────────────
+  const [editingProject, setEditingProject] = useState<ProjectRow | null>(null);
+  const [newProjectName, setNewProjectName] = useState('');
+
+  const handleOpenRename = (project: ProjectRow) => {
+    setEditingProject(project);
+    setNewProjectName(project.name);
+  };
+
+  const handleSaveRename = () => {
+    if (!editingProject || !newProjectName.trim()) return;
+    const trimmed = newProjectName.trim();
+    renameProject(editingProject.workflowId, trimmed);
+    projectService.updateProject(editingProject.workflowId, { name: trimmed }).catch(() => undefined);
+    setBackendProjects(prev => prev.map(p => p.id === editingProject.workflowId ? { ...p, name: trimmed } : p));
+    setEditingProject(null);
+    setNewProjectName('');
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -464,13 +484,23 @@ function DashboardContent() {
                         <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end gap-2">
                             {!selectMode && (
-                              <Link
-                                onClick={() => setWorkflow(project.workflowId, project.projectId)}
-                                href={`/projects/${project.projectId || project.workflowId}`}
-                                className="inline-flex items-center gap-1 rounded-lg bg-primary/10 px-2.5 py-1.5 text-[11px] font-bold text-primary hover:bg-primary hover:text-primary-foreground transition"
-                              >
-                                Workspace <ArrowRight className="h-3 w-3" />
-                              </Link>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenRename(project)}
+                                  className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all"
+                                  title="Rename project"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+                                <Link
+                                  onClick={() => setWorkflow(project.workflowId, project.projectId)}
+                                  href={`/projects/${project.projectId || project.workflowId}`}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-primary/10 px-2.5 py-1.5 text-[11px] font-bold text-primary hover:bg-primary hover:text-primary-foreground transition"
+                                >
+                                  Workspace <ArrowRight className="h-3 w-3" />
+                                </Link>
+                              </>
                             )}
 
                             <button
@@ -581,13 +611,23 @@ function DashboardContent() {
 
                       <div className="flex items-center gap-2">
                         {!selectMode && (
-                          <Link
-                            onClick={() => setWorkflow(project.workflowId, project.projectId)}
-                            href={`/projects/${project.projectId || project.workflowId}`}
-                            className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground shadow-sm hover:opacity-90 transition"
-                          >
-                            Workspace <ArrowRight className="h-3.5 w-3.5" />
-                          </Link>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenRename(project)}
+                              className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all"
+                              title="Rename project"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <Link
+                              onClick={() => setWorkflow(project.workflowId, project.projectId)}
+                              href={`/projects/${project.projectId || project.workflowId}`}
+                              className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground shadow-sm hover:opacity-90 transition"
+                            >
+                              Workspace <ArrowRight className="h-3.5 w-3.5" />
+                            </Link>
+                          </>
                         )}
                         <button
                           type="button"
@@ -648,6 +688,68 @@ function DashboardContent() {
               Delete {selectedIds.size} Selected
             </button>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* RENAME PROJECT MODAL */}
+      <AnimatePresence>
+        {editingProject && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl space-y-4"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <Pencil className="h-4 w-4" />
+                  </div>
+                  <h3 className="text-base font-bold text-foreground">Rename Project</h3>
+                </div>
+                <button
+                  onClick={() => setEditingProject(null)}
+                  className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted transition"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1.5">
+                  Project Name
+                </label>
+                <input
+                  type="text"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSaveRename(); }}
+                  placeholder="Enter project name..."
+                  className="w-full rounded-xl border border-input bg-background p-3 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition"
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingProject(null)}
+                  className="rounded-xl border border-border bg-background px-4 py-2 text-xs font-bold text-muted-foreground hover:bg-muted transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveRename}
+                  disabled={!newProjectName.trim()}
+                  className="rounded-xl bg-primary px-4 py-2 text-xs font-bold text-primary-foreground shadow-md hover:opacity-90 disabled:opacity-50 transition"
+                >
+                  Save Name
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

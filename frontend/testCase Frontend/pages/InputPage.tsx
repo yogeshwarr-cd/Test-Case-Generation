@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
-import { ArrowRight, FileText, ImagePlus, LoaderCircle, Plus, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
+import { ArrowRight, FileText, FolderKanban, ImagePlus, LoaderCircle, Plus, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
 import { DynamicListField } from '../components/DynamicListField';
 import { ConfidenceRing } from '../components/TraceabilityUI';
 import { EMPTY_PAYLOAD, FIELD_LABELS } from '../constants';
@@ -19,6 +19,7 @@ const DOCUMENT_MAX_SIZE_MB = Number(process.env.NEXT_PUBLIC_DOCUMENT_MAX_SIZE_MB
 export function InputPage() {
   const router = useRouter();
   const setWorkflow = useTestCaseWorkflowStore((state) => state.setWorkflow);
+  const [projectName, setProjectName] = useState('');
   const [payload, setPayload] = useState<ManualInputPayload>(() => structuredClone(EMPTY_PAYLOAD));
   const [submitting, setSubmitting] = useState(false);
   const [mockMode, setMockMode] = useState(false);
@@ -125,7 +126,7 @@ export function InputPage() {
       const response = await testCaseApi.startWorkflow(documentSession
         ? { source_type: 'manual', document_session_id: documentSession.session_id, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 }
         : { source_type: 'manual', input_payload: cleaned, mock_mode: mockMode, confidence_threshold: confidenceThreshold / 100 });
-      setWorkflow(response.workflow_id, response.project_id);
+      setWorkflow(response.workflow_id, response.project_id, projectName.trim() || undefined);
       router.push('/test-case-generation/progress');
     } catch (requestError) {
       setError(friendlyError(requestError));
@@ -152,6 +153,24 @@ export function InputPage() {
 
       <form onSubmit={submit} className="space-y-6">
         {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600 dark:text-red-300">{error}</div>}
+        
+        {/* Project Name Input Card */}
+        <section className="rounded-2xl border border-primary/20 bg-card p-5 shadow-sm sm:p-6">
+          <div className="flex items-center gap-3 mb-3">
+            <FolderKanban className="h-5 w-5 text-primary" />
+            <div>
+              <h2 className="font-semibold text-foreground">Project Name</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">Give your test generation scope a descriptive title to organize your dashboard.</p>
+            </div>
+          </div>
+          <input
+            type="text"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            placeholder="e.g., E-Commerce Checkout & Payment Gateway Test Suite"
+            className="w-full rounded-xl border border-input bg-background p-3.5 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition placeholder:text-muted-foreground/60"
+          />
+        </section>
         <section className="rounded-2xl border border-primary/20 bg-card p-5 shadow-sm sm:p-6" aria-labelledby="confidence-threshold-title">
           <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
             <div className="max-w-2xl"><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Global quality gate</p><h2 id="confidence-threshold-title" className="mt-2 text-xl font-bold">Confidence threshold</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">This threshold controls scenario validation, test-case validation, regeneration decisions, manual-review gates, and automation evidence analysis for the entire workflow.</p></div>

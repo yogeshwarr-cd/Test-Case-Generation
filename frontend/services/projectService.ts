@@ -23,5 +23,12 @@ export const projectService = {
   },
   deleteProject: async (id: string) => {
     return await apiClient.delete ? apiClient.delete(`/api/v1/projects/${id}`) : Promise.resolve();
+  },
+  updateProject: async (id: string, data: { name?: string; description?: string }) => {
+    try {
+      return await apiClient.patch(`/api/v1/projects/${id}`, data);
+    } catch {
+      return null;
+    }
   }
 };
