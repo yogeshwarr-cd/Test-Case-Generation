@@ -51,7 +51,6 @@ function DashboardContent() {
 
   const { projects, workflowId, hydrate, setWorkflow, setResult, deleteProject } = useTestCaseWorkflowStore();
   const [query, setQuery] = useState(initialQuery);
-  const [activeTab, setActiveTab] = useState<'Dashboard' | 'Projects' | 'Test Suites' | 'Automation' | 'Analytics'>('Dashboard');
   const [statusFilter, setStatusFilter] = useState<'all' | 'in_progress' | 'completed' | 'blocked'>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
   const [mounted, setMounted] = useState(false);
@@ -180,25 +179,6 @@ function DashboardContent() {
         <p className="mt-1.5 text-sm text-muted-foreground">
           Welcome back to your workspace. Let&apos;s forge high-quality test suites &amp; automation scripts today.
         </p>
-      </div>
-
-      {/* CATEGORY FILTER TABS */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {(['Dashboard', 'Projects', 'Test Suites', 'Automation', 'Analytics'] as const).map((tab) => {
-          const isActive = activeTab === tab;
-          return (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`relative rounded-xl px-4 py-2 text-xs font-bold transition-all whitespace-nowrap ${isActive
-                ? 'bg-gradient-to-r from-orange-500 to-purple-600 text-white shadow-md shadow-orange-500/15'
-                : 'bg-card/70 text-muted-foreground hover:bg-card hover:text-foreground border border-border/50'
-                }`}
-            >
-              {tab}
-            </button>
-          );
-        })}
       </div>
 
       {/* 4 STAT SUMMARY CARDS */}

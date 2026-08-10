@@ -333,9 +333,15 @@ export function AutomationPage() {
 
           {generation.scripts.length === 0
             ? <section className="rounded-2xl border border-border bg-card p-5 text-sm text-muted-foreground">No scripts available</section>
-            : <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
-            <aside className="space-y-2 rounded-2xl border border-border bg-card p-3">
-              {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-xl border p-3 text-left text-sm shadow-sm transition-all ${selectedScript === index ? 'border-primary/40 bg-primary/10 ring-1 ring-primary/20' : 'border-transparent hover:-translate-y-0.5 hover:border-border hover:bg-muted/60 hover:shadow-md'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{item.page_url || item.application_url}</span><span className="mt-2 block truncate font-mono text-[10px] text-primary">Script · {item.script_id}</span></button>)}
+            : <div className="grid items-start gap-6 lg:grid-cols-[20rem_minmax(0,1fr)]">
+            <aside className="flex max-h-[42rem] flex-col overflow-hidden rounded-2xl border border-border bg-card">
+              <div className="shrink-0 border-b border-border px-4 py-3">
+                <h2 className="font-semibold">Generated scripts</h2>
+                <p className="mt-1 text-xs text-muted-foreground">{generation.scripts.length} scripts · Select one to view its code</p>
+              </div>
+              <div className="space-y-2 overflow-y-auto p-3">
+                {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-xl border p-3 text-left text-sm shadow-sm transition-all ${selectedScript === index ? 'border-primary/40 bg-primary/10 ring-1 ring-primary/20' : 'border-transparent hover:-translate-y-0.5 hover:border-border hover:bg-muted/60 hover:shadow-md'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{item.page_url || item.application_url}</span><span className="mt-2 block truncate font-mono text-[10px] text-primary">Script · {item.script_id}</span></button>)}
+              </div>
             </aside>
             {script && <section className="min-w-0 rounded-2xl border border-border bg-card">
               <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border p-4"><div className="min-w-0"><h2 className="font-semibold">{script.name}</h2><p className="mt-1 break-all text-xs text-muted-foreground">{script.page_url || script.application_url}</p><TraceabilityChain className="mt-3" scenarioId={script.scenario_id} testCaseId={script.test_case_id} scriptId={script.script_id} /></div><button onClick={() => downloadFile(`${script.script_id}.py`, script.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold shadow-sm transition hover:-translate-y-0.5 hover:bg-muted hover:shadow-md"><Download className="h-4 w-4" /> Download</button></div>
