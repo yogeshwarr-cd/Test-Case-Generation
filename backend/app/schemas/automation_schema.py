@@ -339,6 +339,15 @@ class ExecutionReport(BaseModel):
     retest_verification: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ExecutionJobResponse(BaseModel):
+    """State of an execution owned by the backend rather than an HTTP request."""
+
+    job_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    report: ExecutionReport | None = None
+    error: str | None = None
+
+
 class CompareExecutionRequest(BaseModel):
     execution_id: str
 

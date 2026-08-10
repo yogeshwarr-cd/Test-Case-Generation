@@ -11,6 +11,7 @@ from app.schemas.automation_schema import (
     CrawlAnalysisResponse,
     DiscoveredElement,
     ExecuteScriptsRequest,
+    ExecutionReport,
     FailureAnalysis,
     GenerateScriptsRequest,
     ScriptExecutionResult,
@@ -266,6 +267,41 @@ async def test_workflow_crawl_stop_generates_from_preserved_session(monkeypatch)
     assert completed.crawl.pages_crawled == 1
     assert completed.generation is not None
     assert completed.generation.generation_id == "gen-workflow-partial"
+
+
+@pytest.mark.asyncio
+async def test_execution_job_continues_independently_of_start_request(monkeypatch):
+    service = AutomationService()
+    release = asyncio.Event()
+
+    async def execute_in_background(request):
+        await release.wait()
+        return ExecutionReport(
+            execution_id="exec-background",
+            generation_id=request.generation_id,
+            mode=request.mode,
+            total_scripts=0,
+            passed_scripts=0,
+            failed_scripts=0,
+            skipped_scripts=0,
+            execution_time_seconds=0,
+            success_percentage=0,
+            results=[],
+        )
+
+    monkeypatch.setattr(service, "execute", execute_in_background)
+    started = await service.start_execution_job(
+        ExecuteScriptsRequest(generation_id="gen-background")
+    )
+    await asyncio.sleep(0)
+    assert service.execution_job(started.job_id).status == "running"
+
+    release.set()
+    await service._execution_jobs[started.job_id]["task"]
+    completed = service.execution_job(started.job_id)
+    assert completed.status == "completed"
+    assert completed.report is not None
+    assert completed.report.execution_id == "exec-background"
 
 
 def test_dom_coverage_gate_rejects_generic_verification_steps():

@@ -32,6 +32,7 @@ from app.schemas.automation_schema import (
     AutomationRecommendation,
     DeveloperImplementationPlan,
     ExecuteScriptsRequest,
+    ExecutionJobResponse,
     ExecutionReport,
     FailureAnalysis,
     FailureEvidence,
@@ -736,6 +737,7 @@ class AutomationService:
         self._crawls: dict[str, dict[str, Any]] = {}
         self._crawl_jobs: dict[str, dict[str, Any]] = {}
         self._workflow_crawl_jobs: dict[str, dict[str, Any]] = {}
+        self._execution_jobs: dict[str, dict[str, Any]] = {}
         self.seacrawl = SeacrawlAdapter()
 
     def _crawl_job_response(self, job_id: str) -> CrawlJobResponse:
@@ -869,6 +871,44 @@ class AutomationService:
             job["cancel_event"].set()
             job["status"] = "stopping"
         return self._workflow_crawl_job_response(job_id)
+
+    def _execution_job_response(self, job_id: str) -> ExecutionJobResponse:
+        job = self._execution_jobs.get(job_id)
+        if job is None:
+            raise AutomationError("Execution job was not found or has expired.")
+        return ExecutionJobResponse(
+            job_id=job_id,
+            status=job["status"],
+            report=job.get("report"),
+            error=job.get("error"),
+        )
+
+    async def start_execution_job(
+        self, request: ExecuteScriptsRequest
+    ) -> ExecutionJobResponse:
+        job_id = f"execution-job-{uuid.uuid4()}"
+        job: dict[str, Any] = {
+            "status": "queued",
+            "report": None,
+            "error": None,
+        }
+        self._execution_jobs[job_id] = job
+
+        async def run() -> None:
+            job["status"] = "running"
+            try:
+                job["report"] = await self.execute(request)
+                job["status"] = "completed"
+            except Exception as exc:
+                job["error"] = str(exc)
+                job["status"] = "failed"
+                logger.exception("Execution job failed job_id=%s", job_id)
+
+        job["task"] = asyncio.create_task(run())
+        return self._execution_job_response(job_id)
+
+    def execution_job(self, job_id: str) -> ExecutionJobResponse:
+        return self._execution_job_response(job_id)
 
     def _completed_crawl_report(
         self, url: str, title: str | None, elements: list[DiscoveredElement]

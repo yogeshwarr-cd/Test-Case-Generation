@@ -6,8 +6,8 @@ import { CheckCircle2, Download, LoaderCircle, Play, XCircle } from 'lucide-reac
 import { StatePanel } from '../components/StatePanel';
 import { ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
 import { testCaseApi } from '../services/testCaseApi';
-import { loadTestProjectArtifacts, saveTestProjectArtifacts, useTestCaseWorkflowStore } from '../store/workflowStore';
-import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
+import { loadTestProjectArtifacts, saveAutomationActivity, saveTestProjectArtifacts, useTestCaseWorkflowStore } from '../store/workflowStore';
+import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionJob, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
 import { downloadFile, friendlyError } from '../utils';
 
 export function AutomationPage() {
@@ -25,18 +25,33 @@ export function AutomationPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [showTestReport, setShowTestReport] = useState(false);
+  const [showDeveloperReport, setShowDeveloperReport] = useState(false);
   const [comparison, setComparison] = useState<TraceabilityComparisonReport | null>(null);
   const [humanSession, setHumanSession] = useState<HumanExecutionSession | null>(null);
   const [crawlJob, setCrawlJob] = useState<WorkflowCrawlJob | null>(null);
+  const [executionJob, setExecutionJob] = useState<ExecutionJob | null>(null);
   const humanSessionId = humanSession?.session_id;
   const humanSessionState = humanSession?.state;
   const crawlRunning = Boolean(
     crawlJob && ['queued', 'running', 'stopping'].includes(crawlJob.status),
   );
+  const executionRunning = Boolean(
+    executionJob && ['queued', 'running'].includes(executionJob.status),
+  );
 
   useEffect(() => {
-    if (workflowId) saveTestProjectArtifacts(workflowId, generation, report, comparison);
-  }, [comparison, generation, report, workflowId]);
+    if (workflowId) saveTestProjectArtifacts(workflowId, generation, report, comparison, crawl);
+  }, [comparison, crawl, generation, report, workflowId]);
+
+  useEffect(() => {
+    if (!workflowId) return;
+    saveAutomationActivity(workflowId, {
+      applicationUrl,
+      crawlJobId: crawlJob?.job_id,
+      executionJobId: executionJob?.job_id,
+      humanSessionId: humanSession?.session_id,
+    });
+  }, [applicationUrl, crawlJob?.job_id, executionJob?.job_id, humanSession?.session_id, workflowId]);
 
   useEffect(() => hydrate(), [hydrate]);
   useEffect(() => {
@@ -44,9 +59,21 @@ export function AutomationPage() {
     const saved = loadTestProjectArtifacts(workflowId);
     if (!saved) return;
     queueMicrotask(() => {
+      if (saved.applicationUrl) setApplicationUrl(saved.applicationUrl);
+      if (saved.crawl) setCrawl(saved.crawl);
       if (saved.generation) { setGeneration(saved.generation); setApplicationUrl(saved.generation.application_url); }
       if (saved.report) { setReport(saved.report); if (historyMode) setShowTestReport(true); }
       if (saved.comparison) setComparison(saved.comparison);
+      if (saved.crawlJobId) void testCaseApi.getWorkflowCrawlJob(saved.crawlJobId).then((current) => {
+        setCrawlJob(current);
+        if (current.crawl) setCrawl(current.crawl);
+        if (current.generation) setGeneration(current.generation);
+      }).catch(() => undefined);
+      if (saved.executionJobId) void testCaseApi.getExecutionJob(saved.executionJobId).then((current) => {
+        setExecutionJob(current);
+        if (current.report) setReport(current.report);
+      }).catch(() => undefined);
+      if (saved.humanSessionId) void testCaseApi.getHumanExecution(saved.humanSessionId).then(setHumanSession).catch(() => undefined);
     });
   }, [historyMode, workflowId]);
   useEffect(() => {
@@ -109,6 +136,34 @@ export function AutomationPage() {
     };
   }, [crawlJob?.job_id, crawlRunning]);
 
+  useEffect(() => {
+    if (!executionJob?.job_id || !executionRunning) return;
+    let disposed = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const current = await testCaseApi.getExecutionJob(executionJob.job_id);
+        if (disposed) return;
+        setExecutionJob(current);
+        if (current.status === 'completed' && current.report) {
+          setReport(current.report);
+          setShowTestReport(true);
+        } else if (current.status === 'failed') {
+          setError(current.error || 'The Playwright execution failed.');
+        }
+      } catch (requestError) {
+        if (!disposed) setError(`Execution status updates were interrupted. The execution is still running and reconnection will continue automatically. ${friendlyError(requestError)}`);
+      } finally {
+        if (!disposed) timer = window.setTimeout(poll, 1500);
+      }
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [executionJob?.job_id, executionRunning]);
+
   const crawlApplication = async () => {
     if (crawlRunning && crawlJob) {
       if (busy) return;
@@ -124,13 +179,15 @@ export function AutomationPage() {
     }
     if (!workflowId || !applicationUrl.trim() || busy) return;
     const targetUrl = applicationUrl.trim();
-    setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false);
+    setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false); setShowDeveloperReport(false);
     try {
       setCrawl(null);
       setGeneration(null);
-      setCrawlJob(await testCaseApi.startWorkflowCrawlJob(
+      const startedJob = await testCaseApi.startWorkflowCrawlJob(
         workflowId, targetUrl,
-      ));
+      );
+      setCrawlJob(startedJob);
+      saveAutomationActivity(workflowId, { applicationUrl: targetUrl, crawlJobId: startedJob.job_id });
     } catch (requestError) { setError(friendlyError(requestError)); }
     finally { setBusy(false); }
   };
@@ -144,9 +201,11 @@ export function AutomationPage() {
     ) return;
     setBusy(true); setError('');
     try {
-      setGeneration(await testCaseApi.generateScripts(
+      const generated = await testCaseApi.generateScripts(
         workflowId, applicationUrl.trim(), crawl.crawl_id,
-      ));
+      );
+      setGeneration(generated);
+      saveTestProjectArtifacts(workflowId, generated, report, comparison, crawl);
       setSelectedScript(0);
     } catch (requestError) { setError(friendlyError(requestError)); }
     finally { setBusy(false); }
@@ -156,14 +215,16 @@ export function AutomationPage() {
     if (!generation || !script) return;
     if (mode === 'manual') {
       if (!workflowId || !applicationUrl.trim()) return;
-      setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false);
+      setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false); setShowDeveloperReport(false);
       try {
-        setHumanSession(await testCaseApi.startHumanExecution({
+        const startedSession = await testCaseApi.startHumanExecution({
           workflow_id: workflowId,
           scenario_id: script.scenario_id,
           test_case_id: script.test_case_id,
           application_url: applicationUrl.trim(),
-        }));
+        });
+        setHumanSession(startedSession);
+        saveAutomationActivity(workflowId, { applicationUrl: applicationUrl.trim(), humanSessionId: startedSession.session_id });
       } catch (requestError) {
         setError(friendlyError(requestError));
       } finally {
@@ -178,8 +239,15 @@ export function AutomationPage() {
     const authentication = authenticationEmail.trim() && authenticationPassword
       ? { email: authenticationEmail.trim(), password: authenticationPassword }
       : undefined;
-    setBusy(true); setError(''); setShowTestReport(false);
-    try { setReport(await testCaseApi.executeScripts(generation.generation_id, 'automated', authentication, executionProfile)); }
+    setBusy(true); setError(''); setShowTestReport(false); setShowDeveloperReport(false);
+    try {
+      const startedJob = await testCaseApi.startExecutionJob(generation.generation_id, 'automated', authentication, executionProfile);
+      setExecutionJob(startedJob);
+      if (workflowId) {
+        saveTestProjectArtifacts(workflowId, generation, report, comparison, crawl);
+        saveAutomationActivity(workflowId, { applicationUrl: applicationUrl.trim(), executionJobId: startedJob.job_id });
+      }
+    }
     catch (requestError) {
       if (requestError instanceof Error && requestError.message.includes('(404)') && workflowId && applicationUrl.trim()) {
         try {
@@ -195,7 +263,10 @@ export function AutomationPage() {
           );
           setGeneration(refreshed);
           setSelectedScript(0);
-          setReport(await testCaseApi.executeScripts(refreshed.generation_id, 'automated', authentication, executionProfile));
+          const startedJob = await testCaseApi.startExecutionJob(refreshed.generation_id, 'automated', authentication, executionProfile);
+          setExecutionJob(startedJob);
+          saveTestProjectArtifacts(workflowId, refreshed, report, comparison, crawl);
+          saveAutomationActivity(workflowId, { applicationUrl: applicationUrl.trim(), executionJobId: startedJob.job_id });
         } catch (retryError) { setError(friendlyError(retryError)); }
       } else { setError(friendlyError(requestError)); }
     }
@@ -227,14 +298,19 @@ export function AutomationPage() {
     const authentication = authenticationEmail.trim() && authenticationPassword
       ? { email: authenticationEmail.trim(), password: authenticationPassword }
       : undefined;
-    setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false);
+    setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false); setShowDeveloperReport(false);
     try {
-      setReport(await testCaseApi.executeScripts(
+      const startedJob = await testCaseApi.startExecutionJob(
         humanSession.generation_id,
         'automated',
         authentication,
         executionProfile,
-      ));
+      );
+      setExecutionJob(startedJob);
+      if (workflowId) {
+        saveTestProjectArtifacts(workflowId, generation, report, comparison, crawl);
+        saveAutomationActivity(workflowId, { applicationUrl: applicationUrl.trim(), executionJobId: startedJob.job_id, humanSessionId: humanSession.session_id });
+      }
     } catch (requestError) {
       setError(friendlyError(requestError));
     } finally {
@@ -303,6 +379,11 @@ export function AutomationPage() {
         <p className="mt-1 text-xs text-muted-foreground">Click Stop Crawling to preserve scanned pages and generate scripts immediately.</p>
       </section>}
 
+      {executionRunning && <section className="rounded-2xl border border-green-500/20 bg-green-500/5 p-5">
+        <div className="flex items-center gap-2 font-semibold text-green-700"><LoaderCircle className="h-5 w-5 animate-spin" /> Playwright execution running in the background</div>
+        <p className="mt-2 text-sm text-muted-foreground">You can navigate to Generated Tests or any other page. Return here to view the same run and its completed report.</p>
+      </section>}
+
       {crawl && (
         <section className={`rounded-2xl border p-5 ${crawl.crawl_status === 'crawl_completed' ? 'border-green-500/30 bg-green-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
           <div className={`flex items-center gap-2 font-semibold ${crawl.crawl_status === 'crawl_completed' ? 'text-green-600' : 'text-red-600'}`}>
@@ -354,7 +435,7 @@ export function AutomationPage() {
             <div className="mt-3 flex flex-wrap gap-3">
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-4 py-3"><input type="radio" checked={mode === 'automated'} onChange={() => setMode('automated')} /> Automated execution (default)</label>
               <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-4 py-3"><input type="radio" checked={mode === 'manual'} onChange={() => setMode('manual')} /> Manual execution</label>
-              <button disabled={busy || !script || Boolean(humanSession && ['waiting_for_human', 'recording', 'generating_scripts', 'validating_scripts', 'executing_scripts'].includes(humanSession.state))} onClick={execute} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {mode === 'automated' ? 'Execute with Playwright' : 'Start Manual Execution'}</button>
+              <button disabled={busy || executionRunning || !script || Boolean(humanSession && ['waiting_for_human', 'recording', 'generating_scripts', 'validating_scripts', 'executing_scripts'].includes(humanSession.state))} onClick={execute} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy || executionRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {executionRunning ? 'Execution Running' : mode === 'automated' ? 'Execute with Playwright' : 'Start Manual Execution'}</button>
             </div>
             {humanSession && <div className="mt-4 rounded-xl border border-primary/20 bg-primary/5 p-4">
               <div className="grid gap-3 text-sm sm:grid-cols-3">
@@ -376,7 +457,7 @@ export function AutomationPage() {
                 <h2 className="mt-2 text-lg font-bold">Generated Manual Test Scripts</h2>
                 <p className="mt-1 text-sm text-muted-foreground">{humanSession.generated_scripts.length} validated Playwright script{humanSession.generated_scripts.length === 1 ? '' : 's'} generated from {humanSession.recorded_action_count} recorded actions.</p>
               </div>
-              <button disabled={busy || !humanSession.generation_id} onClick={executeGeneratedHumanScripts} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Execute with Playwright</button>
+              <button disabled={busy || executionRunning || !humanSession.generation_id} onClick={executeGeneratedHumanScripts} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy || executionRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {executionRunning ? 'Execution Running' : 'Execute with Playwright'}</button>
             </div>
             {humanSession.generated_scripts.map((generatedScript, index) => <article key={`${generatedScript.script_id}-${index}`} className="overflow-hidden rounded-xl border border-border bg-card">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
@@ -389,23 +470,63 @@ export function AutomationPage() {
         </>
       )}
 
-      {report && <><ExecutionDashboard report={report} /><div className="flex flex-wrap justify-end gap-3">{report.mode === 'automated' && <button disabled={busy} onClick={compare} className="rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">Compare with Test Cases &amp; Scenarios</button>}<button onClick={() => setShowTestReport(true)} className="inline-flex items-center gap-2 rounded-lg border border-border px-5 py-3 text-sm font-bold"><Download className="h-4 w-4" /> Generate Test Report</button></div>{comparison && <TraceabilityComparisonSection comparison={comparison} />}{showTestReport && <DetailedTestReport report={report} />}</>}
+      {report && <><ExecutionDashboard report={report} generation={generation} /><div className="flex flex-wrap justify-end gap-3">{report.mode === 'automated' && <button disabled={busy} onClick={compare} className="rounded-lg bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:opacity-50">Compare with Test Cases &amp; Scenarios</button>}<button onClick={() => setShowDeveloperReport((visible) => !visible)} className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-5 py-3 text-sm font-bold text-primary">{showDeveloperReport ? 'Hide Developer Report' : 'Developer Report'}</button><button onClick={() => setShowTestReport(true)} className="inline-flex items-center gap-2 rounded-lg border border-border px-5 py-3 text-sm font-bold"><Download className="h-4 w-4" /> Generate Test Report</button></div>{showDeveloperReport && <DeveloperReports report={report} />}{comparison && <TraceabilityComparisonSection comparison={comparison} />}{showTestReport && <DetailedTestReport report={report} />}</>}
     </div>
   );
 }
 
-function ExecutionDashboard({ report }: { report: ExecutionReport }) {
+function ExecutionDashboard({ report, generation }: { report: ExecutionReport; generation: ScriptGeneration | null }) {
   return <section className="space-y-5">
     <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Execution dashboard</p><h2 className="mt-2 text-xl font-bold">Run results</h2></div>
     <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
       <Metric label="Total" value={report.total_scripts} /><Metric label="Passed" value={report.passed_scripts} /><Metric label="Failed" value={report.failed_scripts} /><Metric label="Skipped" value={report.skipped_scripts} /><Metric label="Seconds" value={report.execution_time_seconds} /><Metric label="Success" value={`${report.success_percentage}%`} />
     </div>
-    <div className="space-y-3">{report.results.map((result, index) => <article key={`${result.script_id}-${index}`} className="rounded-xl border border-border/80 bg-card p-5 shadow-sm transition hover:border-primary/20 hover:shadow-md">
-      <div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><div className="flex items-center gap-2">{result.status === 'passed' ? <CheckCircle2 className="h-5 w-5 text-green-500" /> : result.status === 'failed' ? <XCircle className="h-5 w-5 text-red-500" /> : <Play className="h-5 w-5 text-amber-500" />}<h3 className="font-semibold">{result.script_name}</h3></div><TraceabilityChain className="mt-3" scenarioId={result.scenario_id} testCaseId={result.test_case_id} scriptId={result.script_id} /></div><div className="flex items-center gap-2"><StatusBadge status={result.status} /><span className="text-xs font-semibold text-muted-foreground">{result.duration_seconds}s</span></div></div>
-      {result.error_message && <p className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-sm text-red-700 dark:text-red-300">{result.error_message}</p>}
-      {report.developer_execution_reports?.[index] && <DeveloperReportCard report={report.developer_execution_reports[index]} />}
-    </article>)}</div>
+    <div className="space-y-3">{report.results.map((result, index) => {
+      const failure = result.failure;
+      const qaReport = report.qa_diagnostic_reports?.find((item) => item.script_id === result.script_id);
+      const generatedScript = generation?.scripts.find((item) => item.script_id === result.script_id);
+      const performedSteps = generatedScript?.executable_steps ?? [];
+      const importantMessage = result.status === 'passed'
+        ? `Completed successfully in ${result.duration_seconds}s.`
+        : failure?.failure_reason || result.error_message || (result.status === 'skipped' ? 'Execution was skipped.' : 'Execution failed.');
+      const evidence = [failure?.screenshot, failure?.dom_snapshot, failure?.trace_path, failure?.intelligence?.evidence?.screenshot, failure?.intelligence?.evidence?.dom_snapshot, failure?.intelligence?.evidence?.playwright_trace, ...(qaReport?.screenshots ?? []), qaReport?.dom_snapshot, qaReport?.playwright_trace].filter((value): value is string => Boolean(value));
+      return <details key={`${result.script_id}-${index}`} className="group overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm transition open:border-primary/25 open:shadow-md">
+        <summary className="flex cursor-pointer list-none items-start justify-between gap-4 p-4 marker:hidden sm:p-5">
+          <div className="flex min-w-0 gap-3">
+            <span className="mt-0.5 shrink-0">{result.status === 'passed' ? <CheckCircle2 className="h-5 w-5 text-green-500" /> : result.status === 'failed' ? <XCircle className="h-5 w-5 text-red-500" /> : <Play className="h-5 w-5 text-amber-500" />}</span>
+            <div className="min-w-0"><h3 className="truncate font-semibold">{result.script_name}</h3><p className={`mt-1 line-clamp-2 text-sm ${result.status === 'failed' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'}`}>{importantMessage}</p></div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2"><StatusBadge status={result.status} /><span className="hidden text-xs font-semibold text-muted-foreground sm:inline">{result.duration_seconds}s</span><span aria-hidden className="text-lg text-muted-foreground transition-transform group-open:rotate-180">⌄</span></div>
+        </summary>
+        <div className="space-y-5 border-t border-border bg-muted/10 p-4 sm:p-5">
+          <section><h4 className="text-sm font-semibold">Execution identity</h4><TraceabilityChain className="mt-3" scenarioId={result.scenario_id} testCaseId={result.test_case_id} scriptId={result.script_id} /></section>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Detail label="Execution status" value={result.status} />
+            <Detail label="Duration" value={`${result.duration_seconds}s`} />
+            <Detail label="Test case / script ID" value={`${result.test_case_id} / ${result.script_id}`} />
+            <Detail label="Page URL" value={failure?.page_url} />
+            <Detail label="Expected page URL" value={failure?.expected_page_url} />
+            <Detail label="Page title" value={failure?.page_title} />
+            <Detail label="Locator / XPath" value={failure?.exact_locator || failure?.intelligence?.evidence?.failed_locator || qaReport?.locator} />
+            <Detail label="Expected result" value={failure?.expected_result || failure?.intelligence?.expected_behavior} />
+            <Detail label="Actual result" value={failure?.actual_result || failure?.intelligence?.actual_behavior} />
+            <Detail label="Failure reason" value={failure?.failure_reason} />
+            <Detail label="Error message" value={result.error_message} />
+            <Detail label="HTTP response" value={failure?.http_response_status != null ? String(failure.http_response_status) : undefined} />
+          </div>
+          <section><h4 className="text-sm font-semibold">Steps performed</h4>{failure?.failed_action && <p className="mt-2 rounded-lg border border-border bg-background p-3 text-sm"><span className="font-medium">Failed action:</span> {failure.failed_action}</p>}{performedSteps.length ? <ol className="mt-2 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">{performedSteps.map((step, stepIndex) => <li key={stepIndex} className="pl-1"><pre className="whitespace-pre-wrap break-words font-sans">{typeof step === 'string' ? step : JSON.stringify(step, null, 2)}</pre></li>)}</ol> : failure?.reproduction_steps?.length ? <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">{failure.reproduction_steps.map((step, stepIndex) => <li key={`${step}-${stepIndex}`}>{step}</li>)}</ol> : <p className="mt-2 text-sm text-muted-foreground">No step-level execution data was captured.</p>}</section>
+          {evidence.length > 0 && <section><h4 className="text-sm font-semibold">Screenshots and evidence</h4><div className="mt-2 flex flex-wrap gap-2">{Array.from(new Set(evidence)).map((path, evidenceIndex) => <a key={`${path}-${evidenceIndex}`} href={path} target="_blank" rel="noreferrer" className="max-w-full truncate rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-primary hover:bg-muted">{path.split(/[\\/]/).pop() || `Evidence ${evidenceIndex + 1}`}</a>)}</div></section>}
+          {failure && <section><h4 className="text-sm font-semibold">Additional execution information</h4><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-xs">{JSON.stringify({ failure_stage: failure.failure_stage, failure_category: failure.failure_category, locator_details: failure.locator_details, alternate_locators_attempted: failure.alternate_locators_attempted, locator_diagnosis: failure.locator_diagnosis, assertion_details: failure.assertion_details, navigation_details: failure.navigation_details, input_details: failure.input_details, application_state_details: failure.application_state_details, console_logs: failure.console_logs, network_errors: failure.network_errors, stack_trace: failure.stack_trace, traceability: result.traceability }, null, 2)}</pre></section>}
+          {!failure && Object.keys(result.traceability ?? {}).length > 0 && <section><h4 className="text-sm font-semibold">Traceability details</h4><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-xs">{JSON.stringify(result.traceability, null, 2)}</pre></section>}
+          {qaReport && <section><h4 className="text-sm font-semibold">QA diagnostics</h4><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-xs">{JSON.stringify(qaReport, null, 2)}</pre></section>}
+        </div>
+      </details>;
+    })}</div>
   </section>;
+}
+
+function Detail({ label, value }: { label: string; value?: string }) {
+  return <div className="min-w-0 rounded-lg border border-border/70 bg-background p-3"><p className="text-xs font-medium text-muted-foreground">{label}</p><p className="mt-1 break-words text-sm font-medium capitalize">{value || 'Not available'}</p></div>;
 }
 
 function DeveloperReportCard({ report }: { report: DeveloperExecutionReport }) {
@@ -460,13 +581,18 @@ function DeveloperReportCard({ report }: { report: DeveloperExecutionReport }) {
 function ReportSection({ title, children }: { title: string; children: ReactNode }) { return <section className="mt-3"><h5 className="text-xs font-bold uppercase text-muted-foreground">{title}</h5><div className="mt-2">{children}</div></section>; }
 function TextList({ values, empty = 'No changes identified.', ordered = false }: { values: string[]; empty?: string; ordered?: boolean }) { if (!values.length) return <p className="text-muted-foreground">{empty}</p>; const Tag = ordered ? 'ol' : 'ul'; return <Tag className={`space-y-1 pl-5 ${ordered ? 'list-decimal' : 'list-disc'}`}>{values.map((value, index) => <li key={`${value}-${index}`}>{value}</li>)}</Tag>; }
 
-function DetailedTestReport({ report }: { report: ExecutionReport }) {
+function DeveloperReports({ report }: { report: ExecutionReport }) {
   const developerReports = report.developer_execution_reports ?? [];
+  return <section className="space-y-5 rounded-2xl border border-primary/25 bg-card p-5">
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Developer implementation report</p><h2 className="mt-1 text-xl font-bold">Evidence-gated application behavior</h2></div><button onClick={() => downloadFile(`developer-report-${report.execution_id}.json`, JSON.stringify(developerReports, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold"><Download className="h-4 w-4" /> Download developer report</button></div>
+    {developerReports.length ? developerReports.map((item, index) => <DeveloperReportCard key={`${item.issue_title}-${index}`} report={item} />) : <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">No developer reports are available for this execution.</p>}
+  </section>;
+}
+
+function DetailedTestReport({ report }: { report: ExecutionReport }) {
   const qaReports = report.qa_diagnostic_reports ?? [];
   return <section className="space-y-5 rounded-2xl border border-border bg-card p-5">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Developer implementation report</p><h2 className="mt-1 text-xl font-bold">Evidence-gated application behavior</h2></div><button onClick={() => downloadFile(`developer-report-${report.execution_id}.json`, JSON.stringify(developerReports, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold"><Download className="h-4 w-4" /> Download developer report</button></div>
-    {developerReports.length ? developerReports.map((item, index) => <DeveloperReportCard key={`${item.issue_title}-${index}`} report={item} />) : <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">No execution results are available.</p>}
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-5"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">QA diagnostic report</p><h2 className="mt-1 text-xl font-bold">Automation and technical evidence</h2></div><button onClick={() => downloadFile(`qa-diagnostic-${report.execution_id}.json`, JSON.stringify(qaReports, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold"><Download className="h-4 w-4" /> Download QA report</button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">QA diagnostic report</p><h2 className="mt-1 text-xl font-bold">Automation and technical evidence</h2></div><button onClick={() => downloadFile(`qa-diagnostic-${report.execution_id}.json`, JSON.stringify(qaReports, null, 2), 'application/json')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold"><Download className="h-4 w-4" /> Download QA report</button></div>
     {qaReports.map((item, index) => <QaDiagnosticCard key={`${item.script_id}-${index}`} report={item} />)}
   </section>;
 }

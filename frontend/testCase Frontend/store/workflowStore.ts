@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { ExecutionReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowEvent, WorkflowResult } from '../types';
+import type { CrawlAnalysis, ExecutionReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowEvent, WorkflowResult } from '../types';
 import { WORKFLOW_SNAPSHOT_KEY, WORKFLOW_STORAGE_KEY } from '../constants';
 
 interface WorkflowStore {
@@ -34,17 +34,31 @@ export interface TestProjectRecord {
 
 const PROJECTS_KEY = 'testcase-project-history';
 const artifactsKey = (workflowId: string) => `testcase-project-artifacts:${workflowId}`;
+const automationActivityKey = (workflowId: string) => `testcase-automation-activity:${workflowId}`;
 const readProjects = (): TestProjectRecord[] => {
   try { return JSON.parse(localStorage.getItem(PROJECTS_KEY) ?? '[]') as TestProjectRecord[]; } catch { return []; }
 };
 const saveProjects = (projects: TestProjectRecord[]) => localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
 
-export interface SavedTestProjectArtifacts { generation?: ScriptGeneration; report?: ExecutionReport; comparison?: TraceabilityComparisonReport }
+export interface SavedTestProjectArtifacts {
+  generation?: ScriptGeneration;
+  crawl?: CrawlAnalysis;
+  report?: ExecutionReport;
+  comparison?: TraceabilityComparisonReport;
+  applicationUrl?: string;
+  crawlJobId?: string;
+  executionJobId?: string;
+  humanSessionId?: string;
+}
 export function loadTestProjectArtifacts(workflowId: string): SavedTestProjectArtifacts | null {
-  try { return JSON.parse(localStorage.getItem(artifactsKey(workflowId)) ?? 'null') as SavedTestProjectArtifacts | null; } catch { return null; }
+  try {
+    const artifacts = JSON.parse(localStorage.getItem(artifactsKey(workflowId)) ?? 'null') as SavedTestProjectArtifacts | null;
+    const activity = JSON.parse(localStorage.getItem(automationActivityKey(workflowId)) ?? 'null') as SavedTestProjectArtifacts | null;
+    return artifacts || activity ? { ...(artifacts ?? {}), ...(activity ?? {}) } : null;
+  } catch { return null; }
 }
 
-export function saveTestProjectArtifacts(workflowId: string, generation?: ScriptGeneration | null, report?: ExecutionReport | null, comparison?: TraceabilityComparisonReport | null) {
+export function saveTestProjectArtifacts(workflowId: string, generation?: ScriptGeneration | null, report?: ExecutionReport | null, comparison?: TraceabilityComparisonReport | null, crawl?: CrawlAnalysis | null) {
   const projects = readProjects();
   const index = projects.findIndex((item) => item.workflowId === workflowId);
   if (index < 0) return;
@@ -56,9 +70,26 @@ export function saveTestProjectArtifacts(workflowId: string, generation?: Script
   saveProjects(projects);
   try {
     const saved = loadTestProjectArtifacts(workflowId) ?? {};
-    localStorage.setItem(artifactsKey(workflowId), JSON.stringify({ generation: generation ?? saved.generation, report: report ?? saved.report, comparison: comparison ?? saved.comparison }));
+    localStorage.setItem(artifactsKey(workflowId), JSON.stringify({ ...saved, generation: generation ?? saved.generation, report: report ?? saved.report, comparison: comparison ?? saved.comparison, crawl: crawl ?? saved.crawl }));
   } catch {
     // Keep the lightweight project summary when browser storage is full.
+  }
+}
+
+export function saveAutomationActivity(
+  workflowId: string,
+  activity: Pick<SavedTestProjectArtifacts, 'applicationUrl' | 'crawlJobId' | 'executionJobId' | 'humanSessionId'>,
+) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(automationActivityKey(workflowId)) ?? '{}') as SavedTestProjectArtifacts;
+    const next = { ...saved };
+    if (activity.applicationUrl) next.applicationUrl = activity.applicationUrl;
+    if (activity.crawlJobId) next.crawlJobId = activity.crawlJobId;
+    if (activity.executionJobId) next.executionJobId = activity.executionJobId;
+    if (activity.humanSessionId) next.humanSessionId = activity.humanSessionId;
+    localStorage.setItem(automationActivityKey(workflowId), JSON.stringify(next));
+  } catch {
+    // Polling can still continue in the current view when storage is unavailable.
   }
 }
 
@@ -109,6 +140,7 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
     const projects = readProjects().filter((item) => item.workflowId !== workflowId);
     saveProjects(projects);
     localStorage.removeItem(artifactsKey(workflowId));
+    localStorage.removeItem(automationActivityKey(workflowId));
     try {
       const active = JSON.parse(sessionStorage.getItem(WORKFLOW_STORAGE_KEY) ?? 'null') as { workflowId?: string } | null;
       if (active?.workflowId === workflowId) {

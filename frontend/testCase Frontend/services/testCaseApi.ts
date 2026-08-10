@@ -6,6 +6,7 @@ import type {
   WorkflowStartResponse,
   ScriptGeneration,
   ExecutionReport,
+  ExecutionJob,
   TraceabilityComparisonReport,
   CrawlGenerationResponse,
   CrawlJob,
@@ -102,6 +103,22 @@ export const testCaseApi = {
       method: 'POST',
       body: JSON.stringify({ generation_id: generationId, mode, authentication, execution_profile: executionProfile }),
     }, 1800000);
+  },
+
+  startExecutionJob(
+    generationId: string,
+    mode: 'automated' | 'manual',
+    authentication?: { email: string; password: string },
+    executionProfile: 'fast' | 'standard' | 'diagnostic' = 'fast',
+  ) {
+    return request<ExecutionJob>('/api/v1/automation/executions/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ generation_id: generationId, mode, authentication, execution_profile: executionProfile }),
+    });
+  },
+
+  getExecutionJob(jobId: string) {
+    return request<ExecutionJob>(`/api/v1/automation/executions/jobs/${jobId}`);
   },
 
   startWorkflowCrawlJob(workflowId: string, applicationUrl: string) {

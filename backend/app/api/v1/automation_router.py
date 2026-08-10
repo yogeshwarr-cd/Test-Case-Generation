@@ -88,6 +88,16 @@ async def execute_scripts(request: ExecuteScriptsRequest):
     return await automation_service.execute(request)
 
 
+@router.post("/executions/jobs", summary="Start a background Playwright execution")
+async def start_execution_job(request: ExecuteScriptsRequest):
+    return await automation_service.start_execution_job(request)
+
+
+@router.get("/executions/jobs/{job_id}", summary="Get background execution status")
+async def execution_job(job_id: str):
+    return automation_service.execution_job(job_id)
+
+
 @router.post("/executions/compare", summary="Compare an execution with scenarios and test cases")
 async def compare_execution(request: CompareExecutionRequest):
     return await automation_service.compare(request.execution_id)

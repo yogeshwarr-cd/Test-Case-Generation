@@ -281,6 +281,13 @@ export interface WorkflowCrawlJob {
   error: string | null;
 }
 
+export interface ExecutionJob {
+  job_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  report: ExecutionReport | null;
+  error: string | null;
+}
+
 export interface TraceabilityComparisonReport {
   comparison_id: string;
   execution_id: string;
