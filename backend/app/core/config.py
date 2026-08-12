@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     app_name: str = "Test Case Generator"
     app_env: str = "development"
     app_host: str = "0.0.0.0"
-    app_port: int = 8001
+    app_port: int = 8006
     debug: bool = True
     app_mock_mode: bool = False  # TODO: re-enable mock mode when needed
     database_url: str = (
@@ -40,7 +40,14 @@ class Settings(BaseSettings):
     backend_1_integration_mode: str = "database"
     backend_1_api_url: str = "http://localhost:8000/api/v1"
     backend_1_database_url: str | None = None
-    cors_origins: list[str] = Field(default_factory=list)
+    cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    )
     groq_api_key: str = ""
     groq_fallback_api_key: str = ""
     groq_model: str = "openai/gpt-oss-120b"

@@ -35,7 +35,17 @@ async def lifespan(app):
     finally:
         await engine.dispose()
 app=FastAPI(title=settings.app_name,description="Persistence and review API for generated test scenarios and test cases",version="1.0.0",lifespan=lifespan)
-app.add_middleware(RequestIDMiddleware);app.add_middleware(CORSMiddleware,allow_origins=settings.cors_origins,allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    # Next.js may select another port when 3000 is occupied. Keep loopback
+    # development origins working without opening CORS to non-local hosts.
+    allow_origin_regex=r"^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 @app.exception_handler(AppError)
 async def app_error(request:Request,exc:AppError): return JSONResponse(status_code=exc.status_code,content={"error_code":exc.error_code,"message":exc.message,"details":exc.details,"request_id":getattr(request.state,"request_id",None)})
 @app.exception_handler(RequestValidationError)

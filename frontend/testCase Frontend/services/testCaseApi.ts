@@ -18,7 +18,7 @@ import type {
 } from '../types';
 import { parseWorkflowEvent } from '../utils';
 
-const BASE_URL = (process.env.NEXT_PUBLIC_TESTCASE_API_BASE_URL ?? 'http://127.0.0.1:8001').replace(/\/$/, '');
+const BASE_URL = (process.env.NEXT_PUBLIC_TESTCASE_API_BASE_URL ?? 'http://127.0.0.1:8006').replace(/\/$/, '');
 
 export const automationArtifactUrl = (path: string) =>
   `${BASE_URL}/api/v1/automation/artifacts?path=${encodeURIComponent(path)}`;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { ArrowRight, FileText, FolderKanban, ImagePlus, LoaderCircle, Plus, Sparkles, Trash2, UploadCloud, X } from 'lucide-react';
@@ -8,7 +8,7 @@ import { DynamicListField } from '../components/DynamicListField';
 import { ConfidenceRing } from '../components/TraceabilityUI';
 import { EMPTY_PAYLOAD, FIELD_LABELS } from '../constants';
 import { testCaseApi } from '../services/testCaseApi';
-import { useTestCaseWorkflowStore } from '../store/workflowStore';
+import { loadActiveProjectName, useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { DocumentSession, ManualInputPayload, ParsedDocumentStory } from '../types';
 import { cleanPayload, friendlyError } from '../utils';
 
@@ -18,8 +18,8 @@ const DOCUMENT_MAX_SIZE_MB = Number(process.env.NEXT_PUBLIC_DOCUMENT_MAX_SIZE_MB
 
 export function InputPage() {
   const router = useRouter();
-  const setWorkflow = useTestCaseWorkflowStore((state) => state.setWorkflow);
-  const [projectName, setProjectName] = useState('');
+  const { hydrate, setWorkflow } = useTestCaseWorkflowStore();
+  const [projectName, setProjectName] = useState(loadActiveProjectName);
   const [payload, setPayload] = useState<ManualInputPayload>(() => structuredClone(EMPTY_PAYLOAD));
   const [submitting, setSubmitting] = useState(false);
   const [mockMode, setMockMode] = useState(false);
@@ -35,6 +35,8 @@ export function InputPage() {
   const [documentStories, setDocumentStories] = useState<ParsedDocumentStory[]>([]);
   const [documentLoading, setDocumentLoading] = useState(false);
   const [documentError, setDocumentError] = useState('');
+
+  useEffect(() => hydrate(), [hydrate]);
 
   const updateList = (key: Exclude<keyof ManualInputPayload, 'tech_stack'>, values: string[]) =>
     setPayload((current) => ({ ...current, [key]: values }));

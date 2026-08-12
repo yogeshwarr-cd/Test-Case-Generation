@@ -28,14 +28,15 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({ isOpen, onClos
     e.preventDefault();
     if (!name.trim()) return;
 
-    // Create workspace in store
-    createWorkspace(name.trim(), description.trim() || `${clientDomain ? `${clientDomain} - ` : ''}Requirements & Test Script Suite`);
+    const projectName = name.trim();
+    const projectId = createWorkspace(projectName, description.trim() || `${clientDomain ? `${clientDomain} - ` : ''}Requirements & Test Script Suite`);
     
     // Generate workflow ID
     const workflowId = `wf_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
-    const projectId = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-    
-    setWorkflow(workflowId, projectId);
+
+    // Keep the user-entered name attached to the active project throughout the
+    // generator flow. The generator reads this persisted record after redirect.
+    setWorkflow(workflowId, projectId, projectName);
     
     onClose();
     // Redirect to test case generation wizard or dedicated workspace

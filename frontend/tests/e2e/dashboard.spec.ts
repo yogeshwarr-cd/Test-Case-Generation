@@ -2,9 +2,13 @@ import { expect, test } from '@playwright/test';
 
 test.describe('Dashboard UI', () => {
   test.beforeEach(async ({ page }) => {
-    await page.addInitScript(() => localStorage.removeItem('ba-workspaces'));
+    await page.addInitScript(() => {
+      localStorage.removeItem('ba-workspaces');
+      localStorage.removeItem('testcase-project-history');
+      sessionStorage.clear();
+    });
     await page.goto('/dashboard');
-    await expect(page.getByRole('heading', { name: 'Projects', exact: true }), 'The dashboard UI did not load.').toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Recent Projects', exact: true }), 'The dashboard UI did not load.').toBeVisible();
   });
 
   test('empty state leads to the new project form', async ({ page }) => {
@@ -38,5 +42,17 @@ test.describe('Dashboard UI', () => {
     await expect(search).toBeEnabled();
     await search.fill('checkout');
     await expect(search).toHaveValue('checkout');
+  });
+
+  test('carries a new project name into the generator', async ({ page }) => {
+    await page.getByRole('button', { name: 'New Project', exact: true }).click();
+    await page.getByPlaceholder('e.g. Aegis Enterprise Portal').fill('Customer Billing Portal');
+    await page.getByRole('button', { name: /Start AI Generation/ }).click();
+
+    await expect(page).toHaveURL(/\/test-case-generation$/);
+    await expect(page.getByPlaceholder('e.g., E-Commerce Checkout & Payment Gateway Test Suite')).toHaveValue('Customer Billing Portal');
+
+    const savedProjects = await page.evaluate(() => JSON.parse(localStorage.getItem('testcase-project-history') ?? '[]'));
+    expect(savedProjects[0].name).toBe('Customer Billing Portal');
   });
 });

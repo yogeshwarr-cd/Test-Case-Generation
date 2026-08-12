@@ -40,6 +40,16 @@ const readProjects = (): TestProjectRecord[] => {
 };
 const saveProjects = (projects: TestProjectRecord[]) => localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
 
+export function loadActiveProjectName(): string {
+  try {
+    const active = JSON.parse(sessionStorage.getItem(WORKFLOW_STORAGE_KEY) ?? 'null') as { workflowId?: string } | null;
+    if (!active?.workflowId) return '';
+    return readProjects().find((project) => project.workflowId === active.workflowId)?.name ?? '';
+  } catch {
+    return '';
+  }
+}
+
 export interface SavedTestProjectArtifacts {
   generation?: ScriptGeneration;
   crawl?: CrawlAnalysis;
