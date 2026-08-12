@@ -18,7 +18,7 @@ import {
 import { testCaseApi } from '../services/testCaseApi';
 import { EntityId } from '../components/TraceabilityUI';
 import type { CrawlGenerationResponse, CrawlJob } from '../types';
-import { downloadFile, friendlyError } from '../utils';
+import { downloadFile, friendlyError, friendlyId, registerFriendlyIds } from '../utils';
 
 function downloadAllAsZip(result: CrawlGenerationResponse) {
   const combined = result.scripts
@@ -119,6 +119,12 @@ export function UrlCrawlerPage() {
 
   const script = result?.scripts[selectedScript];
   const partialResult = result?.crawl_status === 'crawl_incomplete';
+  useEffect(() => {
+    const scripts = result?.scripts ?? [];
+    registerFriendlyIds('script', scripts.map((script) => script.script_id));
+    registerFriendlyIds('scenario', scripts.map((script) => script.scenario_id));
+    registerFriendlyIds('case', scripts.map((script) => script.test_case_id));
+  }, [result]);
 
   return (
     <div className="space-y-6">
@@ -354,7 +360,7 @@ export function UrlCrawlerPage() {
                   <span className="mt-1 block truncate text-xs opacity-70">
                     {item.page_url ?? item.test_case_id}
                   </span>
-                  <span className="mt-2 block truncate font-mono text-[10px] opacity-80">Test Script ID · {item.script_id}</span>
+                  <span className="mt-2 block truncate font-mono text-[10px] opacity-80">Test Script ID · {friendlyId('script', item.script_id)}</span>
                 </button>
               ))}
             </aside>

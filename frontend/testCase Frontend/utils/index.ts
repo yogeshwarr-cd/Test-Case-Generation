@@ -1,5 +1,59 @@
 import type { ManualInputPayload, TestCase, WorkflowEvent } from '../types';
 
+type FriendlyIdKind = 'requirement' | 'userStory' | 'acceptanceCriteria' | 'scenario' | 'case' | 'script' | 'workflow' | 'execution';
+
+const friendlyIdPrefixes: Record<FriendlyIdKind, string> = {
+  requirement: 'REQ',
+  userStory: 'US',
+  acceptanceCriteria: 'AC',
+  scenario: 'TS',
+  case: 'TC',
+  script: 'PW',
+  workflow: 'WF',
+  execution: 'EX',
+};
+
+const displayWidths: Partial<Record<FriendlyIdKind, number>> = {
+  scenario: 3,
+  case: 3,
+  script: 3,
+};
+
+const friendlyIdRegistry: Record<FriendlyIdKind, Map<string, number>> = {
+  requirement: new Map(), userStory: new Map(), acceptanceCriteria: new Map(),
+  scenario: new Map(), case: new Map(), script: new Map(), workflow: new Map(), execution: new Map(),
+};
+
+/**
+ * Assigns a sequential label to each unique source ID in its UI entity context.
+ * This registry is presentation-only; source IDs are never changed or returned.
+ */
+export function friendlyId(kind: FriendlyIdKind, value?: string | null): string {
+  if (!value) return '';
+  const registry = friendlyIdRegistry[kind];
+  let sequence = registry.get(value);
+  if (sequence === undefined) {
+    sequence = registry.size + 1;
+    registry.set(value, sequence);
+  }
+  const width = displayWidths[kind];
+  return `${friendlyIdPrefixes[kind]}-${width ? String(sequence).padStart(width, '0') : sequence}`;
+}
+
+/** Registers an ordered collection before rendering it in multiple views. */
+export function registerFriendlyIds(kind: FriendlyIdKind, values: Array<string | null | undefined>): void {
+  values.forEach((value) => friendlyId(kind, value));
+}
+
+/** Test-only reset; production code has no path that mutates source IDs. */
+export function resetFriendlyIdRegistry(): void {
+  Object.values(friendlyIdRegistry).forEach((registry) => registry.clear());
+}
+
+export function friendlyIdList(kind: FriendlyIdKind, values?: string[] | null): string | undefined {
+  return values?.map((value) => friendlyId(kind, value)).join(', ');
+}
+
 export function cleanPayload(payload: ManualInputPayload): ManualInputPayload {
   const cleanList = (items: string[]) => items.map((item) => item.trim()).filter(Boolean);
   return {
@@ -62,7 +116,7 @@ export function testCaseText(testCase: TestCase): string {
     .map((step) => `${step.step_number}. ${step.action}\n   Expected: ${step.expected_result}`)
     .join('\n');
   return [
-    `${testCase.test_case_id}: ${testCase.title}`,
+    `${friendlyId('case', testCase.test_case_id)}: ${testCase.title}`,
     testCase.description,
     `Priority: ${testCase.priority ?? 'Not specified'}`,
     `Type: ${testCase.test_case_type ?? 'Not specified'}`,

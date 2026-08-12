@@ -1,4 +1,5 @@
 import { CheckCircle2, CircleAlert, CircleX, Clock3, MinusCircle } from 'lucide-react';
+import { friendlyId } from '../utils';
 
 type EntityKind = 'scenario' | 'case' | 'script' | 'workflow' | 'execution';
 
@@ -21,9 +22,9 @@ const tones: Record<EntityKind, string> = {
 export function EntityId({ kind, value, compact = false }: { kind: EntityKind; value?: string | null; compact?: boolean }) {
   if (!value) return null;
   return (
-    <span className={`inline-flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-1.5 ${tones[kind]}`} title={`${labels[kind]}: ${value}`}>
+    <span className={`inline-flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-1.5 ${tones[kind]}`} title={`${labels[kind]}: ${friendlyId(kind, value)}`}>
       <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider opacity-70">{compact ? labels[kind].replace('Test ', '').replace(' ID', '') : labels[kind]}</span>
-      <code className="truncate text-[11px] font-semibold">{value}</code>
+      <code className="truncate text-[11px] font-semibold">{friendlyId(kind, value)}</code>
     </span>
   );
 }

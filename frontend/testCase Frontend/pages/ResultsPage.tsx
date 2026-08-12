@@ -9,7 +9,7 @@ import { ConfidenceBadge, ConfidenceRing, EntityId, StatusBadge, TraceabilityCha
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { Scenario, TestCase, WorkflowResult } from '../types';
-import { confidencePercent, downloadFile, friendlyError, testCaseText } from '../utils';
+import { confidencePercent, downloadFile, friendlyError, friendlyId, registerFriendlyIds, testCaseText } from '../utils';
 
 type Tab = 'scenarios' | 'testCases' | 'validation' | 'traceability';
 
@@ -40,6 +40,13 @@ export function ResultsPage() {
   }, [data, setResult, workflowId]);
   const scenarios = data?.scenarios ?? [];
   const testCases = data?.test_cases ?? [];
+  useEffect(() => {
+    registerFriendlyIds('scenario', scenarios.map((scenario) => scenario.scenario_id));
+    registerFriendlyIds('case', testCases.map((testCase) => testCase.test_case_id));
+    registerFriendlyIds('requirement', [...scenarios.flatMap((scenario) => scenario.requirement_ids ?? []), ...testCases.flatMap((testCase) => testCase.requirement_ids ?? [])]);
+    registerFriendlyIds('userStory', scenarios.flatMap((scenario) => scenario.user_story_ids ?? []));
+    registerFriendlyIds('acceptanceCriteria', [...scenarios.flatMap((scenario) => scenario.acceptance_criteria_ids ?? []), ...testCases.flatMap((testCase) => testCase.acceptance_criteria_ids ?? [])]);
+  }, [scenarios, testCases]);
   const activeItems = tab === 'scenarios' ? scenarios : testCases;
   const pageCount = Math.max(1, Math.ceil(activeItems.length / pageSize));
   const visible = activeItems.slice((page - 1) * pageSize, page * pageSize);
@@ -220,7 +227,16 @@ function ValidationView({ data }: { data: WorkflowResult }) {
 }
 
 function TraceabilityView({ data }: { data: WorkflowResult }) {
-  const rows = data.test_cases.map((testCase) => ({ testCase, scenario: data.scenarios.find((scenario) => scenario.scenario_id === testCase.scenario_id) }));
+  const rows = data.test_cases.map((testCase) => {
+    const sourceScenario = data.scenarios.find((scenario) => scenario.scenario_id === testCase.scenario_id);
+    return {
+      testCase,
+      scenario: sourceScenario && {
+        ...sourceScenario,
+        user_story_ids: sourceScenario.user_story_ids?.map((id) => friendlyId('userStory', id)),
+      },
+    };
+  });
   return <section className="overflow-hidden rounded-2xl border border-border/80 bg-card shadow-sm"><div className="border-b border-border p-5"><h2 className="font-semibold">User Story → Test Scenario ID → Test Case ID</h2><p className="mt-1 text-sm text-muted-foreground">Every row preserves the identifiers returned by the generation workflow.</p></div><div className="overflow-x-auto"><table className="w-full min-w-[1000px] text-left text-sm"><thead className="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground"><tr><th className="p-4">User story</th><th className="p-4">Traceability chain</th><th className="p-4">Generated asset</th></tr></thead><tbody>{rows.map(({ testCase, scenario }, index) => <tr key={`${testCase.test_case_id}-${index}`} className="border-t border-border transition-colors hover:bg-muted/30"><td className="p-4">{scenario?.user_story_ids?.join(', ') || 'Unmapped'}</td><td className="p-4"><TraceabilityChain scenarioId={testCase.scenario_id} testCaseId={testCase.test_case_id} /></td><td className="p-4"><p className="font-medium">{testCase.title}</p><p className="mt-1 text-xs text-muted-foreground">{scenario?.title || 'Scenario record unavailable'}</p></td></tr>)}</tbody></table></div></section>;
 }
 
@@ -230,5 +246,15 @@ function itemConfidence(item: Scenario | TestCase, entityScores?: Record<string,
 }
 
 function Pills({ values }: { values: Array<string | undefined> }) { return <div className="flex flex-wrap gap-2">{values.filter(Boolean).map((value) => <span key={value} className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium capitalize">{value?.replaceAll('_', ' ')}</span>)}</div>; }
-function Info({ label, value }: { label: string; value?: string }) { return <div><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p><p className="mt-1 break-words">{value || 'Not provided'}</p></div>; }
+function Info({ label, value }: { label: string; value?: string }) {
+  const kind = label === 'Related requirements' || label === 'Requirement mapping'
+    ? 'requirement'
+    : label === 'Related user stories'
+      ? 'userStory'
+      : label === 'Acceptance criteria'
+        ? 'acceptanceCriteria'
+        : null;
+  const displayValue = kind && value ? value.split(', ').map((id) => friendlyId(kind, id)).join(', ') : value;
+  return <div><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p><p className="mt-1 break-words">{displayValue || 'Not provided'}</p></div>;
+}
 function MetricBar({ label, value }: { label: string; value: number }) { return <div className="rounded-lg bg-muted/60 p-3"><div className="flex justify-between text-xs"><span className="capitalize">{label}</span><span>{value}%</span></div><div className="mt-2 h-1.5 rounded-full bg-background"><div className="h-full rounded-full bg-primary" style={{ width: `${value}%` }} /></div></div>; }

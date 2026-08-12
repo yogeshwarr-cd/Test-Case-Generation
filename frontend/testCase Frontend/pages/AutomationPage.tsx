@@ -9,7 +9,7 @@ import { ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../com
 import { automationArtifactPdfUrl, automationArtifactUrl, testCaseApi } from '../services/testCaseApi';
 import { loadTestProjectArtifacts, saveAutomationActivity, saveTestProjectArtifacts, useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionJob, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
-import { downloadFile, friendlyError } from '../utils';
+import { downloadFile, friendlyError, friendlyId, registerFriendlyIds } from '../utils';
 
 export function AutomationPage() {
   const historyMode = useSearchParams().get('view') === 'history';
@@ -39,6 +39,13 @@ export function AutomationPage() {
   const executionRunning = Boolean(
     executionJob && ['queued', 'running'].includes(executionJob.status),
   );
+
+  useEffect(() => {
+    const scripts = generation?.scripts ?? [];
+    registerFriendlyIds('script', scripts.map((script) => script.script_id));
+    registerFriendlyIds('scenario', scripts.map((script) => script.scenario_id));
+    registerFriendlyIds('case', scripts.map((script) => script.test_case_id));
+  }, [generation]);
 
   useEffect(() => {
     if (workflowId) saveTestProjectArtifacts(workflowId, generation, report, comparison, crawl);
@@ -386,13 +393,13 @@ export function AutomationPage() {
       </section>}
 
       {crawl && (
-        <section className={`rounded-2xl border p-5 ${crawl.crawl_status === 'crawl_completed' ? 'border-green-500/30 bg-green-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
-          <div className={`flex items-center gap-2 font-semibold ${crawl.crawl_status === 'crawl_completed' ? 'text-green-600' : 'text-red-600'}`}>
-            {crawl.crawl_status === 'crawl_completed' ? <CheckCircle2 className="h-5 w-5" /> : <XCircle className="h-5 w-5" />}
+        <section className={`rounded-2xl border p-5 ${crawl.crawl_status === 'crawl_blocked' ? 'border-red-500/30 bg-red-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
+          <div className={`flex items-center gap-2 font-semibold ${crawl.crawl_status === 'crawl_blocked' ? 'text-red-600' : 'text-green-600'}`}>
+            {crawl.crawl_status === 'crawl_blocked' ? <XCircle className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
             {crawl.crawl_status.replaceAll('_', ' ')}
           </div>
           <p className="mt-2 text-sm text-muted-foreground">{crawl.pages_crawled} pages scanned · {crawl.elements_found} verified elements · {skippedPages.length} pages skipped</p>
-          {crawl.crawl_report.failure_reason && <p className="mt-3 text-sm font-medium text-red-600">{crawl.crawl_report.failure_reason}</p>}
+          {crawl.crawl_report.failure_reason && <p className="mt-3 text-sm font-medium text-amber-700">{crawl.crawl_report.failure_reason}</p>}
           {crawl.crawl_status === 'crawl_incomplete' && hasUsableCrawl && <p className="mt-3 text-sm font-medium text-amber-700">The crawl stopped early, but scripts can still be generated from the successfully scanned pages.</p>}
           {crawl.crawl_report.blocked_url && <p className="mt-1 break-all text-xs text-muted-foreground">Blocked URL: {crawl.crawl_report.blocked_url}</p>}
           {crawl.crawl_report.recommended_corrective_action && <p className="mt-2 text-sm text-muted-foreground">Recommended action: {crawl.crawl_report.recommended_corrective_action}</p>}
@@ -422,7 +429,7 @@ export function AutomationPage() {
                 <p className="mt-1 text-xs text-muted-foreground">{generation.scripts.length} scripts · Select one to view its code</p>
               </div>
               <div className="space-y-2 overflow-y-auto p-3">
-                {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-xl border p-3 text-left text-sm shadow-sm transition-all ${selectedScript === index ? 'border-primary/40 bg-primary/10 ring-1 ring-primary/20' : 'border-transparent hover:-translate-y-0.5 hover:border-border hover:bg-muted/60 hover:shadow-md'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{item.page_url || item.application_url}</span><span className="mt-2 block truncate font-mono text-[10px] text-primary">Script · {item.script_id}</span></button>)}
+                {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-xl border p-3 text-left text-sm shadow-sm transition-all ${selectedScript === index ? 'border-primary/40 bg-primary/10 ring-1 ring-primary/20' : 'border-transparent hover:-translate-y-0.5 hover:border-border hover:bg-muted/60 hover:shadow-md'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{item.page_url || item.application_url}</span><span className="mt-2 block truncate font-mono text-[10px] text-primary">Script · {friendlyId('script', item.script_id)}</span></button>)}
               </div>
             </aside>
             {script && <section className="min-w-0 rounded-2xl border border-border bg-card">
@@ -504,7 +511,7 @@ function ExecutionDashboard({ report, generation }: { report: ExecutionReport; g
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <Detail label="Execution status" value={result.status} />
             <Detail label="Duration" value={`${result.duration_seconds}s`} />
-            <Detail label="Test case / script ID" value={`${result.test_case_id} / ${result.script_id}`} />
+            <Detail label="Test case / script ID" value={`${friendlyId('case', result.test_case_id)} / ${friendlyId('script', result.script_id)}`} />
             <Detail label="Page URL" value={failure?.page_url} />
             <Detail label="Expected page URL" value={failure?.expected_page_url} />
             <Detail label="Page title" value={failure?.page_title} />
@@ -548,7 +555,7 @@ function DeveloperReportCard({ report }: { report: DeveloperExecutionReport }) {
     {report.classification && <ReportSection title="Evidence Classification"><div className="flex flex-wrap items-center gap-4"><ConfidenceRing value={report.confidence} label="Evidence confidence" size="sm" /><p className="font-semibold">{report.classification}{report.developer_issue_created ? ' · developer issue created' : ' · no developer issue created'}</p></div></ReportSection>}
     {failure && <ReportSection title="Failure Summary"><div className="grid gap-2 md:grid-cols-2">
       <p><strong>Category:</strong> {failure.failure_category}</p><p><strong>Stage:</strong> {failure.failure_stage ?? 'Unknown'}</p>
-      <p><strong>Test case:</strong> {failure.test_case_id} · {failure.test_case_title}</p><p><strong>Scenario:</strong> {String(failure.test_scenario?.title ?? failure.test_scenario?.scenario_id ?? 'Not mapped')}</p>
+      <p><strong>Test case:</strong> {friendlyId('case', failure.test_case_id)} · {failure.test_case_title}</p><p><strong>Scenario:</strong> {String(failure.test_scenario?.title ?? (friendlyId('scenario', String(failure.test_scenario?.scenario_id ?? '')) || 'Not mapped'))}</p>
       <p><strong>Failed step:</strong> {failure.failed_step ?? 'Unknown'}</p><p><strong>Action:</strong> {failure.failed_action ?? 'No executable action'}</p>
       <p><strong>Current URL:</strong> {failure.page_url ?? 'Unavailable'}</p><p><strong>Expected URL:</strong> {failure.expected_page_url ?? 'Unavailable'}</p>
       <p><strong>Page title:</strong> {failure.page_title ?? 'Unavailable'}</p><p><strong>HTTP status:</strong> {failure.http_response_status ?? 'Unavailable'}</p>
