@@ -536,6 +536,15 @@ export interface QaDiagnosticReport {
   automation_recommendations: Record<string, string[]>;
 }
 
+export interface PlaywrightAuthentication {
+  auth_mode?: 'no_auth' | 'credentials' | 'existing_session';
+  identifier?: string;
+  email?: string;
+  username?: string;
+  password?: string;
+  session_state?: unknown;
+}
+
 export interface ExecutionReport {
   execution_id: string;
   generation_id: string;
@@ -545,6 +554,7 @@ export interface ExecutionReport {
   passed_scripts: number;
   failed_scripts: number;
   skipped_scripts: number;
+  blocked_scripts?: number;
   rejected_scripts: number;
   execution_time_seconds: number;
   success_percentage: number;
@@ -553,7 +563,7 @@ export interface ExecutionReport {
     script_name: string;
     test_case_id: string;
     scenario_id: string;
-    status: 'passed' | 'failed' | 'skipped';
+    status: 'passed' | 'failed' | 'skipped' | 'blocked';
     duration_seconds: number;
     error_message?: string;
     failure?: FailureAnalysis;
@@ -574,6 +584,7 @@ export interface ExecutionReport {
     passed: number;
     failed: number;
     skipped: number;
+    blocked?: number;
     rejected: number;
     pass_rate: number;
     application_failures?: number;

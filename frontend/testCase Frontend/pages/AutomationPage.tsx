@@ -21,6 +21,10 @@ export function AutomationPage() {
   const [crawl, setCrawl] = useState<CrawlAnalysis | null>(null);
   const [report, setReport] = useState<ExecutionReport | null>(null);
   const [mode, setMode] = useState<'automated' | 'manual'>('automated');
+  const [testingScope, setTestingScope] = useState<'full_application' | 'specific_page'>('full_application');
+  const [targetPageUrl, setTargetPageUrl] = useState('');
+  const [authMode, setAuthMode] = useState<'no_auth' | 'credentials' | 'existing_session'>('no_auth');
+  const [sessionState, setSessionState] = useState('');
   const [executionProfile, setExecutionProfile] = useState<'fast' | 'standard' | 'diagnostic'>('fast');
   const [selectedScript, setSelectedScript] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -355,33 +359,163 @@ export function AutomationPage() {
       </div>
 
       {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-600">{error}</div>}
-      {!historyMode && <section className="rounded-2xl border border-border bg-card p-5">
-        <label htmlFor="application-url" className="text-sm font-semibold">Deployed application URL</label>
-        <div className="mt-2 flex flex-col gap-3 sm:flex-row">
-          <input id="application-url" type="url" value={applicationUrl} onChange={(event) => { setApplicationUrl(event.target.value); setCrawl(null); setGeneration(null); }} placeholder="https://app.example.com" className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" />
-          <button disabled={busy || (!crawlRunning && !applicationUrl.trim())} onClick={crawlApplication} className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${crawlRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-primary text-primary-foreground'}`}>{busy || crawlJob?.status === 'stopping' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {crawlRunning ? 'Stop Crawling' : 'Crawl Application'}</button>
-          <button disabled={busy || !hasUsableCrawl} onClick={generate} className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><Play className="h-4 w-4" /> Generate Test Scripts</button>
-        </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div><label htmlFor="playwright-email" className="text-sm font-semibold">Email <span className="font-normal text-muted-foreground">(optional)</span></label><input id="playwright-email" type="email" autoComplete="username" value={authenticationEmail} onChange={(event) => setAuthenticationEmail(event.target.value)} placeholder="sample@gmail.com" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" /></div>
-          <div><label htmlFor="playwright-password" className="text-sm font-semibold">Password <span className="font-normal text-muted-foreground">(optional)</span></label><input id="playwright-password" type="password" autoComplete="current-password" value={authenticationPassword} onChange={(event) => setAuthenticationPassword(event.target.value)} placeholder="12345678" className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary" /></div>
-        </div>
-        <div className="mt-4">
-          <label htmlFor="execution-profile" className="text-sm font-semibold">Execution profile</label>
-          <select id="execution-profile" value={executionProfile} onChange={(event) => setExecutionProfile(event.target.value as 'fast' | 'standard' | 'diagnostic')} className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary sm:max-w-md">
-            <option value="fast">Fast — functional checks and failure screenshots</option>
-            <option value="standard">Standard — visual checks and failure traces</option>
-            <option value="diagnostic">Diagnostic — complete trace and evidence collection</option>
-          </select>
-          <p className="mt-1 text-xs text-muted-foreground">Fast is recommended for routine runs. Use Diagnostic when investigating a failure.</p>
-        </div>
-      </section>}
+
+      {!historyMode && (
+        <section className="rounded-2xl border border-border bg-card p-5 space-y-5">
+
+          {/* Application URL + action buttons */}
+          <div>
+            <label htmlFor="application-url" className="text-sm font-semibold">Deployed application URL</label>
+            <div className="mt-2 flex flex-col gap-3 sm:flex-row">
+              <input
+                id="application-url"
+                type="url"
+                value={applicationUrl}
+                onChange={(event) => { setApplicationUrl(event.target.value); setCrawl(null); setGeneration(null); }}
+                placeholder="https://app.example.com"
+                className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+              <button
+                disabled={busy || (!crawlRunning && !applicationUrl.trim())}
+                onClick={crawlApplication}
+                className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${crawlRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-primary text-primary-foreground'}`}
+              >
+                {busy || crawlJob?.status === 'stopping' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                {crawlRunning ? 'Stop Crawling' : 'Crawl Application'}
+              </button>
+              <button
+                disabled={busy || !hasUsableCrawl}
+                onClick={generate}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                <Play className="h-4 w-4" /> Generate Test Scripts
+              </button>
+            </div>
+          </div>
+
+          {/* Testing Scope */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <label htmlFor="testing-scope-select" className="text-sm font-semibold">Testing Scope</label>
+              <select
+                id="testing-scope-select"
+                value={testingScope}
+                onChange={(e) => setTestingScope(e.target.value as 'full_application' | 'specific_page')}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              >
+                <option value="full_application">Full Application — discover &amp; crawl all sub-links</option>
+                <option value="specific_page">Specific Page — single target URL only</option>
+              </select>
+            </div>
+            {testingScope === 'specific_page' && (
+              <div className="space-y-1.5">
+                <label htmlFor="target-page-url" className="text-sm font-semibold">
+                  Target Page URL <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="target-page-url"
+                  type="url"
+                  placeholder="https://app.example.com/dashboard"
+                  value={targetPageUrl}
+                  onChange={(e) => setTargetPageUrl(e.target.value)}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <p className="text-xs text-muted-foreground">Only this page will be crawled — no link-following.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Authentication */}
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label htmlFor="auth-mode-select" className="text-sm font-semibold">Authentication</label>
+              <select
+                id="auth-mode-select"
+                value={authMode}
+                onChange={(e) => setAuthMode(e.target.value as 'no_auth' | 'credentials' | 'existing_session')}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary sm:max-w-sm"
+              >
+                <option value="no_auth">No Authentication Required</option>
+                <option value="credentials">Credentials — Identifier + Password</option>
+                <option value="existing_session">Existing Session State</option>
+              </select>
+            </div>
+            {authMode === 'credentials' && (
+              <div className="grid gap-4 rounded-xl border border-border bg-muted/20 p-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label htmlFor="playwright-email" className="text-xs font-semibold">
+                    Generic Identifier <span className="font-normal text-muted-foreground">(Email, Username, Employee ID…)</span>
+                  </label>
+                  <input
+                    id="playwright-email"
+                    type="text"
+                    autoComplete="username"
+                    placeholder="e.g. user@example.com or admin"
+                    value={authenticationEmail}
+                    onChange={(event) => setAuthenticationEmail(event.target.value)}
+                    className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="playwright-password" className="text-xs font-semibold">Password</label>
+                  <input
+                    id="playwright-password"
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="••••••••"
+                    value={authenticationPassword}
+                    onChange={(event) => setAuthenticationPassword(event.target.value)}
+                    className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                  />
+                </div>
+                <p className="col-span-full text-xs text-muted-foreground">
+                  Credentials are used only at runtime and are never stored in generated scripts or reports.
+                </p>
+              </div>
+            )}
+            {authMode === 'existing_session' && (
+              <div className="space-y-1.5 rounded-xl border border-border bg-muted/20 p-4">
+                <label htmlFor="auth-session" className="text-xs font-semibold">Session Storage State JSON</label>
+                <textarea
+                  id="auth-session"
+                  rows={3}
+                  placeholder='{"cookies": [...], "origins": [...]}'
+                  value={sessionState}
+                  onChange={(e) => setSessionState(e.target.value)}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs outline-none focus:border-primary"
+                />
+                <p className="text-xs text-muted-foreground">Paste a Playwright storage state JSON to reuse an existing authenticated session.</p>
+              </div>
+            )}
+            {authMode === 'no_auth' && (
+              <p className="text-xs text-muted-foreground">The application will be crawled without authentication. If a login wall is detected the crawl will be marked as blocked.</p>
+            )}
+          </div>
+
+          {/* Execution profile */}
+          <div className="space-y-1.5">
+            <label htmlFor="execution-profile" className="text-sm font-semibold">Execution profile</label>
+            <select
+              id="execution-profile"
+              value={executionProfile}
+              onChange={(event) => setExecutionProfile(event.target.value as 'fast' | 'standard' | 'diagnostic')}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary sm:max-w-md"
+            >
+              <option value="fast">Fast — functional checks and failure screenshots</option>
+              <option value="standard">Standard — visual checks and failure traces</option>
+              <option value="diagnostic">Diagnostic — complete trace and evidence collection</option>
+            </select>
+            <p className="text-xs text-muted-foreground">Fast is recommended for routine runs. Use Diagnostic when investigating a failure.</p>
+          </div>
+
+        </section>
+      )}
 
       {crawlRunning && <section className="rounded-2xl border border-primary/20 bg-primary/5 p-5">
         <div className="flex items-center gap-2 font-semibold text-primary"><LoaderCircle className="h-5 w-5 animate-spin" /> Crawling application</div>
         <p className="mt-2 text-sm text-muted-foreground">
-          {crawlJob?.progress?.pages_completed ?? 0} pages scanned ·{' '}
-          {crawlJob?.progress?.pages_remaining ?? 0} pages remaining ·{' '}
+          {crawlJob?.progress?.pages_completed ?? 0} pages scanned &middot;{' '}
+          {crawlJob?.progress?.pages_remaining ?? 0} pages remaining &middot;{' '}
           {crawlJob?.progress?.elapsed_seconds ?? 0}s elapsed
         </p>
         <p className="mt-1 text-xs text-muted-foreground">Click Stop Crawling to preserve scanned pages and generate scripts immediately.</p>

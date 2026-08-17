@@ -120,22 +120,125 @@ def _meaningful_words(value: str) -> set[str]:
 
 
 def _best_page_url(test_case: dict[str, Any], base_url: str, elements: list[dict[str, Any]]) -> str:
-    intent = _meaningful_words(" ".join([
-        str(test_case.get("title", "")),
-        str(test_case.get("description", "")),
-        " ".join(str(step.get("action", "")) for step in test_case.get("steps", [])),
-    ]))
+    page_url, _, _ = _select_ac_page_url(test_case, {}, base_url, elements)
+    return page_url or base_url
+
+
+def _select_ac_page_url(
+    test_case: dict[str, Any],
+    scenario: dict[str, Any],
+    base_url: str,
+    elements: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]], bool]:
+    """Select target page_url for a test case based on exact AC evidence.
+
+    Returns:
+        (page_url, page_elements, has_matching_evidence)
+        If no matching AC evidence exists, returns (None, [], False).
+    """
+    if not elements:
+        return base_url, [], True
+
+    # 1. Direct AC / Requirement ID tag match on elements
+    tc_ac_ids = set(str(x) for x in (test_case.get("acceptance_criteria_ids") or []))
+    sc_ac_ids = set(str(x) for x in (scenario.get("acceptance_criteria_ids") or []))
+    all_ac_ids = tc_ac_ids | sc_ac_ids
+
+    tc_req_ids = set(str(x) for x in (test_case.get("requirement_ids") or []))
+    sc_req_ids = set(str(x) for x in (scenario.get("requirement_ids") or []))
+    all_req_ids = tc_req_ids | sc_req_ids
+
+    if all_ac_ids or all_req_ids:
+        matching_pages: dict[str, list[dict[str, Any]]] = {}
+        for item in elements:
+            item_ac_ids = set(str(x) for x in (item.get("acceptance_criteria_ids") or item.get("ac_ids") or []))
+            if item.get("ac_id"):
+                item_ac_ids.add(str(item["ac_id"]))
+            item_req_ids = set(str(x) for x in (item.get("requirement_ids") or []))
+            if item.get("requirement_id"):
+                item_req_ids.add(str(item["requirement_id"]))
+
+            if (all_ac_ids & item_ac_ids) or (all_req_ids & item_req_ids):
+                p_url = _canonical_page_url(str(item.get("page_url") or base_url))
+                matching_pages.setdefault(p_url, []).append(item)
+
+        if matching_pages:
+            best_page = max(matching_pages.keys(), key=lambda p: len(matching_pages[p]))
+            p_elements = [
+                item for item in elements
+                if _canonical_page_url(str(item.get("page_url") or base_url)) == best_page
+            ]
+            return best_page, p_elements, True
+
+    # 2. Match AC / Test Case intent & step actions against candidate pages
     pages = {str(item.get("page_url")) for item in elements if item.get("page_url")}
     if not pages:
-        return base_url
-    def score(page_url: str) -> int:
-        page_words = _meaningful_words(urlsplit(page_url).path)
-        page_elements = " ".join(
-            " ".join(str(item.get(key) or "") for key in ("name", "label", "placeholder", "visible_text"))
-            for item in elements if item.get("page_url") == page_url
+        pages = {base_url}
+
+    steps_text = " ".join(str(step.get("action") or "") for step in test_case.get("steps", []))
+    full_text = " ".join([
+        str(test_case.get("title") or ""),
+        str(test_case.get("description") or ""),
+        str(scenario.get("title") or ""),
+        str(scenario.get("description") or ""),
+        steps_text,
+    ]).lower()
+
+    intent_words = _meaningful_words(full_text)
+    step_words = _meaningful_words(steps_text)
+
+    is_auth_ac = any(
+        w in full_text
+        for w in ("login", "register", "sign in", "signin", "signup", "sign up", "password reset", "credential")
+    )
+
+    page_scores: dict[str, tuple[int, list[dict[str, Any]]]] = {}
+    for p_url in pages:
+        path = urlsplit(p_url).path.lower()
+        is_auth_page = any(x in path for x in ("register", "login", "signin", "sign-in", "signup", "sign-up"))
+
+        # Disqualify auth/register pages for non-auth ACs
+        if is_auth_page and not is_auth_ac:
+            continue
+
+        p_elements = [
+            item for item in elements
+            if _canonical_page_url(str(item.get("page_url") or base_url)) == _canonical_page_url(p_url)
+        ]
+        element_text = " ".join(
+            " ".join(str(item.get(k) or "") for k in ("name", "label", "placeholder", "visible_text"))
+            for item in p_elements
         )
-        return len(intent & (_meaningful_words(page_elements) | page_words))
-    return max(pages, key=lambda page: (score(page), -len(page))) if pages else base_url
+        elem_words = _meaningful_words(element_text)
+
+        matching_action_words = step_words & elem_words
+        matching_intent_words = intent_words & elem_words
+
+        if matching_action_words or len(matching_intent_words) >= 2:
+            score = len(matching_action_words) * 3 + len(matching_intent_words)
+            page_scores[p_url] = (score, p_elements)
+
+    if page_scores:
+        best_url = max(page_scores.keys(), key=lambda p: page_scores[p][0])
+        best_elements = page_scores[best_url][1]
+        return best_url, best_elements, True
+
+    # Check base_url if non-auth AC
+    base_canonical = _canonical_page_url(base_url)
+    base_elements = [
+        item for item in elements
+        if _canonical_page_url(str(item.get("page_url") or base_url)) == base_canonical
+    ]
+    base_elem_text = " ".join(
+        " ".join(str(item.get(k) or "") for k in ("name", "label", "placeholder", "visible_text"))
+        for item in base_elements
+    )
+    base_words = _meaningful_words(base_elem_text)
+    if (step_words & base_words or (intent_words & base_words)) and not (is_auth_ac and "register" in base_canonical):
+        return base_url, base_elements, True
+
+    # No matching evidence directly associated with AC
+    return None, [], False
 
 
 def _stable_version(value: Any) -> str:
@@ -1098,7 +1201,12 @@ class AutomationService:
         )
 
     async def _discover(
-        self, url: str, *, cancel_event: Event | None = None
+        self,
+        url: str,
+        *,
+        cancel_event: Event | None = None,
+        authentication: Any = None,
+        testing_scope: str = "full_application",
     ) -> tuple[str | None, list[DiscoveredElement]]:
         if settings.app_mock_mode:
             self._crawl_reports[_canonical_page_url(url)] = {
@@ -1119,6 +1227,7 @@ class AutomationService:
                 "url": _canonical_page_url(url),
                 "page_limit": settings.automation_crawl_page_limit,
                 "depth_limit": settings.automation_crawl_depth_limit,
+                "testing_scope": testing_scope,
             },
         )
         cached_discovery = await cache.get_json(discovery_cache_key)
@@ -1169,7 +1278,32 @@ class AutomationService:
                     headless=settings.automation_crawl_headless,
                     args=["--disable-blink-features=AutomationControlled"],
                 )
+
+                storage_state = None
+                auth_mode = getattr(authentication, "auth_mode", None) if authentication else None
+                if isinstance(authentication, dict):
+                    auth_mode = authentication.get("auth_mode")
+
+                if authentication and auth_mode == "existing_session":
+                    sess_val = (
+                        getattr(authentication, "session_state", None)
+                        if hasattr(authentication, "session_state")
+                        else (authentication.get("session_state") if isinstance(authentication, dict) else None)
+                    )
+                    if isinstance(sess_val, str):
+                        try:
+                            sess_val = json.loads(sess_val)
+                        except Exception:
+                            sess_val = None
+                    if not sess_val:
+                        report["status"] = "crawl_blocked"
+                        report["failure_reason"] = "Authentication required: No valid session state provided."
+                        report["recommended_corrective_action"] = "Provide a valid session state object or JSON string before retrying."
+                        return None, []
+                    storage_state = sess_val
+
                 context = await browser.new_context(
+                    storage_state=storage_state,
                     user_agent=(
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -1194,6 +1328,36 @@ class AutomationService:
                     ),
                 )
                 origin = urlsplit(url)
+
+                # Verify or perform authentication if required
+                if authentication and (auth_mode == "credentials" or getattr(authentication, "get_identifier", None) or (isinstance(authentication, dict) and authentication.get("password"))):
+                    try:
+                        await self._navigate_with_retries(page, url)
+                        auth_evidence = await self._authenticate_if_required(page, authentication, url)
+                        if auth_evidence.get("required") and not auth_evidence.get("succeeded"):
+                            report["status"] = "crawl_blocked"
+                            report["failure_reason"] = f"Authentication verification failed for URL {url}."
+                            report["recommended_corrective_action"] = "Check credentials and application login form, then retry."
+                            return None, []
+                        report["auth_state"] = await context.storage_state()
+                    except PlaywrightAuthenticationError as auth_err:
+                        report["status"] = "crawl_blocked"
+                        report["failure_reason"] = f"Authentication Failed: {auth_err}"
+                        report["recommended_corrective_action"] = "Check generic identifier and password, then retry."
+                        return None, []
+                elif authentication and auth_mode == "existing_session":
+                    try:
+                        await self._navigate_with_retries(page, url)
+                        password_elem = page.locator("input[type='password']").first
+                        if await password_elem.count() and await password_elem.is_visible():
+                            report["status"] = "crawl_blocked"
+                            report["failure_reason"] = "Authentication Failed: Provided session state is expired or invalid (login page displayed)."
+                            report["recommended_corrective_action"] = "Provide a fresh authenticated session state."
+                            return None, []
+                    except Exception as sess_err:
+                        report["status"] = "crawl_blocked"
+                        report["failure_reason"] = f"Authentication Failed: Existing session verification failed: {sess_err}"
+                        return None, []
 
                 async def explore_control(
                     source_url: str, control: dict[str, Any]
@@ -1256,17 +1420,20 @@ class AutomationService:
                     finally:
                         await worker_page.close()
 
-                seacrawl_urls = await self.seacrawl.discover_urls(
-                    url=url,
-                    page_limit=settings.automation_crawl_page_limit,
-                    depth_limit=settings.automation_crawl_depth_limit,
-                )
-                verified_candidates = [
-                    candidate
-                    for candidate in seacrawl_urls
-                    if urlsplit(candidate).scheme in {"http", "https"}
-                    and urlsplit(candidate).netloc == origin.netloc
-                ]
+                if testing_scope == "specific_page":
+                    verified_candidates = []
+                else:
+                    seacrawl_urls = await self.seacrawl.discover_urls(
+                        url=url,
+                        page_limit=settings.automation_crawl_page_limit,
+                        depth_limit=settings.automation_crawl_depth_limit,
+                    )
+                    verified_candidates = [
+                        candidate
+                        for candidate in seacrawl_urls
+                        if urlsplit(candidate).scheme in {"http", "https"}
+                        and urlsplit(candidate).netloc == origin.netloc
+                    ]
                 pending = [(url, 0), *[(candidate, 1) for candidate in verified_candidates]]
                 visited: set[str] = set()
                 queued: set[str] = {_canonical_page_url(candidate) for candidate, _ in pending}
@@ -2028,12 +2195,26 @@ class AutomationService:
                     for step in test_case.get("steps", [])
                 ],
             ]).lower()
-            page_url = _best_page_url(test_case, url, element_dicts)
-            page_elements = [
-                item for item in element_dicts
-                if _canonical_page_url(str(item.get("page_url") or url)) == page_url
-            ]
-            evidence_elements = page_elements or element_dicts
+            scenario_obj = scenarios_by_id.get(str(test_case.get("scenario_id")), {})
+            page_url, evidence_elements, has_matching_evidence = _select_ac_page_url(
+                test_case=test_case,
+                scenario=scenario_obj,
+                base_url=url,
+                elements=element_dicts,
+            )
+
+            if not has_matching_evidence:
+                unsupported_requirements.append({
+                    "test_case_id": str(test_case.get("test_case_id")),
+                    "scenario_id": str(test_case.get("scenario_id")),
+                    "classification": "blocked",
+                    "reason": (
+                        f"No matching crawl evidence directly associated with acceptance criteria "
+                        f"was found for test case '{test_case.get('title')}'. Marked as BLOCKED."
+                    ),
+                })
+                skipped_count += 1
+                continue
             dependency = next(
                 (reason for term, reason in configuration_terms.items() if term in test_text),
                 None,
@@ -2242,7 +2423,6 @@ class AutomationService:
             settings.redis_script_ttl_seconds,
         )
         return response
-
     async def analyze_application(
         self,
         request: CrawlApplicationRequest,
@@ -2263,26 +2443,32 @@ class AutomationService:
             raise AutomationError("Application crawling requires a completed workflow.")
         url = str(request.application_url)
         await self._validate_url(url)
+        testing_scope = request.testing_scope
+        page_limit = 1 if testing_scope == "specific_page" else request.page_limit
+        depth_limit = 0 if testing_scope == "specific_page" else request.depth_limit
         original_limits = (
             settings.automation_crawl_page_limit,
             settings.automation_crawl_depth_limit,
             settings.automation_crawl_timeout_seconds,
             settings.automation_crawl_repeated_state_limit,
         )
-        settings.automation_crawl_page_limit = request.page_limit
-        settings.automation_crawl_depth_limit = request.depth_limit
+        settings.automation_crawl_page_limit = page_limit
+        settings.automation_crawl_depth_limit = depth_limit
         settings.automation_crawl_timeout_seconds = request.max_execution_time_seconds
         settings.automation_crawl_repeated_state_limit = request.repeated_state_limit
         title: str | None = None
         elements: list[DiscoveredElement] = []
         try:
             try:
-                if cancel_event is None:
-                    title, elements = await self._discover(url)
-                else:
+                try:
                     title, elements = await self._discover(
-                        url, cancel_event=cancel_event
+                        url,
+                        cancel_event=cancel_event,
+                        authentication=request.authentication,
+                        testing_scope=testing_scope,
                     )
+                except TypeError:
+                    title, elements = await self._discover(url)
                 report = self._completed_crawl_report(url, title, elements)
             except AutomationError:
                 report = self._crawl_reports.get(_canonical_page_url(url), {})
@@ -2389,10 +2575,11 @@ class AutomationService:
             )
 
         url = str(request.url)
-        page_limit = request.page_limit
-        depth_limit = request.depth_limit
+        testing_scope = request.testing_scope
+        page_limit = 1 if testing_scope == "specific_page" else request.page_limit
+        depth_limit = 0 if testing_scope == "specific_page" else request.depth_limit
 
-        logger.info("crawl_and_generate() start url=%s page_limit=%d depth_limit=%d", url, page_limit, depth_limit)
+        logger.info("crawl_and_generate() start url=%s page_limit=%d depth_limit=%d testing_scope=%s", url, page_limit, depth_limit, testing_scope)
 
         await self._validate_url(url)
 
@@ -2409,12 +2596,15 @@ class AutomationService:
         elements: list[DiscoveredElement] = []
         try:
             try:
-                if cancel_event is None:
-                    title, elements = await self._discover(url)
-                else:
+                try:
                     title, elements = await self._discover(
-                        url, cancel_event=cancel_event
+                        url,
+                        cancel_event=cancel_event,
+                        authentication=request.authentication,
+                        testing_scope=testing_scope,
                     )
+                except TypeError:
+                    title, elements = await self._discover(url)
                 crawl_report = self._completed_crawl_report(url, title, elements)
             except AutomationError:
                 crawl_report = self._crawl_reports.get(_canonical_page_url(url), {})
@@ -2452,10 +2642,10 @@ class AutomationService:
         directory = self.artifact_root / crawl_id
         directory.mkdir(parents=True, exist_ok=True)
 
-        element_dicts = [element.model_dump(mode="json") for element in elements]
+        element_dicts = [item.model_dump(mode="json") for item in elements]
         application_map = _application_map(url, title, element_dicts)
         application_map.update({
-            "crawl_status": crawl_report["status"],
+            "crawl_status": crawl_report.get("status", "crawl_incomplete"),
             "pages": crawl_report.get("page_inventory") or application_map["pages"],
             "relationships": (
                 crawl_report.get("navigation_relationships")
@@ -2466,7 +2656,23 @@ class AutomationService:
             "crawl_events": crawl_report.get("events", []),
         })
         if crawl_report.get("status") == "crawl_blocked":
-            raise AutomationError(_crawl_failure_message(crawl_report))
+            response = CrawlGenerationResponse(
+                crawl_id=crawl_id,
+                url=url,
+                page_title=title,
+                pages_crawled=0,
+                elements_found=0,
+                crawl_status="crawl_blocked",
+                crawl_report=crawl_report,
+                scripts=[],
+                discovered_elements=[],
+                application_map=application_map,
+            )
+            (directory / "crawl.json").write_text(
+                json.dumps(response.model_dump(mode="json"), default=str, indent=2),
+                encoding="utf-8",
+            )
+            return response
         if crawl_report.get("status") == "crawl_incomplete":
             crawl_report["events"].append("partial_script_generation_started")
         crawl_report["events"].append("script_generation_started")
@@ -3321,7 +3527,7 @@ class AutomationService:
     async def _authenticate_if_required(
         self,
         page: Any,
-        credentials: dict[str, str] | None,
+        credentials: Any,
         protected_url: str,
     ) -> dict[str, Any]:
         evidence = {
@@ -3331,6 +3537,26 @@ class AutomationService:
             "redirected_url": page.url,
             "expected_protected_url": protected_url,
         }
+        auth_mode = getattr(credentials, "auth_mode", None) if credentials else None
+        if isinstance(credentials, dict):
+            auth_mode = credentials.get("auth_mode", auth_mode)
+
+        ident_val = None
+        pass_val = None
+        if credentials:
+            if hasattr(credentials, "get_identifier") and credentials.get_identifier:
+                ident_val = credentials.get_identifier
+            elif isinstance(credentials, dict):
+                ident_val = credentials.get("identifier") or credentials.get("email") or credentials.get("username")
+            if hasattr(credentials, "password") and credentials.password:
+                pass_val = credentials.password.get_secret_value() if hasattr(credentials.password, "get_secret_value") else str(credentials.password)
+            elif isinstance(credentials, dict):
+                p = credentials.get("password")
+                pass_val = p.get_secret_value() if hasattr(p, "get_secret_value") else (str(p) if p else None)
+
+        if auth_mode == "no_auth" or not credentials or (auth_mode != "credentials" and not (ident_val and pass_val)):
+            return evidence
+
         password = page.locator("input[type='password']").first
         login_url = bool(
             re.search(r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", page.url, re.I)
@@ -3341,18 +3567,20 @@ class AutomationService:
         evidence["required"] = login_url or password_visible
         if not evidence["required"]:
             return evidence
-        if not credentials:
+
+        if not ident_val or not pass_val:
             raise PlaywrightAuthenticationError(
                 f"Authentication Failed: {protected_url} redirected to {page.url}, "
-                "but Email and Password were not provided."
+                "but Identifier and Password were not provided."
             )
         evidence["attempted"] = True
 
         email_candidates = [
-            page.get_by_label(re.compile(r"email|username", re.I)),
-            page.get_by_placeholder(re.compile(r"email|username", re.I)),
+            page.get_by_label(re.compile(r"email|username|identifier|user|login|id", re.I)),
+            page.get_by_placeholder(re.compile(r"email|username|identifier|user|login|id", re.I)),
             page.locator("input[type='email']"),
-            page.locator("input[name='email'],input[name='username']"),
+            page.locator("input[name='email'],input[name='username'],input[name='identifier'],input[name='user'],input[name='login']"),
+            page.locator("input[type='text']"),
         ]
         email = None
         for candidate in email_candidates:
@@ -3362,14 +3590,14 @@ class AutomationService:
         if email is None or not password_visible:
             raise PlaywrightAuthenticationError(
                 "Authentication Failed: the login page did not expose visible "
-                "email/username and password fields."
+                "identifier and password fields."
             )
         await email.fill(
-            credentials["email"],
+            str(ident_val),
             timeout=int(settings.automation_action_timeout_seconds * 1000),
         )
         await password.fill(
-            credentials["password"],
+            str(pass_val),
             timeout=int(settings.automation_action_timeout_seconds * 1000),
         )
         submit_candidates = [
@@ -3815,6 +4043,21 @@ class AutomationService:
                 item.model_dump(mode="json") for item in response.discovered_elements
             ]
             for script in response.scripts:
+                if script.lifecycle_status == "Blocked":
+                    results.append(
+                        ScriptExecutionResult(
+                            script_id=script.script_id,
+                            script_name=script.name,
+                            test_case_id=script.test_case_id,
+                            scenario_id=script.scenario_id,
+                            status="blocked",
+                            duration_seconds=0.0,
+                            error_message="BLOCKED: No matching crawl evidence directly associated with acceptance criteria was found.",
+                            traceability=self._traceability(script),
+                        )
+                    )
+                    continue
+
                 disc_dicts = [
                     dict(item)
                     for item in (script.page_elements or all_discovered)
@@ -4941,6 +5184,7 @@ class AutomationService:
         passed = sum(result.status == "passed" for result in results)
         failed = sum(result.status == "failed" for result in results)
         skipped = sum(result.status == "skipped" for result in results)
+        blocked = sum(result.status == "blocked" for result in results)
         workflow = generation.get("workflow", {})
         for result in results:
             if result.status == "failed" and result.failure:
@@ -5343,6 +5587,7 @@ class AutomationService:
             passed_scripts=passed,
             failed_scripts=failed,
             skipped_scripts=skipped,
+            blocked_scripts=blocked,
             rejected_scripts=rejected,
             execution_time_seconds=round(duration, 3),
             success_percentage=round((passed / len(results) * 100) if results else 0, 2),
@@ -5354,6 +5599,7 @@ class AutomationService:
                 "passed": passed,
                 "failed": failed,
                 "skipped": skipped,
+                "blocked": blocked,
                 "rejected": rejected,
                 "pass_rate": round((passed / overall_total * 100) if overall_total else 0, 2),
                 "pages_discovered": len(

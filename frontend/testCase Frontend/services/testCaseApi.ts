@@ -92,6 +92,8 @@ export const testCaseApi = {
     page_limit?: number;
     depth_limit?: number;
     max_execution_time_seconds?: number;
+    testing_scope?: 'full_application' | 'specific_page';
+    authentication?: any;
   }) {
     return request<CrawlGenerationResponse>('/api/v1/automation/url-crawl', {
       method: 'POST',
@@ -102,24 +104,26 @@ export const testCaseApi = {
   executeScripts(
     generationId: string,
     mode: 'automated' | 'manual',
-    authentication?: { email: string; password: string },
+    authentication?: any,
     executionProfile: 'fast' | 'standard' | 'diagnostic' = 'fast',
+    testingScope: 'full_application' | 'specific_page' = 'full_application',
   ) {
     return request<ExecutionReport>('/api/v1/automation/executions', {
       method: 'POST',
-      body: JSON.stringify({ generation_id: generationId, mode, authentication, execution_profile: executionProfile }),
+      body: JSON.stringify({ generation_id: generationId, mode, authentication, execution_profile: executionProfile, testing_scope: testingScope }),
     }, 1800000);
   },
 
   startExecutionJob(
     generationId: string,
     mode: 'automated' | 'manual',
-    authentication?: { email: string; password: string },
+    authentication?: any,
     executionProfile: 'fast' | 'standard' | 'diagnostic' = 'fast',
+    testingScope: 'full_application' | 'specific_page' = 'full_application',
   ) {
     return request<ExecutionJob>('/api/v1/automation/executions/jobs', {
       method: 'POST',
-      body: JSON.stringify({ generation_id: generationId, mode, authentication, execution_profile: executionProfile }),
+      body: JSON.stringify({ generation_id: generationId, mode, authentication, execution_profile: executionProfile, testing_scope: testingScope }),
     });
   },
 
@@ -127,12 +131,16 @@ export const testCaseApi = {
     return request<ExecutionJob>(`/api/v1/automation/executions/jobs/${jobId}`);
   },
 
-  startWorkflowCrawlJob(workflowId: string, applicationUrl: string) {
+  startWorkflowCrawlJob(workflowId: string, applicationUrl: string, options?: {
+    testing_scope?: 'full_application' | 'specific_page';
+    authentication?: any;
+  }) {
     return request<WorkflowCrawlJob>('/api/v1/automation/scripts/crawl/jobs', {
       method: 'POST',
       body: JSON.stringify({
         workflow_id: workflowId,
         application_url: applicationUrl,
+        ...options,
       }),
     });
   },
@@ -152,6 +160,8 @@ export const testCaseApi = {
     page_limit?: number;
     depth_limit?: number;
     max_execution_time_seconds?: number;
+    testing_scope?: 'full_application' | 'specific_page';
+    authentication?: any;
   }) {
     return request<CrawlJob>('/api/v1/automation/url-crawl/jobs', {
       method: 'POST',

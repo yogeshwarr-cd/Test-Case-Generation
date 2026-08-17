@@ -20,6 +20,9 @@ class CrawlApplicationRequest(BaseModel):
     depth_limit: int = Field(default=15, ge=1, le=20)
     max_execution_time_seconds: int = Field(default=300, ge=30, le=3600)
     repeated_state_limit: int = Field(default=5, ge=1, le=20)
+    testing_scope: Literal["full_application", "specific_page"] = "full_application"
+    authentication: PlaywrightAuthentication | None = None
+
 
 
 class CrawlAnalysisResponse(BaseModel):
@@ -113,13 +116,29 @@ class ScriptGenerationResponse(BaseModel):
 
 
 class PlaywrightAuthentication(BaseModel):
+    auth_mode: Literal["no_auth", "credentials", "existing_session"] = "no_auth"
+    identifier: str | None = None
     email: str | None = None
+    username: str | None = None
     password: SecretStr | None = None
+    session_state: dict[str, Any] | str | None = None
+
+    @property
+    def get_identifier(self) -> str | None:
+        return self.identifier or self.email or self.username
 
     @model_validator(mode="after")
     def validate_pair(self) -> "PlaywrightAuthentication":
-        if bool(self.email) != bool(self.password):
-            raise ValueError("Both email and password are required.")
+        ident = self.get_identifier
+        pass_val = self.password.get_secret_value() if self.password else None
+        if self.auth_mode == "credentials" or ident or pass_val:
+            if not ident or not pass_val:
+                raise ValueError("Both identifier (email/username/etc.) and password are required for credentials authentication.")
+            self.auth_mode = "credentials"
+        elif self.auth_mode == "existing_session" or self.session_state is not None:
+            if self.session_state is None:
+                raise ValueError("session_state is required for existing_session authentication.")
+            self.auth_mode = "existing_session"
         return self
 
 
@@ -127,6 +146,7 @@ class ExecuteScriptsRequest(BaseModel):
     generation_id: str
     mode: Literal["automated", "manual"] = "automated"
     execution_profile: Literal["fast", "standard", "diagnostic"] = "standard"
+    testing_scope: Literal["full_application", "specific_page"] = "full_application"
     authentication: PlaywrightAuthentication | None = None
 
 
@@ -306,7 +326,7 @@ class ScriptExecutionResult(BaseModel):
     script_name: str
     test_case_id: str
     scenario_id: str
-    status: Literal["passed", "failed", "skipped"]
+    status: Literal["passed", "failed", "skipped", "blocked"]
     duration_seconds: float
     error_message: str | None = None
     failure: FailureAnalysis | None = None
@@ -322,6 +342,7 @@ class ExecutionReport(BaseModel):
     passed_scripts: int
     failed_scripts: int
     skipped_scripts: int
+    blocked_scripts: int = 0
     rejected_scripts: int = 0
     execution_time_seconds: float
     success_percentage: float
@@ -384,6 +405,8 @@ class CrawlAndGenerateRequest(BaseModel):
     depth_limit: int = Field(default=15, ge=1, le=20)
     max_execution_time_seconds: int = Field(default=300, ge=30, le=3600)
     repeated_state_limit: int = Field(default=5, ge=1, le=20)
+    testing_scope: Literal["full_application", "specific_page"] = "full_application"
+    authentication: PlaywrightAuthentication | None = None
 
 
 class CrawlGenerationResponse(BaseModel):

@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useState } from 'react';
 import {
@@ -82,6 +82,12 @@ export function UrlCrawlerPage() {
     };
   }, [crawlJob?.job_id, isCrawling]);
 
+  const [testingScope, setTestingScope] = useState<'full_application' | 'specific_page'>('full_application');
+  const [authMode, setAuthMode] = useState<'no_auth' | 'credentials' | 'existing_session'>('no_auth');
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
+  const [sessionState, setSessionState] = useState('');
+
   const handleCrawl = async (event: React.FormEvent) => {
     event.preventDefault();
     if (isCrawling && crawlJob) {
@@ -103,11 +109,30 @@ export function UrlCrawlerPage() {
     setError('');
     setResult(null);
     setSelectedScript(0);
+
+    let authPayload: any = undefined;
+    if (authMode === 'credentials') {
+      authPayload = {
+        auth_mode: 'credentials',
+        identifier: identifier.trim() || undefined,
+        password: password || undefined,
+      };
+    } else if (authMode === 'existing_session') {
+      let parsedSess: any = sessionState;
+      try { parsedSess = JSON.parse(sessionState); } catch {}
+      authPayload = {
+        auth_mode: 'existing_session',
+        session_state: parsedSess,
+      };
+    }
+
     try {
       const job = await testCaseApi.startCrawlJob(trimmed, {
         page_limit: pageLimit,
         depth_limit: depthLimit,
         max_execution_time_seconds: maxExecutionTime,
+        testing_scope: testingScope,
+        authentication: authPayload,
       });
       setCrawlJob(job);
     } catch (err) {
@@ -196,6 +221,85 @@ export function UrlCrawlerPage() {
               </button>
             </div>
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label htmlFor="testing-scope-select" className="text-sm font-semibold">
+                Testing Scope
+              </label>
+              <select
+                id="testing-scope-select"
+                value={testingScope}
+                onChange={(e) => setTestingScope(e.target.value as any)}
+                className="w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus:border-primary transition"
+              >
+                <option value="full_application">Full Application (Discover & Crawl Sub-links)</option>
+                <option value="specific_page">Specific Page Only (Single Target URL)</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="auth-mode-select" className="text-sm font-semibold">
+                Authentication Option
+              </label>
+              <select
+                id="auth-mode-select"
+                value={authMode}
+                onChange={(e) => setAuthMode(e.target.value as any)}
+                className="w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none focus:border-primary transition"
+              >
+                <option value="no_auth">No Authentication Required</option>
+                <option value="credentials">Credentials (Identifier + Password)</option>
+                <option value="existing_session">Existing Session State</option>
+              </select>
+            </div>
+          </div>
+
+          {authMode === 'credentials' && (
+            <div className="grid gap-4 rounded-xl border border-border bg-muted/20 p-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label htmlFor="auth-identifier" className="text-xs font-semibold">
+                  Generic Identifier <span className="text-muted-foreground font-normal">(Email, Username, Employee ID, etc.)</span>
+                </label>
+                <input
+                  id="auth-identifier"
+                  type="text"
+                  placeholder="e.g. user@example.com or admin"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary transition"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="auth-password" className="text-xs font-semibold">
+                  Password
+                </label>
+                <input
+                  id="auth-password"
+                  type="password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary transition"
+                />
+              </div>
+            </div>
+          )}
+
+          {authMode === 'existing_session' && (
+            <div className="space-y-1.5 rounded-xl border border-border bg-muted/20 p-4">
+              <label htmlFor="auth-session" className="text-xs font-semibold">
+                Session Storage State JSON
+              </label>
+              <textarea
+                id="auth-session"
+                rows={3}
+                placeholder='{"cookies": [...], "origins": [...]}'
+                value={sessionState}
+                onChange={(e) => setSessionState(e.target.value)}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs outline-none focus:border-primary transition"
+              />
+            </div>
+          )}
 
           <button
             type="button"
