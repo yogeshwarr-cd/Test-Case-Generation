@@ -145,10 +145,12 @@ export function UrlCrawlerPage() {
   const script = result?.scripts[selectedScript];
   const partialResult = result?.crawl_status === 'crawl_incomplete';
   useEffect(() => {
+    const scope = result?.crawl_id || 'crawler';
+    setActiveProjectId(scope);
     const scripts = result?.scripts ?? [];
-    registerFriendlyIds('script', scripts.map((script) => script.script_id));
-    registerFriendlyIds('scenario', scripts.map((script) => script.scenario_id));
-    registerFriendlyIds('case', scripts.map((script) => script.test_case_id));
+    registerFriendlyIds('script', scripts.map((script) => script.script_id), scope);
+    registerFriendlyIds('scenario', scripts.map((script) => script.scenario_id), scope);
+    registerFriendlyIds('case', scripts.map((script) => script.test_case_id), scope);
   }, [result]);
 
   return (

@@ -4,6 +4,8 @@ import { create } from 'zustand';
 import type { CrawlAnalysis, ExecutionReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowEvent, WorkflowResult } from '../types';
 import { WORKFLOW_SNAPSHOT_KEY, WORKFLOW_STORAGE_KEY } from '../constants';
 
+import { setActiveProjectId } from '../utils';
+
 interface WorkflowStore {
   workflowId: string | null;
   projectId: string | null;
@@ -111,6 +113,7 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
   projects: [],
   setWorkflow: (workflowId, projectId = null, projectName?: string) => {
     sessionStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify({ workflowId, projectId }));
+    setActiveProjectId(workflowId);
     const projects = readProjects();
     const existingIndex = projects.findIndex((item) => item.workflowId === workflowId);
     if (existingIndex < 0) {
@@ -173,10 +176,13 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
       } | null;
       const snapshot = JSON.parse(sessionStorage.getItem(WORKFLOW_SNAPSHOT_KEY) ?? 'null') as WorkflowEvent | null;
       const projects = readProjects();
-      if (active?.workflowId && !projects.some((item) => item.workflowId === active.workflowId)) {
-        const now = new Date().toISOString();
-        projects.unshift({ workflowId: active.workflowId, projectId: active.projectId ?? null, name: `Test project ${String(active.projectId || active.workflowId).slice(0, 8)}`, status: snapshot?.status || 'processing', createdAt: now, updatedAt: now, scenarioCount: 0, testCaseCount: 0, scriptCount: 0 });
-        saveProjects(projects);
+      if (active?.workflowId) {
+        setActiveProjectId(active.workflowId);
+        if (!projects.some((item) => item.workflowId === active.workflowId)) {
+          const now = new Date().toISOString();
+          projects.unshift({ workflowId: active.workflowId, projectId: active.projectId ?? null, name: `Test project ${String(active.projectId || active.workflowId).slice(0, 8)}`, status: snapshot?.status || 'processing', createdAt: now, updatedAt: now, scenarioCount: 0, testCaseCount: 0, scriptCount: 0 });
+          saveProjects(projects);
+        }
       }
       set({ workflowId: active?.workflowId ?? null, projectId: active?.projectId ?? null, snapshot, projects });
     } catch {
@@ -187,6 +193,7 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
   clear: () => {
     sessionStorage.removeItem(WORKFLOW_STORAGE_KEY);
     sessionStorage.removeItem(WORKFLOW_SNAPSHOT_KEY);
+    setActiveProjectId('default');
     set({ workflowId: null, projectId: null, snapshot: null, result: null });
   },
 }));

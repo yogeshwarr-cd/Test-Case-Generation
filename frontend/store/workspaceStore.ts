@@ -42,6 +42,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       removeWorkspace: (id) =>
         set((state) => ({ workspaces: state.workspaces.filter((w) => w.id !== id) })),
     }),
-    { name: 'ba-workspaces' }
+    { name: 'testcase-workspaces' }
   )
 );

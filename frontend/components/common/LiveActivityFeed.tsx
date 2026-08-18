@@ -2,9 +2,16 @@
 
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, CheckCircle2, XCircle, Bot } from 'lucide-react';
-import { ProcessLog } from '@/services/mockData';
 import { cn } from '@/lib/utils';
+import { Loader2, CheckCircle2, XCircle, Bot } from 'lucide-react';
+
+export interface ProcessLog {
+  id: string;
+  stage: string;
+  message: string;
+  status: 'in-progress' | 'success' | 'failed';
+  timestamp: string;
+}
 
 interface LiveActivityFeedProps {
   logs: ProcessLog[];

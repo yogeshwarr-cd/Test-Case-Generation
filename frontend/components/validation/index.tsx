@@ -1,1 +1,0 @@
-export const ValidationPlaceholder = () => null;

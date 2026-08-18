@@ -9,7 +9,7 @@ import { ConfidenceBadge, ConfidenceRing, EntityId, StatusBadge, TraceabilityCha
 import { testCaseApi } from '../services/testCaseApi';
 import { useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { Scenario, TestCase, WorkflowResult } from '../types';
-import { confidencePercent, downloadFile, friendlyError, friendlyId, registerFriendlyIds, testCaseText } from '../utils';
+import { confidencePercent, downloadFile, friendlyError, friendlyId, registerFriendlyIds, setActiveProjectId, testCaseText } from '../utils';
 
 type Tab = 'scenarios' | 'testCases' | 'validation' | 'traceability';
 
@@ -41,12 +41,15 @@ export function ResultsPage() {
   const scenarios = data?.scenarios ?? [];
   const testCases = data?.test_cases ?? [];
   useEffect(() => {
-    registerFriendlyIds('scenario', scenarios.map((scenario) => scenario.scenario_id));
-    registerFriendlyIds('case', testCases.map((testCase) => testCase.test_case_id));
-    registerFriendlyIds('requirement', [...scenarios.flatMap((scenario) => scenario.requirement_ids ?? []), ...testCases.flatMap((testCase) => testCase.requirement_ids ?? [])]);
-    registerFriendlyIds('userStory', scenarios.flatMap((scenario) => scenario.user_story_ids ?? []));
-    registerFriendlyIds('acceptanceCriteria', [...scenarios.flatMap((scenario) => scenario.acceptance_criteria_ids ?? []), ...testCases.flatMap((testCase) => testCase.acceptance_criteria_ids ?? [])]);
-  }, [scenarios, testCases]);
+    if (workflowId) {
+      setActiveProjectId(workflowId);
+    }
+    registerFriendlyIds('scenario', scenarios.map((scenario) => scenario.scenario_id), workflowId);
+    registerFriendlyIds('case', testCases.map((testCase) => testCase.test_case_id), workflowId);
+    registerFriendlyIds('requirement', [...scenarios.flatMap((scenario) => scenario.requirement_ids ?? []), ...testCases.flatMap((testCase) => testCase.requirement_ids ?? [])], workflowId);
+    registerFriendlyIds('userStory', scenarios.flatMap((scenario) => scenario.user_story_ids ?? []), workflowId);
+    registerFriendlyIds('acceptanceCriteria', [...scenarios.flatMap((scenario) => scenario.acceptance_criteria_ids ?? []), ...testCases.flatMap((testCase) => testCase.acceptance_criteria_ids ?? [])], workflowId);
+  }, [scenarios, testCases, workflowId]);
   const activeItems = tab === 'scenarios' ? scenarios : testCases;
   const pageCount = Math.max(1, Math.ceil(activeItems.length / pageSize));
   const visible = activeItems.slice((page - 1) * pageSize, page * pageSize);

@@ -4,8 +4,8 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { ConnectionToast } from '@/components/common/ConnectionToast';
 
 export const metadata: Metadata = {
-  title: 'BA Accelerator - Req2Plan AI SaaS Platform',
-  description: 'AI-powered requirements extraction, INVEST validation, and story planning pipeline.',
+  title: 'Test Case Generator - AI SaaS Platform',
+  description: 'AI-powered test scenario, test case generation, and Playwright test automation engine.',
 };
 
 export default function RootLayout({

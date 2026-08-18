@@ -42,7 +42,7 @@ export function TopNav({ autosaveState }: TopNavProps) {
       {/* Left: Logo */}
       <div className="flex items-center gap-2">
         <Link href="/dashboard" className="flex items-center">
-          <Image src="/images_and_videos/logo.png" alt="BA Accelerator" width={112} height={30} priority className="h-6 w-auto object-contain dark:invert dark:brightness-200" />
+          <Image src="/images_and_videos/logo.png" alt="Test Case Generator" width={112} height={30} priority className="h-6 w-auto object-contain dark:invert dark:brightness-200" />
         </Link>
       </div>
 
@@ -60,8 +60,8 @@ export function TopNav({ autosaveState }: TopNavProps) {
           <input
             type="text"
             className="block w-full pl-9 pr-3 h-[32px] border border-border rounded-md leading-5 bg-muted/50 text-foreground placeholder-muted-foreground focus:outline-none focus:bg-background focus:ring-1 focus:ring-primary focus:border-primary text-[13px] transition-colors"
-            placeholder="Search stories, summaries, or IDs..."
-            aria-label="Search stories, summaries, or IDs"
+            placeholder="Search scenarios, test cases, or IDs..."
+            aria-label="Search scenarios, test cases, or IDs"
           />
         </div>
       </div>
@@ -84,7 +84,7 @@ export function TopNav({ autosaveState }: TopNavProps) {
             <div role="menu" className="absolute right-0 z-50 mt-2 w-48 rounded-lg border border-border bg-card py-1.5 shadow-lg">
               <div className="px-3 py-2 border-b border-border">
                 <p className="font-semibold text-foreground text-xs leading-none">Jane Smith</p>
-                <p className="text-[10px] text-muted-foreground mt-1 leading-none">Business Analyst</p>
+                <p className="text-[10px] text-muted-foreground mt-1 leading-none">QA Lead</p>
               </div>
               <button 
                 type="button"

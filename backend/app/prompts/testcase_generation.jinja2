@@ -14,5 +14,7 @@ Rules:
 12. Every test_cases[] item MUST populate these required fields: scenario_id, project_id, title, description, test_case_type, and steps.
 13. steps MUST be a non-empty array. Every steps[] item MUST contain step_number, a non-empty action, and a non-empty expected_result. Never omit steps and never return an empty steps array.
 14. Return exactly one complete test case for every supplied scenario. Do not return partial test-case objects.
+15. All input steps (fill, enter, type, select) MUST contain explicit executable input values enclosed in quotes (e.g. 'Fill "Name" with "John Doe"' or 'Enter "Email" with "user@example.com"'). Never generate vague actions like "Enter a valid name". Use concrete test data for positive input actions and explicit empty strings (e.g. 'Fill "Name" with ""') for negative/empty-field tests.
+16. Do not invent post-registration or post-action expected behavior. Expected results must be supported by acceptance criteria or actual page evidence; otherwise mark the expected result or step BLOCKED.
 Scenarios: {{ scenarios }}
 Source context: {{ context }}

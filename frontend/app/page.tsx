@@ -18,8 +18,7 @@ import {
   CheckCircle2,
   Clock,
   Layers,
-  Sparkles,
-  FolderKanban
+  Sparkles
 } from 'lucide-react';
 import { useInView } from 'react-intersection-observer';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -106,7 +105,7 @@ export default function LandingPage() {
     };
   }, [resolvedTheme]);
 
-  const headlineText = "AI-Powered BA Accelerator & Test Generation";
+  const headlineText = "AI-Powered Test Case & Script Generation";
   const headlineWords = headlineText.split(" ");
 
   const howItWorksSteps = [
@@ -137,20 +136,11 @@ export default function LandingPage() {
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-orange-500 via-purple-600 to-indigo-600 text-white shadow-md">
             <Sparkles className="h-5 w-5" />
           </div>
-          <span className="font-extrabold text-lg tracking-tight text-foreground">BA Accelerator <span className="text-primary text-xs">AI</span></span>
-        </div>
-        
-        <div className="hidden md:flex items-center gap-8 text-sm font-semibold text-muted-foreground">
-          <Link href="/dashboard" className="hover:text-foreground transition">Projects</Link>
-          <Link href="/test-case-generation" className="hover:text-foreground transition">Test Generator</Link>
-          <Link href="/test-case-generation/automation" className="hover:text-foreground transition">Playwright Studio</Link>
+          <span className="font-extrabold text-lg tracking-tight text-foreground">Test Case Generator <span className="text-primary text-xs">AI</span></span>
         </div>
 
         <div className="flex items-center gap-3">
           <ThemeToggle />
-          <Link href="/dashboard" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-orange-500 via-purple-600 to-indigo-600 text-white text-xs font-bold shadow-md hover:opacity-95 transition">
-            <FolderKanban className="h-4 w-4" /> Open Workspace
-          </Link>
         </div>
       </nav>
 

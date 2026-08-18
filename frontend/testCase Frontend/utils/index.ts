@@ -19,18 +19,52 @@ const displayWidths: Partial<Record<FriendlyIdKind, number>> = {
   script: 3,
 };
 
-const friendlyIdRegistry: Record<FriendlyIdKind, Map<string, number>> = {
-  requirement: new Map(), userStory: new Map(), acceptanceCriteria: new Map(),
-  scenario: new Map(), case: new Map(), script: new Map(), workflow: new Map(), execution: new Map(),
-};
+let activeProjectId: string = 'default';
+
+function createNewScopeRegistry(): Record<FriendlyIdKind, Map<string, number>> {
+  return {
+    requirement: new Map(),
+    userStory: new Map(),
+    acceptanceCriteria: new Map(),
+    scenario: new Map(),
+    case: new Map(),
+    script: new Map(),
+    workflow: new Map(),
+    execution: new Map(),
+  };
+}
+
+const projectRegistries: Map<string, Record<FriendlyIdKind, Map<string, number>>> = new Map([
+  ['default', createNewScopeRegistry()],
+]);
+
+export function setActiveProjectId(projectId?: string | null): void {
+  if (projectId && projectId.trim()) {
+    activeProjectId = projectId.trim();
+  }
+}
+
+export function getActiveProjectId(): string {
+  return activeProjectId;
+}
+
+function getRegistryForProject(scopeId?: string | null): Record<FriendlyIdKind, Map<string, number>> {
+  const scope = (scopeId && scopeId.trim()) || activeProjectId;
+  let registry = projectRegistries.get(scope);
+  if (!registry) {
+    registry = createNewScopeRegistry();
+    projectRegistries.set(scope, registry);
+  }
+  return registry;
+}
 
 /**
  * Assigns a sequential label to each unique source ID in its UI entity context.
  * This registry is presentation-only; source IDs are never changed or returned.
  */
-export function friendlyId(kind: FriendlyIdKind, value?: string | null): string {
+export function friendlyId(kind: FriendlyIdKind, value?: string | null, scopeId?: string | null): string {
   if (!value) return '';
-  const registry = friendlyIdRegistry[kind];
+  const registry = getRegistryForProject(scopeId)[kind];
   let sequence = registry.get(value);
   if (sequence === undefined) {
     sequence = registry.size + 1;
@@ -41,13 +75,19 @@ export function friendlyId(kind: FriendlyIdKind, value?: string | null): string 
 }
 
 /** Registers an ordered collection before rendering it in multiple views. */
-export function registerFriendlyIds(kind: FriendlyIdKind, values: Array<string | null | undefined>): void {
-  values.forEach((value) => friendlyId(kind, value));
+export function registerFriendlyIds(kind: FriendlyIdKind, values: Array<string | null | undefined>, scopeId?: string | null): void {
+  values.forEach((value) => friendlyId(kind, value, scopeId));
 }
 
-/** Test-only reset; production code has no path that mutates source IDs. */
-export function resetFriendlyIdRegistry(): void {
-  Object.values(friendlyIdRegistry).forEach((registry) => registry.clear());
+/** Resets registry entries. If scopeId is provided, clears only that project scope; otherwise clears all. */
+export function resetFriendlyIdRegistry(scopeId?: string | null): void {
+  if (scopeId) {
+    projectRegistries.delete(scopeId);
+  } else {
+    projectRegistries.clear();
+    activeProjectId = 'default';
+    projectRegistries.set('default', createNewScopeRegistry());
+  }
 }
 
 export function friendlyIdList(kind: FriendlyIdKind, values?: string[] | null): string | undefined {

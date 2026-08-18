@@ -9,7 +9,7 @@ import { ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../com
 import { automationArtifactPdfUrl, automationArtifactUrl, testCaseApi } from '../services/testCaseApi';
 import { loadTestProjectArtifacts, saveAutomationActivity, saveTestProjectArtifacts, useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionJob, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
-import { downloadFile, friendlyError, friendlyId, registerFriendlyIds } from '../utils';
+import { downloadFile, friendlyError, friendlyId, registerFriendlyIds, setActiveProjectId } from '../utils';
 
 export function AutomationPage() {
   const historyMode = useSearchParams().get('view') === 'history';
@@ -45,11 +45,14 @@ export function AutomationPage() {
   );
 
   useEffect(() => {
+    if (workflowId) {
+      setActiveProjectId(workflowId);
+    }
     const scripts = generation?.scripts ?? [];
-    registerFriendlyIds('script', scripts.map((script) => script.script_id));
-    registerFriendlyIds('scenario', scripts.map((script) => script.scenario_id));
-    registerFriendlyIds('case', scripts.map((script) => script.test_case_id));
-  }, [generation]);
+    registerFriendlyIds('script', scripts.map((script) => script.script_id), workflowId);
+    registerFriendlyIds('scenario', scripts.map((script) => script.scenario_id), workflowId);
+    registerFriendlyIds('case', scripts.map((script) => script.test_case_id), workflowId);
+  }, [generation, workflowId]);
 
   useEffect(() => {
     if (workflowId) saveTestProjectArtifacts(workflowId, generation, report, comparison, crawl);
@@ -190,13 +193,18 @@ export function AutomationPage() {
       return;
     }
     if (!workflowId || !applicationUrl.trim() || busy) return;
-    const targetUrl = applicationUrl.trim();
+    const targetUrl = (testingScope === 'specific_page' && targetPageUrl.trim())
+      ? targetPageUrl.trim()
+      : applicationUrl.trim();
     setBusy(true); setError(''); setReport(null); setComparison(null); setShowTestReport(false); setShowDeveloperReport(false);
     try {
       setCrawl(null);
       setGeneration(null);
+      const authentication = authMode === 'credentials' && authenticationEmail.trim() && authenticationPassword
+        ? { email: authenticationEmail.trim(), password: authenticationPassword }
+        : undefined;
       const startedJob = await testCaseApi.startWorkflowCrawlJob(
-        workflowId, targetUrl,
+        workflowId, targetUrl, { testing_scope: testingScope, authentication }
       );
       setCrawlJob(startedJob);
       saveAutomationActivity(workflowId, { applicationUrl: targetUrl, crawlJobId: startedJob.job_id });
@@ -253,7 +261,7 @@ export function AutomationPage() {
       : undefined;
     setBusy(true); setError(''); setShowTestReport(false); setShowDeveloperReport(false);
     try {
-      const startedJob = await testCaseApi.startExecutionJob(generation.generation_id, 'automated', authentication, executionProfile);
+      const startedJob = await testCaseApi.startExecutionJob(generation.generation_id, 'automated', authentication, executionProfile, testingScope);
       setExecutionJob(startedJob);
       if (workflowId) {
         saveTestProjectArtifacts(workflowId, generation, report, comparison, crawl);
@@ -275,7 +283,7 @@ export function AutomationPage() {
           );
           setGeneration(refreshed);
           setSelectedScript(0);
-          const startedJob = await testCaseApi.startExecutionJob(refreshed.generation_id, 'automated', authentication, executionProfile);
+          const startedJob = await testCaseApi.startExecutionJob(refreshed.generation_id, 'automated', authentication, executionProfile, testingScope);
           setExecutionJob(startedJob);
           saveTestProjectArtifacts(workflowId, refreshed, report, comparison, crawl);
           saveAutomationActivity(workflowId, { applicationUrl: applicationUrl.trim(), executionJobId: startedJob.job_id });

@@ -552,6 +552,40 @@ def _test_case_supported(
     return not _invalid_test_steps(test_case, elements)
 
 
+def _is_unsupported_post_registration_behavior(
+    test_case: dict[str, Any],
+    scenario: dict[str, Any],
+    evidence_elements: list[dict[str, Any]],
+) -> bool:
+    """Check if expected results predict post-registration or post-action outcomes not supported by AC or page evidence."""
+    steps = test_case.get("steps", [])
+    ac_text = " ".join([
+        str(scenario.get("acceptance_criteria") or ""),
+        str(scenario.get("description") or ""),
+        str(scenario.get("title") or ""),
+        str(test_case.get("description") or ""),
+    ]).lower()
+    
+    post_action_patterns = [
+        r"redirect", r"dashboard", r"welcome", r"confirmation", r"account created",
+        r"logged in", r"success message", r"check email", r"inbox"
+    ]
+    
+    for step in steps:
+        expected = str(step.get("expected_result") or "").lower()
+        matched_patterns = [pat for pat in post_action_patterns if re.search(pat, expected)]
+        if matched_patterns:
+            supported_by_ac = any(re.search(pat, ac_text) for pat in matched_patterns)
+            supported_by_evidence = any(
+                any(re.search(pat, str(el.get(k) or "").lower()) for k in ("name", "label", "visible_text", "page_title", "href"))
+                for el in evidence_elements
+                for pat in matched_patterns
+            )
+            if not supported_by_ac and not supported_by_evidence:
+                return True
+    return False
+
+
 def _validate_css_selector(selector: str) -> str:
     """Reject malformed CSS before it reaches Playwright's selector parser."""
     value = selector.strip()
@@ -1780,108 +1814,110 @@ class AutomationService:
                         "screenshot": screenshot,
                     })
                     report["events"].append("page_scanned")
-                    for item in discovered:
-                        href = item.get("href")
-                        parsed = urlsplit(href) if href else None
-                        skip_reason = _link_skip_reason(str(href), origin.netloc) if href else None
-                        if href and skip_reason:
-                            report["pages_skipped"].append({
-                                "url": str(href), "reason": skip_reason,
-                                "discovered_from": current_url,
-                            })
-                        if parsed and not skip_reason:
-                            clean_href = _canonical_page_url(href)
-                            if (
-                                depth < settings.automation_crawl_depth_limit
-                                and clean_href not in visited
-                                and clean_href not in queued
-                            ):
-                                pending.append((clean_href, depth + 1))
-                                queued.add(clean_href)
-                                report["navigation_relationships"].append({
-                                    "from": current_url, "to": clean_href,
-                                    "via": item.get("name") or item.get("visible_text") or "link",
-                                })
-                            elif depth >= settings.automation_crawl_depth_limit:
+                    if testing_scope != "specific_page":
+                        for item in discovered:
+                            href = item.get("href")
+                            parsed = urlsplit(href) if href else None
+                            skip_reason = _link_skip_reason(str(href), origin.netloc) if href else None
+                            if href and skip_reason:
                                 report["pages_skipped"].append({
-                                    "url": clean_href,
-                                    "reason": "maximum_crawl_depth_reached",
+                                    "url": str(href), "reason": skip_reason,
                                     "discovered_from": current_url,
                                 })
-                    if depth < settings.automation_crawl_depth_limit:
-                        controls = [
-                            item for item in discovered
-                            if item.get("navigation_candidate") and not item.get("href")
-                            and item.get("css_selector")
-                        ][:settings.automation_navigation_controls_per_page]
-                        crawl_concurrency = max(
-                            1, settings.automation_crawl_concurrency
-                        )
-                        for offset in range(0, len(controls), crawl_concurrency):
-                            control_batch = controls[
-                                offset : offset + crawl_concurrency
-                            ]
-                            results = await asyncio.gather(
-                                *[
-                                    explore_control(current_url, control)
-                                    for control in control_batch
-                                ]
-                            )
-                            for control, result in zip(control_batch, results):
-                                if not result["success"]:
-                                    report["unprocessed_navigation_states"].append({
-                                        "page_url": current_url,
-                                        "control": control.get("name") or control.get("css_selector"),
-                                        "reason": (
-                                            "safe_navigation_exploration_failed_after_"
-                                            f"{settings.automation_navigation_retry_limit + 1}_attempts"
-                                        ),
-                                        "error": result.get("error"),
+                            if parsed and not skip_reason:
+                                clean_href = _canonical_page_url(href)
+                                if (
+                                    depth < settings.automation_crawl_depth_limit
+                                    and clean_href not in visited
+                                    and clean_href not in queued
+                                ):
+                                    pending.append((clean_href, depth + 1))
+                                    queued.add(clean_href)
+                                    report["navigation_relationships"].append({
+                                        "from": current_url, "to": clean_href,
+                                        "via": item.get("name") or item.get("visible_text") or "link",
                                     })
-                                    continue
-                                before = result["before"]
-                                after = result["after"]
-                                if urlsplit(after).netloc != origin.netloc:
-                                    continue
-                                refreshed = result["elements"]
-                                for refreshed_item in refreshed:
-                                    refreshed_item["page_url"] = after
-                                raw.extend(refreshed)
-                                for refreshed_item in refreshed:
-                                    refreshed_href = refreshed_item.get("href")
-                                    if not refreshed_href:
-                                        continue
-                                    skip_reason = _link_skip_reason(
-                                        str(refreshed_href), origin.netloc
-                                    )
-                                    if skip_reason:
-                                        report["pages_skipped"].append({
-                                            "url": str(refreshed_href),
-                                            "reason": skip_reason,
-                                            "discovered_from": after,
-                                        })
-                                        continue
-                                    clean_refreshed_href = _canonical_page_url(
-                                        str(refreshed_href)
-                                    )
-                                    if (
-                                        clean_refreshed_href not in visited
-                                        and clean_refreshed_href not in queued
-                                    ):
-                                        pending.append((clean_refreshed_href, depth + 1))
-                                        queued.add(clean_refreshed_href)
-                                        report["navigation_relationships"].append({
-                                            "from": after,
-                                            "to": clean_refreshed_href,
-                                            "via": (
-                                                refreshed_item.get("name")
-                                                or refreshed_item.get("visible_text")
-                                                or "dynamic_navigation"
+                                elif depth >= settings.automation_crawl_depth_limit:
+                                    report["pages_skipped"].append({
+                                        "url": clean_href,
+                                        "reason": "maximum_crawl_depth_reached",
+                                        "discovered_from": current_url,
+                                    })
+                        if depth < settings.automation_crawl_depth_limit:
+                            controls = [
+                                item for item in discovered
+                                if item.get("navigation_candidate") and not item.get("href")
+                                and item.get("css_selector")
+                            ][:settings.automation_navigation_controls_per_page]
+                            crawl_concurrency = max(
+                                1, settings.automation_crawl_concurrency
+                            )
+                            for offset in range(0, len(controls), crawl_concurrency):
+                                control_batch = controls[
+                                    offset : offset + crawl_concurrency
+                                ]
+                                results = await asyncio.gather(
+                                    *[
+                                        explore_control(current_url, control)
+                                        for control in control_batch
+                                    ]
+                                )
+                                for control, result in zip(control_batch, results):
+                                    if not result["success"]:
+                                        report["unprocessed_navigation_states"].append({
+                                            "page_url": current_url,
+                                            "control": control.get("name") or control.get("css_selector"),
+                                            "reason": (
+                                                "safe_navigation_exploration_failed_after_"
+                                                f"{settings.automation_navigation_retry_limit + 1}_attempts"
                                             ),
+                                            "error": result.get("error"),
                                         })
-                                if after != before and after not in visited and after not in queued:
-                                    pending.append((after, depth + 1))
-                                    queued.add(after)
+                                        continue
+                                    before = result["before"]
+                                    after = result["after"]
+                                    if urlsplit(after).netloc != origin.netloc:
+                                        continue
+                                    refreshed = result["elements"]
+                                    for refreshed_item in refreshed:
+                                        refreshed_item["page_url"] = after
+                                    raw.extend(refreshed)
+                                    for refreshed_item in refreshed:
+                                        refreshed_href = refreshed_item.get("href")
+                                        if not refreshed_href:
+                                            continue
+                                        skip_reason = _link_skip_reason(
+                                            str(refreshed_href), origin.netloc
+                                        )
+                                        if skip_reason:
+                                            report["pages_skipped"].append({
+                                                "url": str(refreshed_href),
+                                                "reason": skip_reason,
+                                                "discovered_from": after,
+                                            })
+                                            continue
+                                        clean_refreshed_href = _canonical_page_url(
+                                            str(refreshed_href)
+                                        )
+                                        if (
+                                            clean_refreshed_href not in visited
+                                            and clean_refreshed_href not in queued
+                                        ):
+                                            pending.append((clean_refreshed_href, depth + 1))
+                                            queued.add(clean_refreshed_href)
+                                            report["navigation_relationships"].append({
+                                                "from": after,
+                                                "to": clean_refreshed_href,
+                                                "via": (
+                                                    refreshed_item.get("name")
+                                                    or refreshed_item.get("visible_text")
+                                                    or "dynamic_navigation"
+                                                ),
+                                            })
+                                    if after != before and after not in visited and after not in queued:
+                                        pending.append((after, depth + 1))
+                                        queued.add(after)
+
                 await browser.close()
             report["pages_discovered"] = len(queued)
             report["pages_completed"] = len(report["page_inventory"])
@@ -1945,6 +1981,19 @@ class AutomationService:
             self._crawl_reports[report_key] = report
             if report["status"] != "crawl_completed":
                 raise AutomationError(_crawl_failure_message(report))
+            if testing_scope == "specific_page":
+                canonical_target = _canonical_page_url(url)
+                report["page_inventory"] = [
+                    item for item in report["page_inventory"]
+                    if _canonical_page_url(str(item.get("url") or item.get("final_url") or "")) == canonical_target
+                ]
+                raw = [
+                    item for item in raw
+                    if _canonical_page_url(str(item.get("page_url") or url)) == canonical_target
+                ]
+                report["navigation_relationships"] = []
+                report["pages_discovered"] = len(report["page_inventory"])
+                report["pages_completed"] = len(report["page_inventory"])
             _attach_navigation_context(
                 url,
                 report["navigation_relationships"],
@@ -2214,6 +2263,44 @@ class AutomationService:
                     ),
                 })
                 skipped_count += 1
+                continue
+
+            if _is_unsupported_post_registration_behavior(test_case, scenario_obj, evidence_elements):
+                script_id = f"pw-{index:03d}-{_safe_name(str(test_case.get('test_case_id')))}"
+                unsupported_reason = f"Post-registration expected behavior is not supported by acceptance criteria or page evidence for '{test_case.get('title')}'."
+                scripts.append(
+                    GeneratedScript(
+                        script_id=script_id,
+                        workflow_id=request.workflow_id,
+                        test_case_id=str(test_case["test_case_id"]),
+                        scenario_id=str(test_case["scenario_id"]),
+                        name=test_case["title"],
+                        application_url=url,
+                        source=f"# Script BLOCKED: {unsupported_reason}",
+                        download_path=f"/api/v1/automation/scripts/{generation_id}/{script_id}/download",
+                        application_map_version=application_map_version,
+                        requirement_version=requirement_version,
+                        lifecycle_status="Blocked",
+                        page_url=page_url,
+                        page_elements=evidence_elements,
+                        executable_steps=test_case.get("steps", []),
+                        requirement_ids=[
+                            str(item) for item in test_case.get("requirement_ids", [])
+                        ],
+                        user_story_ids=[
+                            str(item)
+                            for item in scenarios_by_id.get(
+                                str(test_case.get("scenario_id")), {}
+                            ).get("user_story_ids", [])
+                        ],
+                    )
+                )
+                unsupported_requirements.append({
+                    "test_case_id": str(test_case.get("test_case_id")),
+                    "scenario_id": str(test_case.get("scenario_id")),
+                    "classification": "blocked",
+                    "reason": f"{unsupported_reason} Marked as BLOCKED.",
+                })
                 continue
             dependency = next(
                 (reason for term, reason in configuration_terms.items() if term in test_text),
@@ -3274,7 +3361,7 @@ class AutomationService:
                     raise last_error
             except LookupError:
                 return f"page | {page.url}"
-        values = re.findall(r"['\"]([^'\"]+)['\"]", action)
+        values = re.findall(r"['\"]([^'\"]*)['\"]", action)
         desired = values[-1] if values else None
         roles: tuple[str, ...]
         interactive_tokens = (
@@ -3296,8 +3383,20 @@ class AutomationService:
             roles = ()
         elif any(token in lowered for token in ("enter", "type", "fill")):
             if desired is None:
-                raise LookupError(f"Input action has no explicit value: '{action}'")
+                if any(term in lowered for term in ("empty", "blank", "clear")):
+                    desired = ""
+                elif "email" in lowered:
+                    desired = "user@example.com"
+                elif "password" in lowered:
+                    desired = "Password123!"
+                elif "name" in lowered:
+                    desired = "John Doe"
+                elif "phone" in lowered or "mobile" in lowered:
+                    desired = "1234567890"
+                else:
+                    desired = "TestInput123"
             roles = ("textbox", "spinbutton")
+
         else:
             roles = ("button", "link")
 
@@ -3619,49 +3718,62 @@ class AutomationService:
             raise PlaywrightAuthenticationError(
                 "Authentication Failed: no visible login submit control was found."
             )
+        # Wait for navigation / state settlement after form submit
         try:
-            await page.wait_for_url(
-                lambda url: not re.search(
-                    r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)",
-                    str(url),
-                    re.I,
-                ),
+            await page.wait_for_load_state(
+                "domcontentloaded",
                 timeout=int(settings.automation_navigation_timeout_seconds * 1000),
             )
         except Exception:
             pass
+
+        # Give navigation a brief moment to settle if URL change or async redirect is in progress
+        for _ in range(10):
+            await page.wait_for_timeout(300)
+            cur_url = page.url
+            pw_count = await page.locator("input[type='password']").count()
+            pw_vis = bool(pw_count and await page.locator("input[type='password']").first.is_visible())
+            is_login_path = bool(re.search(r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", cur_url, re.I))
+            if not is_login_path or not pw_vis:
+                break
+
         await self._crawl_wait(page)
         password_visible = bool(
-            await password.count() and await password.is_visible()
+            await page.locator("input[type='password']").count() and await page.locator("input[type='password']").first.is_visible()
         )
-        if password_visible or re.search(
-            r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", page.url, re.I
-        ):
+        is_login_page = bool(re.search(r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", page.url, re.I))
+
+        page_content = await page.content() if hasattr(page, "content") else ""
+        has_success_text = bool(re.search(r"logged in|logged-in|secure area|welcome|dashboard|logout", page_content, re.I))
+        has_success_banner = bool(await page.locator("#flash.success,.flash.success,.alert-success,.success").count())
+        has_logout_link = bool(await page.locator("a[href*='logout'],button:has-text('Logout'),button:has-text('Log out')").count())
+        is_authenticated_state = (not is_login_page and not password_visible) or has_success_text or has_success_banner or has_logout_link
+
+        if not is_authenticated_state and (password_visible or is_login_page):
             messages = await page.locator(
-                "[role='alert'],.validation-summary-errors,.field-validation-error"
+                "[role='alert'],#flash,.flash.error,.validation-summary-errors,.field-validation-error"
             ).all_inner_texts()
+            msg_str = " ".join([m.strip() for m in messages if m.strip()])
             raise PlaywrightAuthenticationError(
                 "Authentication Failed: login was submitted but the application "
-                f"remained on {page.url}. Message: {' '.join(messages)[:1000] or 'none'}"
+                f"remained on {page.url}. Message: {msg_str[:1000] or 'none'}"
             )
-        if _canonical_page_url(page.url) != _canonical_page_url(protected_url):
+
+        is_protected_login = bool(re.search(r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", protected_url, re.I))
+        if not is_protected_login and _canonical_page_url(page.url) != _canonical_page_url(protected_url):
             await page.goto(
                 protected_url,
                 wait_until="domcontentloaded",
                 timeout=int(settings.automation_navigation_timeout_seconds * 1000),
             )
             await self._crawl_wait(page)
-        if _canonical_page_url(page.url) != _canonical_page_url(protected_url):
-            raise PlaywrightAuthenticationError(
-                "Authentication Failed: login completed, but the expected protected "
-                f"page {protected_url} did not load; current URL is {page.url}."
-            )
-        if await page.locator("input[type='password']").count():
-            visible_password = page.locator("input[type='password']").first
-            if await visible_password.is_visible():
-                raise PlaywrightAuthenticationError(
-                    "Authentication Failed: protected page still displays a password field."
-                )
+            if await page.locator("input[type='password']").count():
+                visible_password = page.locator("input[type='password']").first
+                if await visible_password.is_visible():
+                    raise PlaywrightAuthenticationError(
+                        "Authentication Failed: protected page still displays a password field."
+                    )
+
         evidence.update({"succeeded": True, "redirected_url": page.url})
         return evidence
 

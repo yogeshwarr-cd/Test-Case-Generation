@@ -90,7 +90,7 @@ class GeneratedScript(BaseModel):
     application_map_version: str | None = None
     requirement_version: str | None = None
     lifecycle_status: Literal[
-        "Valid", "Needs Review", "Obsolete", "Regeneration Required"
+        "Valid", "Needs Review", "Obsolete", "Regeneration Required", "Blocked"
     ] = "Valid"
     page_url: str | None = None
     page_elements: list[dict[str, Any]] = Field(default_factory=list)
