@@ -1230,7 +1230,7 @@ class AutomationService:
                 options:tag==='select' ? [...el.options].map(o=>({label:o.text.trim(),value:o.value})) : [],
                 locator_validated:true,
                 navigation_candidate:!unsafe && (tag==='a' || ['link','tab','menuitem'].includes(role)
-                  || (role==='button' && /menu|next|previous|back|home|dashboard|view|open|details/.test(nav)))};
+                  || (role==='button' && /menu|next|previous|back|home|dashboard|view|open|details|login|signin|sign-in|log-in|sign\s*in|signup|sign-up|sign\s*up|register|get\s*started|start/.test(nav)))};
             })"""
         )
 
@@ -1523,6 +1523,10 @@ class AutomationService:
                         navigation_response = await self._navigate_with_retries(
                             page, page_url
                         )
+                        if authentication and (auth_mode == "credentials" or getattr(authentication, "get_identifier", None) or (isinstance(authentication, dict) and authentication.get("password"))):
+                            auth_evidence = await self._authenticate_if_required(page, authentication, page_url)
+                            if auth_evidence.get("required") and auth_evidence.get("succeeded"):
+                                report["auth_state"] = await context.storage_state()
                     except Exception as navigation_error:
                         report["pages_skipped"].append({
                             "url": page_url,
@@ -2025,7 +2029,7 @@ class AutomationService:
             )
             return title, elements
         except Exception as exc:
-            if report_key not in self._crawl_reports:
+            if report.get("status") not in {"crawl_completed", "crawl_incomplete", "crawl_blocked"}:
                 report["status"] = (
                     report["status"] if report["status"] in {"crawl_blocked", "crawl_incomplete"}
                     else "crawl_incomplete"
@@ -3658,7 +3662,7 @@ class AutomationService:
 
         password = page.locator("input[type='password']").first
         login_url = bool(
-            re.search(r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", page.url, re.I)
+            re.search(r"/(?:login|signin|sign-in|log-in|auth)(?:/|$|\?)", page.url, re.I)
         )
         password_visible = bool(
             await password.count() and await password.is_visible()
@@ -3733,7 +3737,7 @@ class AutomationService:
             cur_url = page.url
             pw_count = await page.locator("input[type='password']").count()
             pw_vis = bool(pw_count and await page.locator("input[type='password']").first.is_visible())
-            is_login_path = bool(re.search(r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", cur_url, re.I))
+            is_login_path = bool(re.search(r"/(?:login|signin|sign-in|log-in|auth)(?:/|$|\?)", cur_url, re.I))
             if not is_login_path or not pw_vis:
                 break
 
@@ -3741,7 +3745,7 @@ class AutomationService:
         password_visible = bool(
             await page.locator("input[type='password']").count() and await page.locator("input[type='password']").first.is_visible()
         )
-        is_login_page = bool(re.search(r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", page.url, re.I))
+        is_login_page = bool(re.search(r"/(?:login|signin|sign-in|log-in|auth)(?:/|$|\?)", page.url, re.I))
 
         page_content = await page.content() if hasattr(page, "content") else ""
         has_success_text = bool(re.search(r"logged in|logged-in|secure area|welcome|dashboard|logout", page_content, re.I))
@@ -4141,7 +4145,8 @@ class AutomationService:
         results: list[ScriptExecutionResult] = []
         fast_execution = request.execution_profile == "fast"
         diagnostic_execution = request.execution_profile == "diagnostic"
-        worker_storage_state: dict[str, Any] | None = None
+        saved_auth_state = response.crawl_report.get("auth_state")
+        worker_storage_state: dict[str, Any] | None = saved_auth_state if saved_auth_state else None
         state = generation["workflow"]
         cases = {str(item["test_case_id"]): item for item in state.get("test_cases", [])}
         run_seacrawl_calls = 0
@@ -4177,9 +4182,31 @@ class AutomationService:
                 test_started = time.perf_counter()
                 console_logs: list[str] = []
                 network_errors: list[str] = []
+                # Determine if this script requires a fresh unauthenticated context
+                use_auth_state = True
+                test_case = cases.get(script.test_case_id, {"steps": []})
+                tc_title = str(test_case.get("title") or "").lower()
+                
+                # Check for login/auth/register keywords in title, while ignoring logout/signout
+                is_logout = any(token in tc_title for token in ("logout", "signout", "sign-out", "log-out"))
+                is_login_tc = any(token in tc_title for token in ("login", "signin", "sign-in", "log-in", "register", "signup", "sign-up", "credential", "auth")) and not is_logout
+                
+                # Check steps for password input
+                has_password_step = False
+                for step in test_case.get("steps", []):
+                    step_action = str(step.get("action") or "").lower()
+                    if "password" in step_action and not any(token in step_action for token in ("logout", "signout", "sign-out", "log-out")):
+                        has_password_step = True
+                        break
+                
+                if is_login_tc or has_password_step:
+                    use_auth_state = False
+                
+                script_storage_state = worker_storage_state if use_auth_state else None
+
                 # ---- Use a browser context so we can capture traces (req 11) ----
                 context = await browser.new_context(
-                    storage_state=worker_storage_state,
+                    storage_state=script_storage_state,
                 )
                 if fast_execution:
                     async def block_heavy_resources(route: Any) -> None:
@@ -4267,7 +4294,16 @@ class AutomationService:
                     else:
                         await self._wait_for_page_stable(page)
                     failure_category = "Authentication Failure"
-                    if authentication and worker_storage_state is not None:
+                    if not use_auth_state:
+                        # Skip auto-login for login/auth/credential-validation test cases
+                        authentication_evidence = {
+                            "required": False,
+                            "attempted": False,
+                            "succeeded": False,
+                            "redirected_url": page.url,
+                            "expected_protected_url": target_url,
+                        }
+                    elif authentication and script_storage_state is not None:
                         authentication_evidence = {
                             "required": True,
                             "attempted": False,
@@ -4287,7 +4323,12 @@ class AutomationService:
                         authentication_evidence.get("redirected_url")
                     )
                     failure_category = "Navigation Failure"
-                    await self._validate_navigation(page, target_url)
+                    await self._validate_navigation(
+                        page,
+                        authentication_evidence.get("redirected_url")
+                        if authentication_evidence.get("succeeded")
+                        else target_url,
+                    )
                     expected_elements_present = await self._expected_page_evidence_present(
                         page, target_url, disc_dicts
                     )
@@ -4343,7 +4384,7 @@ class AutomationService:
                                     page,
                                     context_element,
                                     script.page_url or response.application_url,
-                                    authentication,
+                                    credentials=None if not use_auth_state else authentication,
                                 )
                                 expected_page = _canonical_page_url(
                                     str(

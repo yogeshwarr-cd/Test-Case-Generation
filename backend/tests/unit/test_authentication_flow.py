@@ -145,3 +145,155 @@ async def test_invalid_credentials_detected_as_authentication_failure():
 
     assert "Authentication Failed" in str(exc_info.value)
     assert "Your username is invalid!" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_auth_state_selection_during_execution(monkeypatch, tmp_path):
+    from app.schemas.automation_schema import (
+        ScriptGenerationResponse,
+        GeneratedScript,
+        ExecuteScriptsRequest,
+        PlaywrightAuthentication
+    )
+    
+    import uuid
+
+    # Initialize service
+    service = AutomationService()
+    monkeypatch.setattr("app.services.automation_service.settings.app_mock_mode", False)
+    monkeypatch.setattr("app.services.automation_service.settings.automation_navigation_timeout_seconds", 30)
+    monkeypatch.setattr("app.services.automation_service.settings.automation_navigation_settle_timeout_seconds", 3)
+    workflow_uuid = uuid.uuid4()
+    
+    # Mock generation data
+    response = ScriptGenerationResponse(
+        generation_id="gen-test",
+        application_url="https://example.com",
+        reachable=True,
+        discovered_elements=[],
+        crawl_report={"auth_state": {"cookies": [{"name": "session", "value": "123"}]}},
+        scripts=[
+            GeneratedScript(
+                script_id="pw-login",
+                workflow_id=workflow_uuid,
+                test_case_id="tc-login",
+                scenario_id="sc-1",
+                name="Successful Login",
+                application_url="https://example.com",
+                source="print('login')",
+                download_path=str(tmp_path / "pw-login.pwscript"),
+                lifecycle_status="Valid",
+                page_url="https://example.com/auth",
+                page_elements=[],
+                requirement_ids=[],
+                user_story_ids=[],
+            ),
+            GeneratedScript(
+                script_id="pw-protected",
+                workflow_id=workflow_uuid,
+                test_case_id="tc-protected",
+                scenario_id="sc-1",
+                name="View Dashboard",
+                application_url="https://example.com",
+                source="print('dashboard')",
+                download_path=str(tmp_path / "pw-protected.pwscript"),
+                lifecycle_status="Valid",
+                page_url="https://example.com/dashboard",
+                page_elements=[],
+                requirement_ids=[],
+                user_story_ids=[],
+            ),
+            GeneratedScript(
+                script_id="pw-logout",
+                workflow_id=workflow_uuid,
+                test_case_id="tc-logout",
+                scenario_id="sc-1",
+                name="Logout",
+                application_url="https://example.com",
+                source="print('logout')",
+                download_path=str(tmp_path / "pw-logout.pwscript"),
+                lifecycle_status="Valid",
+                page_url="https://example.com/dashboard",
+                page_elements=[],
+                requirement_ids=[],
+                user_story_ids=[],
+            )
+        ]
+    )
+    
+    generation = {
+        "workflow": {
+            "test_cases": [
+                {
+                    "test_case_id": "tc-login",
+                    "title": "Successful Login with Valid Credentials",
+                    "steps": [{"action": "Fill Password with 'x'"}],
+                },
+                {
+                    "test_case_id": "tc-protected",
+                    "title": "View Dashboard",
+                    "steps": [{"action": "Verify dashboard text"}],
+                },
+                {
+                    "test_case_id": "tc-logout",
+                    "title": "Logout from authenticated session",
+                    "steps": [{"action": "Click Logout"}],
+                }
+            ]
+        },
+        "response": response,
+        "directory": tmp_path
+    }
+    
+    # Mock AutomationService methods
+    monkeypatch.setattr(service, "generation", AsyncMock(return_value=generation))
+    monkeypatch.setattr(service, "_validate_navigation", AsyncMock())
+    monkeypatch.setattr(service, "_expected_page_evidence_present", AsyncMock(return_value=True))
+    monkeypatch.setattr(service, "_dismiss_overlays", AsyncMock())
+    monkeypatch.setattr(service, "_save_report", MagicMock())
+    
+    # Mock Playwright execution context
+    mock_playwright_instance = MagicMock()
+    mock_browser = AsyncMock()
+    mock_context = AsyncMock()
+    mock_page = AsyncMock()
+    
+    mock_playwright_instance.chromium.launch = AsyncMock(return_value=mock_browser)
+    mock_browser.new_context = AsyncMock(return_value=mock_context)
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+    
+    mock_nav_response = MagicMock()
+    mock_nav_response.status = 200
+    mock_page.goto = AsyncMock(return_value=mock_nav_response)
+    mock_page.url = "https://example.com"
+    
+    class FakeAsyncPlaywright:
+        async def __aenter__(self):
+            return mock_playwright_instance
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+    import playwright.async_api
+    monkeypatch.setattr(playwright.async_api, "async_playwright", FakeAsyncPlaywright)
+    
+    # Run execute request (automated mode)
+    request = ExecuteScriptsRequest(
+        generation_id="gen-test",
+        mode="automated",
+        authentication=PlaywrightAuthentication(auth_mode="credentials", email="user@example.com", password="password123")
+    )
+    
+    await service.execute(request, _dedicated_loop=True, _parallel_child=True)
+    
+    # Inspect arguments passed to browser.new_context for each script run
+    calls = mock_browser.new_context.call_args_list
+    assert len(calls) == 3
+    
+    # 1. Login test must start unauthenticated (storage_state=None)
+    assert calls[0].kwargs.get("storage_state") is None
+    
+    # 2. Protected-page test must start authenticated
+    assert calls[1].kwargs.get("storage_state") == {"cookies": [{"name": "session", "value": "123"}]}
+    
+    # 3. Logout test must start authenticated
+    assert calls[2].kwargs.get("storage_state") == {"cookies": [{"name": "session", "value": "123"}]}
+
