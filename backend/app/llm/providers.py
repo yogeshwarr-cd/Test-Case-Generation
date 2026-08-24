@@ -405,6 +405,8 @@ class GeminiProvider(LLMProvider):
                 "output_tokens": int(getattr(usage, "candidates_token_count", 0) or 0),
             }
             return ProviderResponse(content, self.name, self.model, token_usage)
+        except (ImportError, ModuleNotFoundError) as exc:
+            raise ProviderError("missing_configuration") from exc
         except ProviderError:
             raise
         except Exception as exc:

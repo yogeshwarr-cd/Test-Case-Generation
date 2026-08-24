@@ -18,7 +18,7 @@ import {
 import { testCaseApi } from '../services/testCaseApi';
 import { EntityId } from '../components/TraceabilityUI';
 import type { CrawlGenerationResponse, CrawlJob } from '../types';
-import { downloadFile, friendlyError, friendlyId, registerFriendlyIds } from '../utils';
+import { downloadFile, friendlyError, friendlyId, registerFriendlyIds, setActiveProjectId } from '../utils';
 
 function downloadAllAsZip(result: CrawlGenerationResponse) {
   const combined = result.scripts

@@ -8,7 +8,7 @@ Rules:
 6. Do not calculate confidence scores or add unsupported fields.
 7. Omit test_case_id so the server assigns a UUID. Copy scenario_id and project_id exactly.
 8. Number steps consecutively beginning at 1.
-9. Return JSON only, with no markdown or explanation, matching {"test_cases": [...]}.
+9. Return JSON only, with no markdown or explanation, matching {"test_cases": [{"scenario_id": "EXACT_SCENARIO_ID_UUID", "project_id": "EXACT_PROJECT_ID_UUID", "title": "Test case title", "description": "Detailed description", "test_case_type": "functional", "steps": [{"step_number": 1, "action": "Executable action step", "expected_result": "Expected outcome"}]}]}. Every item in test_cases MUST be a full JSON object, NEVER a string or raw text.
 10. Use compact visual context only for visible UI interactions and accessibility checks; textual requirements remain authoritative.
 11. Do not infer authorization, API, database, performance, or security behavior from screenshots alone.
 12. Every test_cases[] item MUST populate these required fields: scenario_id, project_id, title, description, test_case_type, and steps.

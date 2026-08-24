@@ -1,4 +1,4 @@
-﻿import uuid
+import uuid
 
 import asyncio
 
@@ -861,3 +861,65 @@ def test_failed_execution_generates_developer_ticket_and_retest_verification(
     assert retest.retest_verification[0]["verified"] is True
     assert retest.developer_execution_reports[0]["missing_functionality"] == "None identified."
     assert retest.developer_execution_reports[0]["priority"] == "Low"
+
+
+def test_canonical_page_url_preserves_routing_params_and_hash_routes():
+    # Routing query params kept, tracking dropped
+    url1 = "https://example.com/app?utm_source=google&id=42&route=settings"
+    assert _canonical_page_url(url1) == "https://example.com/app?id=42&route=settings"
+
+    # SPA Hash routing preserved
+    url2 = "https://example.com/#/dashboard/metrics"
+    assert _canonical_page_url(url2) == "https://example.com/#/dashboard/metrics"
+
+    # Trailing slash normalization
+    url3 = "https://example.com/products/"
+    assert _canonical_page_url(url3) == "https://example.com/products"
+
+
+@pytest.mark.asyncio
+async def test_capture_interactive_elements_generic_and_form_aware():
+    class DummyLocator:
+        def __init__(self, items):
+            self._items = items
+        async def evaluate_all(self, js_code):
+            # Simulated return matching JavaScript evaluate_all logic for non-English button & form field
+            return [
+                {
+                    "tag": "button",
+                    "role": "button",
+                    "name": "Explorar Productos",
+                    "navigation_candidate": True,
+                    "locator_validated": True,
+                },
+                {
+                    "tag": "input",
+                    "role": "textbox",
+                    "name": "email",
+                    "input_type": "email",
+                    "required": True,
+                    "form_info": {
+                        "form_id": "login-form",
+                        "form_name": "login",
+                        "form_action": "/api/login",
+                        "form_method": "post",
+                    },
+                    "navigation_candidate": False,
+                    "locator_validated": True,
+                },
+            ]
+
+    class DummyPage:
+        def locator(self, selector):
+            return DummyLocator([])
+
+    elements = await AutomationService._capture_interactive_elements(DummyPage())
+    assert len(elements) == 2
+    button = elements[0]
+    assert button["name"] == "Explorar Productos"
+    assert button["navigation_candidate"] is True
+
+    input_el = elements[1]
+    assert input_el["required"] is True
+    assert input_el["form_info"]["form_id"] == "login-form"
+    assert input_el["form_info"]["form_action"] == "/api/login"

@@ -65,13 +65,15 @@ def _salvage_valid_collection(
     removed_fields: list[str] = []
     for item in error.errors():
         location = item["loc"]
+        is_valid_idx = isinstance(location[1], int) or (isinstance(location[1], str) and location[1].isdigit())
         if (
             len(location) >= 2
             and location[0] in {"test_cases", "scenarios"}
-            and isinstance(location[1], int)
-            and item["type"] in {"missing", "too_short", "model_type", "dict_type"}
+            and is_valid_idx
+            and item["type"] in {"missing", "too_short", "model_type", "dict_type", "list_type", "string_type"}
         ):
-            invalid.setdefault(str(location[0]), set()).add(location[1])
+            idx = int(location[1])
+            invalid.setdefault(str(location[0]), set()).add(idx)
             removed_fields.append(_field_path(location))
         else:
             return None

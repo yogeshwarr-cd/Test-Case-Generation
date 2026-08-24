@@ -182,7 +182,7 @@ def test_cerebras_provider_supports_distinct_fallback_name():
 
 
 @pytest.mark.asyncio
-async def test_gemini_uses_parsed_schema_and_reserves_output_tokens():
+async def test_gemini_uses_parsed_schema_and_reserves_output_tokens(monkeypatch):
     captured = {}
 
     class Models:
@@ -193,6 +193,15 @@ async def test_gemini_uses_parsed_schema_and_reserves_output_tokens():
                 text="not used",
                 usage_metadata=None,
             )
+
+    fake_types = SimpleNamespace(
+        ThinkingConfig=lambda thinking_level=None, thinking_budget=None: SimpleNamespace(thinking_level=SimpleNamespace(value=str(thinking_level).upper())),
+        GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+        HttpOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    fake_genai = SimpleNamespace(types=fake_types)
+    monkeypatch.setitem(pytest.importorskip.__globals__.get("sys").modules, "google.genai", fake_genai)
+    monkeypatch.setitem(pytest.importorskip.__globals__.get("sys").modules, "google.genai.types", fake_types)
 
     client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
     provider = GeminiProvider(
@@ -212,7 +221,7 @@ async def test_gemini_uses_parsed_schema_and_reserves_output_tokens():
         max_output_tokens=1200,
     )
     assert response.content == '{"value":"structured"}'
-    assert captured["config"].response_schema is None
+    assert getattr(captured["config"], "response_schema", None) is None
     assert captured["config"].response_json_schema == _gemini_schema(Output)
     assert captured["config"].max_output_tokens == 4096
     assert captured["config"].thinking_config.thinking_level.value == "LOW"
@@ -696,4 +705,40 @@ async def test_non_retryable_error_halts_key_failover(monkeypatch):
         await generate(client)
     assert p1.calls == 1
     assert p2.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_dict_formatted_test_cases_batch_parsed_successfully():
+    from app.schemas.testcase_schema import TestCaseBatch
+    payload = '{"test_cases": {"1": {"title": "Case 1", "description": "Desc 1"}, "2": {"title": "Case 2", "description": "Desc 2"}}}'
+    provider = StubProvider("groq_fallback", [payload])
+    client = LLMClient([provider])
+    result = await client.generate_structured_output(
+        system_prompt="system",
+        user_prompt="user",
+        response_model=TestCaseBatch,
+        request_id="dict-batch-test",
+    )
+    assert len(result.test_cases) == 2
+    assert result.test_cases[0].title == "Case 1"
+    assert result.test_cases[1].title == "Case 2"
+    assert len(result.test_cases[0].steps) >= 1
+
+
+@pytest.mark.asyncio
+async def test_list_of_strings_test_cases_batch_parsed_successfully():
+    from app.schemas.testcase_schema import TestCaseBatch
+    payload = '{"test_cases": ["1. Verify login functionality with valid input", "2. Verify logout functionality"]}'
+    provider = StubProvider("groq_fallback", [payload])
+    client = LLMClient([provider])
+    result = await client.generate_structured_output(
+        system_prompt="system",
+        user_prompt="user",
+        response_model=TestCaseBatch,
+        request_id="string-batch-test",
+    )
+    assert len(result.test_cases) == 2
+    assert "Verify login" in result.test_cases[0].title
+    assert len(result.test_cases[0].steps) == 1
+
 

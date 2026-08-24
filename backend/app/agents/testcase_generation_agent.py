@@ -58,8 +58,18 @@ class TestCaseGenerationAgent(BaseAgent[TestCaseBatch]):
         for batch in batches(scenario_items, settings.llm_testcase_batch_size):
             result = await generate_batch(batch)
             by_scenario = {}
-            for test_case in result.test_cases:
-                by_scenario.setdefault(str(test_case.scenario_id), test_case)
+            for idx, test_case in enumerate(result.test_cases):
+                sc_id = str(test_case.scenario_id)
+                matched_scenario = next((s for s in batch if str(s["scenario_id"]) == sc_id), None)
+                if matched_scenario:
+                    by_scenario.setdefault(sc_id, test_case)
+                elif idx < len(batch):
+                    target_sc_id = str(batch[idx]["scenario_id"])
+                    if target_sc_id not in by_scenario:
+                        test_case.scenario_id = batch[idx]["scenario_id"]
+                        if "project_id" in batch[idx]:
+                            test_case.project_id = batch[idx]["project_id"]
+                        by_scenario[target_sc_id] = test_case
             for scenario in batch:
                 scenario_id = str(scenario["scenario_id"])
                 if scenario_id not in by_scenario:
@@ -68,6 +78,11 @@ class TestCaseGenerationAgent(BaseAgent[TestCaseBatch]):
                         (case for case in singleton.test_cases if str(case.scenario_id) == scenario_id),
                         None,
                     )
+                    if match is None and singleton.test_cases:
+                        match = singleton.test_cases[0]
+                        match.scenario_id = scenario["scenario_id"]
+                        if "project_id" in scenario:
+                            match.project_id = scenario["project_id"]
                     if match is None:
                         raise ValueError(f"LLM did not return a complete test case for scenario {scenario_id}")
                     by_scenario[scenario_id] = match

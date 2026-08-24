@@ -73,6 +73,8 @@ class DiscoveredElement(BaseModel):
     css_selector: str | None = None
     navigation_candidate: bool = False
     locator_validated: bool = False
+    form_info: dict[str, Any] | None = None
+    required: bool | None = None
 
 
 class GeneratedScript(BaseModel):

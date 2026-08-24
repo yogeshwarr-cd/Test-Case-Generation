@@ -290,20 +290,28 @@ def _application_map(
 
 
 def _canonical_page_url(value: str) -> str:
+    if not value:
+        return ""
     parsed = urlsplit(value)
-    meaningful_query_keys = {
-        "page", "pagenumber", "category", "search", "q", "query",
-        "filter", "sort", "orderby", "view", "tab",
+    if not parsed.scheme and not parsed.netloc:
+        return value.strip()
+
+    tracking_keys = {
+        "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+        "fbclid", "gclid", "msclkid", "_ga", "_gid", "ref_src", "cb", "timestamp", "t", "_",
     }
-    query = urlencode([
+    filtered_query = [
         (key, query_value)
         for key, query_value in parse_qsl(parsed.query, keep_blank_values=True)
-        if key.lower() in meaningful_query_keys
-    ])
-    return (
-        f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path or '/'}"
-        f"{'?' + query if query else ''}"
-    )
+        if key.lower() not in tracking_keys
+    ]
+    query = urlencode(filtered_query)
+    fragment = parsed.fragment.strip()
+    frag_str = f"#{fragment}" if (fragment.startswith("/") or fragment.startswith("!/")) else ""
+    path = parsed.path or "/"
+    if len(path) > 1 and path.endswith("/"):
+        path = path.rstrip("/")
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}{'?' + query if query else ''}{frag_str}"
 
 
 _CHALLENGE_MARKERS = {
@@ -1204,10 +1212,11 @@ class AutomationService:
     @staticmethod
     async def _capture_interactive_elements(page: Any) -> list[dict[str, Any]]:
         return await page.locator(
-            "a,button,input,select,textarea,[role='link'],[role='button'],"
-            "[role='tab'],[role='menuitem'],[data-testid]"
+            "a,button,input,select,textarea,form,details,summary,[role='link'],[role='button'],"
+            "[role='tab'],[role='menuitem'],[role='treeitem'],[role='option'],[role='combobox'],"
+            "[role='checkbox'],[role='radio'],[role='switch'],[tabindex],[data-testid]"
         ).evaluate_all(
-            """els => els.slice(0, 500).filter(el => {
+            r"""els => els.slice(0, 500).filter(el => {
               const s=getComputedStyle(el), b=el.getBoundingClientRect();
               return s.visibility!=='hidden' && s.display!=='none' && b.width>0 && b.height>0 && !el.disabled;
             }).map(el => {
@@ -1221,16 +1230,29 @@ class AutomationService:
                 : el.getAttribute('name') ? `${tag}[name="${CSS.escape(el.getAttribute('name'))}"]`
                 : `${tag}:nth-of-type(${[...el.parentElement.children].filter(x=>x.tagName===el.tagName).indexOf(el)+1})`;
               const nav=`${text} ${name || ''}`.toLowerCase();
-              const unsafe=/delete|remove|logout|log out|sign out|submit|save|pay|purchase|checkout|confirm|cancel account/.test(nav);
+              const unsafe=/delete|remove|logout|log out|sign out|cancel account/.test(nav);
+              const formEl = el.closest('form');
+              const formInfo = formEl ? {
+                form_id: formEl.id || null,
+                form_name: formEl.getAttribute('name') || null,
+                form_action: formEl.getAttribute('action') || null,
+                form_method: (formEl.getAttribute('method') || 'get').toLowerCase()
+              } : null;
+              const isClickable = tag==='a' || tag==='button' || tag==='summary'
+                || ['link','button','tab','menuitem','treeitem','combobox'].includes(role)
+                || (tag==='input' && ['button','submit','image'].includes(el.type))
+                || Boolean(el.getAttribute('onclick'))
+                || getComputedStyle(el).cursor === 'pointer';
               return {tag,role,name,aria_label:el.getAttribute('aria-label'),
                 element_id:id,css_selector:css,test_id:testId,
                 label:el.labels?.[0]?.innerText?.trim() || el.getAttribute('aria-labelledby') || null,
                 placeholder:el.getAttribute('placeholder'),visible_text:text || null,href:el.href || null,
                 input_type:el.getAttribute('type'),checked:typeof el.checked==='boolean' ? el.checked : null,
                 options:tag==='select' ? [...el.options].map(o=>({label:o.text.trim(),value:o.value})) : [],
+                form_info: formInfo,
+                required: Boolean(el.required),
                 locator_validated:true,
-                navigation_candidate:!unsafe && (tag==='a' || ['link','tab','menuitem'].includes(role)
-                  || (role==='button' && /menu|next|previous|back|home|dashboard|view|open|details|login|signin|sign-in|log-in|sign\s*in|signup|sign-up|sign\s*up|register|get\s*started|start/.test(nav)))};
+                navigation_candidate:!unsafe && isClickable};
             })"""
         )
 
@@ -1454,23 +1476,9 @@ class AutomationService:
                     finally:
                         await worker_page.close()
 
-                if testing_scope == "specific_page":
-                    verified_candidates = []
-                else:
-                    seacrawl_urls = await self.seacrawl.discover_urls(
-                        url=url,
-                        page_limit=settings.automation_crawl_page_limit,
-                        depth_limit=settings.automation_crawl_depth_limit,
-                    )
-                    verified_candidates = [
-                        candidate
-                        for candidate in seacrawl_urls
-                        if urlsplit(candidate).scheme in {"http", "https"}
-                        and urlsplit(candidate).netloc == origin.netloc
-                    ]
-                pending = [(url, 0), *[(candidate, 1) for candidate in verified_candidates]]
+                pending = [(url, 0)]
                 visited: set[str] = set()
-                queued: set[str] = {_canonical_page_url(candidate) for candidate, _ in pending}
+                queued: set[str] = {_canonical_page_url(url)}
                 raw: list[dict[str, Any]] = []
                 title = None
                 state_counts: dict[str, int] = {}
@@ -1534,6 +1542,20 @@ class AutomationService:
                         })
                         continue
                     current_url = _canonical_page_url(page.url)
+                    is_redirect = (current_url != canonical_requested)
+                    if is_redirect:
+                        report["navigation_relationships"].append({
+                            "from": canonical_requested,
+                            "to": current_url,
+                            "via": "redirect",
+                        })
+                        visited.add(canonical_requested)
+                        if current_url in visited:
+                            report["pages_skipped"].append({
+                                "url": page_url,
+                                "reason": f"redirected_to_already_visited_page: {current_url}",
+                            })
+                            continue
                     if urlsplit(current_url).netloc != origin.netloc:
                         report["pages_skipped"].append({
                             "url": page_url, "reason": "redirected_to_external_domain",
@@ -1787,10 +1809,26 @@ class AutomationService:
                             screenshot = str(screenshot_path)
                         except Exception:
                             screenshot = None
+                    form_groups: dict[str, dict[str, Any]] = {}
+                    for item in discovered:
+                        if item.get("tag") in {"input", "select", "textarea"}:
+                            f_info = item.get("form_info") or {}
+                            f_key = f_info.get("form_id") or f_info.get("form_action") or "default_form"
+                            if f_key not in form_groups:
+                                form_groups[f_key] = {
+                                    "form_id": f_info.get("form_id"),
+                                    "action": f_info.get("form_action"),
+                                    "method": f_info.get("form_method", "get"),
+                                    "fields": [],
+                                }
+                            form_groups[f_key]["fields"].append(item)
+
                     report["page_inventory"].append({
                         "url": current_url,
                         "requested_url": page_url,
                         "final_url": current_url,
+                        "is_redirect": (current_url != canonical_requested),
+                        "redirect_chain": [page_url, current_url] if current_url != canonical_requested else [current_url],
                         "route": urlsplit(current_url).path or "/",
                         "depth": depth,
                         "state_fingerprint": state_fingerprint,
@@ -1807,8 +1845,9 @@ class AutomationService:
                         "accessibility_tree": accessibility_tree[:100000],
                         "elements": discovered,
                         "forms": [item for item in discovered if item.get("tag") in {"input", "select", "textarea"}],
+                        "structured_forms": list(form_groups.values()),
                         "links": [item for item in discovered if item.get("href")],
-                        "buttons": [item for item in discovered if item.get("role") == "button"],
+                        "buttons": [item for item in discovered if item.get("role") == "button" or item.get("tag") == "button"],
                         "structured_regions": structured_regions,
                         "validation_messages": [
                             item for item in structured_regions
@@ -1883,9 +1922,26 @@ class AutomationService:
                                     if urlsplit(after).netloc != origin.netloc:
                                         continue
                                     refreshed = result["elements"]
-                                    for refreshed_item in refreshed:
-                                        refreshed_item["page_url"] = after
-                                    raw.extend(refreshed)
+                                    if after == current_url:
+                                        existing_keys = {
+                                            (e.get("test_id"), e.get("element_id"), e.get("css_selector"))
+                                            for e in report["page_inventory"][-1]["elements"]
+                                        }
+                                        for refreshed_item in refreshed:
+                                            refreshed_item["page_url"] = current_url
+                                            key = (
+                                                refreshed_item.get("test_id"),
+                                                refreshed_item.get("element_id"),
+                                                refreshed_item.get("css_selector"),
+                                            )
+                                            if key not in existing_keys:
+                                                existing_keys.add(key)
+                                                report["page_inventory"][-1]["elements"].append(refreshed_item)
+                                                raw.append(refreshed_item)
+                                    else:
+                                        for refreshed_item in refreshed:
+                                            refreshed_item["page_url"] = after
+                                        raw.extend(refreshed)
                                     for refreshed_item in refreshed:
                                         refreshed_href = refreshed_item.get("href")
                                         if not refreshed_href:
