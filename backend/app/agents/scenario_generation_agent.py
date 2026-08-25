@@ -6,7 +6,31 @@ from app.llm.context import batches, scoped_context
 from app.core.config import settings
 from app.llm.prompt_loader import PromptLoader
 from app.schemas.context_schema import StructuredContext
-from app.schemas.scenario_schema import ScenarioBatch
+from app.schemas.scenario_schema import Scenario, ScenarioBatch
+from app.utils.similarity import similarity
+
+
+def deduplicate_scenarios(scenarios: list[Scenario]) -> list[Scenario]:
+    unique: list[Scenario] = []
+    for scenario in scenarios:
+        is_duplicate = False
+        for existing in unique:
+            if str(scenario.scenario_id) == str(existing.scenario_id):
+                is_duplicate = True
+                break
+            title_sim = similarity(scenario.title, existing.title)
+            desc_sim = similarity(scenario.description, existing.description)
+            if title_sim >= 0.85 or (scenario.scenario_type == existing.scenario_type and (title_sim >= 0.75 or desc_sim >= 0.85)):
+                is_duplicate = True
+                existing.requirement_ids = list(dict.fromkeys(existing.requirement_ids + scenario.requirement_ids))
+                existing.acceptance_criteria_ids = list(dict.fromkeys(existing.acceptance_criteria_ids + scenario.acceptance_criteria_ids))
+                existing.user_story_ids = list(dict.fromkeys(existing.user_story_ids + scenario.user_story_ids))
+                existing.feature_ids = list(dict.fromkeys(existing.feature_ids + scenario.feature_ids))
+                existing.source_references = list(dict.fromkeys((existing.source_references or []) + (scenario.source_references or [])))
+                break
+        if not is_duplicate:
+            unique.append(scenario)
+    return unique
 
 
 class ScenarioGenerationAgent(BaseAgent[ScenarioBatch]):
@@ -85,4 +109,4 @@ class ScenarioGenerationAgent(BaseAgent[ScenarioBatch]):
                     list(dict.fromkeys((scenario.source_references or story_ids) + [str(x) for x in context_dict.get("image_ids", [])]))
                 )
             generated.extend(result.scenarios)
-        return ScenarioBatch(scenarios=generated)
+        return ScenarioBatch(scenarios=deduplicate_scenarios(generated))

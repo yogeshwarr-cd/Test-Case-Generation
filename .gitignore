@@ -19,3 +19,15 @@ ml/datasets/ui_elements/images/**/*.jpg
 ml/datasets/ui_elements/images/**/*.jpeg
 ml/datasets/ui_elements/images/**/*.webp
 ml/datasets/ui_elements/labels/**/*.txt
+
+# Frontend & Next.js
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+frontend/out/
+# Logs & Test Caches
+*.log
+backend/logs/
+.pytest_cache/
+.pytest_temp/

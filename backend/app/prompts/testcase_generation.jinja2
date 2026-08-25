@@ -16,5 +16,6 @@ Rules:
 14. Return exactly one complete test case for every supplied scenario. Do not return partial test-case objects.
 15. All input steps (fill, enter, type, select) MUST contain explicit executable input values enclosed in quotes (e.g. 'Fill "Name" with "John Doe"' or 'Enter "Email" with "user@example.com"'). Never generate vague actions like "Enter a valid name". Use concrete test data for positive input actions and explicit empty strings (e.g. 'Fill "Name" with ""') for negative/empty-field tests.
 16. Do not invent post-registration or post-action expected behavior. Expected results must be supported by acceptance criteria or actual page evidence; otherwise mark the expected result or step BLOCKED.
+17. Strict Deduplication: Generate exactly one unique test case for each distinct scenario. Never repeat or output duplicate test cases.
 Scenarios: {{ scenarios }}
 Source context: {{ context }}

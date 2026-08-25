@@ -175,3 +175,52 @@ async def test_mock_mode_runs_generation_and_validation_without_live_provider(mo
     }, ctx)
     assert testcase_validation.confidence_score >= 0.95
     assert all(case.steps for case in test_cases.test_cases)
+
+
+@pytest.mark.asyncio
+async def test_deduplication_removes_repeated_scenarios_and_testcases():
+    from app.agents.scenario_generation_agent import deduplicate_scenarios
+    from app.agents.testcase_generation_agent import deduplicate_test_cases
+    project_id = uuid.uuid4()
+    sc1 = Scenario(
+        scenario_id=uuid.uuid4(), project_id=project_id,
+        title="Create one-time Home Visit appointment", description="User creates a home visit appointment",
+        scenario_type="positive", expected_business_outcome="Appointment created",
+        user_story_ids=["US-1"], requirement_ids=["REQ-1"], acceptance_criteria_ids=["AC-1"]
+    )
+    sc2 = Scenario(
+        scenario_id=uuid.uuid4(), project_id=project_id,
+        title="Create one-time Home Visit appointment", description="User creates a home visit appointment with details",
+        scenario_type="positive", expected_business_outcome="Appointment created",
+        user_story_ids=["US-2"], requirement_ids=["REQ-2"], acceptance_criteria_ids=["AC-2"]
+    )
+    sc3 = Scenario(
+        scenario_id=uuid.uuid4(), project_id=project_id,
+        title="Fail when date is missing", description="User submits empty date",
+        scenario_type="negative", expected_business_outcome="Validation error shown",
+        user_story_ids=["US-1"], requirement_ids=["REQ-1"], acceptance_criteria_ids=["AC-1"]
+    )
+    deduped_scenarios = deduplicate_scenarios([sc1, sc2, sc3])
+    assert len(deduped_scenarios) == 2
+    # Verify merged traceability on deduplicated scenario
+    assert set(deduped_scenarios[0].user_story_ids) == {"US-1", "US-2"}
+    assert set(deduped_scenarios[0].requirement_ids) == {"REQ-1", "REQ-2"}
+
+    tc1 = CaseModel(
+        scenario_id=sc1.scenario_id, project_id=project_id,
+        title="Create one-time Home Visit appointment", description="Step 1",
+        steps=[CaseStep(step_number=1, action="Enter details", expected_result="Success")]
+    )
+    tc2 = CaseModel(
+        scenario_id=sc1.scenario_id, project_id=project_id,
+        title="Create one-time Home Visit appointment", description="Step 1",
+        steps=[CaseStep(step_number=1, action="Enter details", expected_result="Success")]
+    )
+    tc3 = CaseModel(
+        scenario_id=sc3.scenario_id, project_id=project_id,
+        title="Fail when date is missing", description="Step 1",
+        steps=[CaseStep(step_number=1, action="Leave date empty", expected_result="Error")]
+    )
+    deduped_cases = deduplicate_test_cases([tc1, tc2, tc3])
+    assert len(deduped_cases) == 2
+

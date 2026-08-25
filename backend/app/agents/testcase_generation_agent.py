@@ -7,7 +7,31 @@ from app.core.config import settings
 from app.llm.prompt_loader import PromptLoader
 from app.schemas.context_schema import StructuredContext
 from app.schemas.scenario_schema import ScenarioBatch
-from app.schemas.testcase_schema import TestCaseBatch
+from app.schemas.testcase_schema import TestCase, TestCaseBatch
+from app.utils.similarity import similarity
+
+
+def deduplicate_test_cases(test_cases: list[TestCase]) -> list[TestCase]:
+    unique: list[TestCase] = []
+    seen_scenario_ids = set()
+    seen_case_ids = set()
+    for tc in test_cases:
+        tc_scenario_id = str(tc.scenario_id)
+        tc_case_id = str(tc.test_case_id)
+        if tc_scenario_id in seen_scenario_ids or tc_case_id in seen_case_ids:
+            continue
+        is_duplicate = False
+        for existing in unique:
+            title_sim = similarity(tc.title, existing.title)
+            desc_sim = similarity(tc.description, existing.description)
+            if title_sim >= 0.88 or (title_sim >= 0.75 and desc_sim >= 0.85):
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique.append(tc)
+            seen_scenario_ids.add(tc_scenario_id)
+            seen_case_ids.add(tc_case_id)
+    return unique
 
 
 class TestCaseGenerationAgent(BaseAgent[TestCaseBatch]):
@@ -95,4 +119,4 @@ class TestCaseGenerationAgent(BaseAgent[TestCaseBatch]):
                     setattr(test_case, field, list(dict.fromkeys(mapped or available)))
                 test_case.source_references=list(dict.fromkeys(test_case.source_references+[str(x) for x in context_dict.get("image_ids",[])]))
             generated.extend(ordered)
-        return TestCaseBatch(test_cases=generated)
+        return TestCaseBatch(test_cases=deduplicate_test_cases(generated))
