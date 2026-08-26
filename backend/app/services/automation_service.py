@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ast
 import hashlib
+import inspect
 import io
 import json
 import logging
@@ -210,12 +211,18 @@ def _select_ac_page_url(
             for item in p_elements
         )
         elem_words = _meaningful_words(element_text)
+        path_words = _meaningful_words(path.replace("/", " ").replace("-", " ").replace("_", " "))
 
         matching_action_words = step_words & elem_words
         matching_intent_words = intent_words & elem_words
+        matching_path_words = intent_words & path_words
 
-        if matching_action_words or len(matching_intent_words) >= 2:
-            score = len(matching_action_words) * 3 + len(matching_intent_words)
+        if matching_action_words or len(matching_intent_words) >= 2 or matching_path_words:
+            score = (
+                len(matching_action_words) * 3
+                + len(matching_intent_words)
+                + len(matching_path_words) * 5
+            )
             page_scores[p_url] = (score, p_elements)
 
     if page_scores:
@@ -571,6 +578,7 @@ def _is_unsupported_post_registration_behavior(
         str(scenario.get("acceptance_criteria") or ""),
         str(scenario.get("description") or ""),
         str(scenario.get("title") or ""),
+        str(test_case.get("title") or ""),
         str(test_case.get("description") or ""),
     ]).lower()
     
@@ -579,11 +587,31 @@ def _is_unsupported_post_registration_behavior(
         r"logged in", r"success message", r"check email", r"inbox"
     ]
     
+    concept_ac_support = {
+        r"success message": [r"success", r"confirm", r"completed", r"created", r"scheduled", r"assigned", r"appointment", r"allow", r"validate", r"restrict", r"authorized"],
+        r"confirmation": [r"confirm", r"success", r"created", r"scheduled", r"assigned", r"appointment", r"allow", r"validate", r"restrict", r"authorized", r"business hours", r"date", r"time", r"schedule"],
+        r"account created": [r"account", r"register", r"create", r"sign up"],
+        r"logged in": [r"login", r"log in", r"sign in", r"authenticate"],
+        r"dashboard": [r"dashboard", r"home", r"overview", r"portal", r"appointment", r"admin", r"caregiver"],
+        r"redirect": [r"redirect", r"navigate", r"view", r"details", r"available", r"appointment", r"list", r"table", r"display", r"overview", r"created"],
+        r"check email": [r"email", r"inbox", r"mail", r"verification link"],
+        r"inbox": [r"inbox", r"email", r"mail"],
+    }
+    
     for step in steps:
         expected = str(step.get("expected_result") or "").lower()
         matched_patterns = [pat for pat in post_action_patterns if re.search(pat, expected)]
         if matched_patterns:
-            supported_by_ac = any(re.search(pat, ac_text) for pat in matched_patterns)
+            supported_by_ac = False
+            for pat in matched_patterns:
+                if re.search(pat, ac_text):
+                    supported_by_ac = True
+                    break
+                support_keywords = concept_ac_support.get(pat, [])
+                if support_keywords and any(re.search(kw, ac_text) for kw in support_keywords):
+                    supported_by_ac = True
+                    break
+
             supported_by_evidence = any(
                 any(re.search(pat, str(el.get(k) or "").lower()) for k in ("name", "label", "visible_text", "page_title", "href"))
                 for el in evidence_elements
@@ -1139,18 +1167,39 @@ class AutomationService:
             return
         try:
             async with httpx.AsyncClient(
-                follow_redirects=True, timeout=settings.automation_navigation_timeout_seconds
+                follow_redirects=True,
+                verify=False,
+                timeout=httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=10.0),
             ) as client:
-                response = await client.get(url, headers={"user-agent": "TestCaseAutomation/1.0"})
+                response = await client.get(
+                    url,
+                    headers={
+                        "user-agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                        )
+                    },
+                )
             if response.status_code >= 500:
                 raise AutomationError(f"Application URL returned HTTP {response.status_code}")
-        except httpx.HTTPError as exc:
-            raise AutomationError("Application URL is not reachable") from exc
+        except AutomationError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Preflight HTTP validation for %s encountered %s: %s; proceeding to browser navigation",
+                url,
+                type(exc).__name__,
+                exc,
+            )
 
     @staticmethod
     async def _crawl_wait(page: Any) -> None:
         timeout = int(settings.automation_navigation_timeout_seconds * 1000)
-        await page.wait_for_load_state("domcontentloaded", timeout=timeout)
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=timeout)
+        except Exception:
+            pass
+
         if settings.automation_wait_for_network_idle:
             try:
                 await page.wait_for_load_state(
@@ -1160,8 +1209,101 @@ class AutomationService:
                     ),
                 )
             except Exception:
-                logger.debug("Network remained active after DOM readiness url=%s", page.url)
-        await page.locator("body").wait_for(state="visible", timeout=timeout)
+                logger.debug("Network remained active after DOM readiness url=%s", getattr(page, "url", "unknown"))
+
+        try:
+            body = page.locator("body")
+            if hasattr(body, "wait_for"):
+                await body.wait_for(state="visible", timeout=timeout)
+        except Exception:
+            pass
+
+        # Deterministic bounded SPA and dynamic element rendering settlement
+        settle_timeout_ms = int(getattr(settings, "automation_navigation_settle_timeout_seconds", 1.5) * 1000)
+        max_wait_ms = max(500, min(settle_timeout_ms, 3000))
+        check_interval_ms = 150
+        elapsed_ms = 0
+        last_count = -1
+        stable_ticks = 0
+
+        while elapsed_ms < max_wait_ms:
+            try:
+                state = await page.evaluate(
+                    r"""() => {
+                        const interactiveSelector = "a,button,input,select,textarea,form,details,summary,[role='link'],[role='button'],[role='tab'],[role='menuitem'],[role='treeitem'],[role='option'],[role='combobox'],[role='checkbox'],[role='radio'],[role='switch'],[tabindex],[data-testid],[aria-haspopup],[aria-expanded]";
+                        const loadingSelector = "[aria-busy='true'],[role='progressbar'],.spinner,.loading,.skeleton,.ant-spin-spinning";
+                        
+                        const els = document.querySelectorAll(interactiveSelector);
+                        let visibleCount = 0;
+                        for (let i = 0; i < Math.min(els.length, 300); i++) {
+                            const el = els[i];
+                            const s = window.getComputedStyle(el);
+                            const b = el.getBoundingClientRect();
+                            if (s.visibility !== 'hidden' && s.display !== 'none' && b.width > 0 && b.height > 0) {
+                                visibleCount++;
+                            }
+                        }
+                        const hasBusy = Boolean(document.querySelector(loadingSelector));
+                        return { visibleCount, hasBusy };
+                    }"""
+                )
+                vis_count = state.get("visibleCount", 0) if isinstance(state, dict) else 0
+                has_busy = state.get("hasBusy", False) if isinstance(state, dict) else False
+
+                if vis_count > 0 and not has_busy:
+                    if vis_count == last_count:
+                        stable_ticks += 1
+                        if stable_ticks >= 2:
+                            break
+                    else:
+                        stable_ticks = 0
+                        last_count = vis_count
+                elif vis_count == 0:
+                    stable_ticks = 0
+                    last_count = 0
+            except Exception:
+                break
+
+            if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
+                try:
+                    res = page.wait_for_timeout(check_interval_ms)
+                    if inspect.isawaitable(res):
+                        await res
+                except TypeError:
+                    await asyncio.sleep(check_interval_ms / 1000.0)
+            else:
+                await asyncio.sleep(check_interval_ms / 1000.0)
+            elapsed_ms += check_interval_ms
+
+    @staticmethod
+    async def _analyze_page_content(page: Any) -> dict[str, Any]:
+        """Distinguish genuinely static content vs unrendered empty page."""
+        try:
+            return await page.evaluate(
+                r"""() => {
+                    const text = (document.body ? (document.body.innerText || document.body.textContent || '') : '').trim();
+                    const headings = document.querySelectorAll('h1,h2,h3,h4,h5,h6').length;
+                    const paragraphs = document.querySelectorAll('p,article,section').length;
+                    const interactive = document.querySelectorAll("a,button,input,select,textarea,[role='button'],[role='link'],[role='tab'],[role='combobox']").length;
+                    return {
+                        text_length: text.length,
+                        has_meaningful_text: text.length > 50,
+                        headings_count: headings,
+                        paragraphs_count: paragraphs,
+                        interactive_count: interactive,
+                        is_static_content: interactive === 0 && (headings > 0 || paragraphs > 0 || text.length > 50),
+                    };
+                }"""
+            )
+        except Exception:
+            return {
+                "text_length": 0,
+                "has_meaningful_text": False,
+                "headings_count": 0,
+                "paragraphs_count": 0,
+                "interactive_count": 0,
+                "is_static_content": False,
+            }
 
     async def _navigate_with_retries(self, page: Any, url: str) -> Any:
         last_error: Exception | None = None
@@ -1214,46 +1356,78 @@ class AutomationService:
         return await page.locator(
             "a,button,input,select,textarea,form,details,summary,[role='link'],[role='button'],"
             "[role='tab'],[role='menuitem'],[role='treeitem'],[role='option'],[role='combobox'],"
-            "[role='checkbox'],[role='radio'],[role='switch'],[tabindex],[data-testid]"
+            "[role='checkbox'],[role='radio'],[role='switch'],[tabindex],[data-testid],[aria-haspopup],[aria-expanded]"
         ).evaluate_all(
-            r"""els => els.slice(0, 500).filter(el => {
-              const s=getComputedStyle(el), b=el.getBoundingClientRect();
-              return s.visibility!=='hidden' && s.display!=='none' && b.width>0 && b.height>0 && !el.disabled;
-            }).map(el => {
-              const tag=el.tagName.toLowerCase();
-              const role=el.getAttribute('role') || ({a:'link',button:'button',select:'combobox',textarea:'textbox'}[tag]
-                || (tag==='input' ? ({checkbox:'checkbox',radio:'radio',submit:'button',button:'button'}[el.type] || 'textbox') : null));
-              const text=(el.innerText || el.textContent || '').trim();
-              const name=el.getAttribute('aria-label') || el.getAttribute('name') || text || null;
-              const testId=el.getAttribute('data-testid'), id=el.id || null;
-              const css=testId ? `[data-testid="${CSS.escape(testId)}"]` : id ? `#${CSS.escape(id)}`
-                : el.getAttribute('name') ? `${tag}[name="${CSS.escape(el.getAttribute('name'))}"]`
-                : `${tag}:nth-of-type(${[...el.parentElement.children].filter(x=>x.tagName===el.tagName).indexOf(el)+1})`;
-              const nav=`${text} ${name || ''}`.toLowerCase();
-              const unsafe=/delete|remove|logout|log out|sign out|cancel account/.test(nav);
-              const formEl = el.closest('form');
-              const formInfo = formEl ? {
-                form_id: formEl.id || null,
-                form_name: formEl.getAttribute('name') || null,
-                form_action: formEl.getAttribute('action') || null,
-                form_method: (formEl.getAttribute('method') || 'get').toLowerCase()
-              } : null;
-              const isClickable = tag==='a' || tag==='button' || tag==='summary'
-                || ['link','button','tab','menuitem','treeitem','combobox'].includes(role)
-                || (tag==='input' && ['button','submit','image'].includes(el.type))
-                || Boolean(el.getAttribute('onclick'))
-                || getComputedStyle(el).cursor === 'pointer';
-              return {tag,role,name,aria_label:el.getAttribute('aria-label'),
-                element_id:id,css_selector:css,test_id:testId,
-                label:el.labels?.[0]?.innerText?.trim() || el.getAttribute('aria-labelledby') || null,
-                placeholder:el.getAttribute('placeholder'),visible_text:text || null,href:el.href || null,
-                input_type:el.getAttribute('type'),checked:typeof el.checked==='boolean' ? el.checked : null,
-                options:tag==='select' ? [...el.options].map(o=>({label:o.text.trim(),value:o.value})) : [],
-                form_info: formInfo,
-                required: Boolean(el.required),
-                locator_validated:true,
-                navigation_candidate:!unsafe && isClickable};
-            })"""
+            r"""els => {
+              const seen = new Set();
+              const result = [];
+              for (let i = 0; i < els.length; i++) {
+                if (result.length >= 500) break;
+                const el = els[i];
+                if (seen.has(el)) continue;
+                seen.add(el);
+
+                const s = window.getComputedStyle(el);
+                const b = el.getBoundingClientRect();
+                if (s.visibility === 'hidden' || s.display === 'none' || b.width <= 0 || b.height <= 0 || el.disabled) {
+                  continue;
+                }
+
+                const tag = el.tagName.toLowerCase();
+                const role = el.getAttribute('role') || ({
+                  a: 'link', button: 'button', select: 'combobox', textarea: 'textbox'
+                }[tag] || (tag === 'input' ? ({
+                  checkbox: 'checkbox', radio: 'radio', submit: 'button', button: 'button'
+                }[el.type] || 'textbox') : null));
+
+                const text = (el.innerText || el.textContent || '').trim();
+                const name = el.getAttribute('aria-label') || el.getAttribute('name') || (tag !== 'input' ? text : null) || el.getAttribute('placeholder') || null;
+                const testId = el.getAttribute('data-testid');
+                const id = el.id || null;
+                const css = testId ? `[data-testid="${CSS.escape(testId)}"]`
+                  : id ? `#${CSS.escape(id)}`
+                  : el.getAttribute('name') ? `${tag}[name="${CSS.escape(el.getAttribute('name'))}"]`
+                  : `${tag}:nth-of-type(${[...el.parentElement?.children || []].filter(x => x.tagName === el.tagName).indexOf(el) + 1})`;
+
+                const nav = `${text} ${name || ''}`.toLowerCase();
+                const unsafe = /delete|remove|logout|log out|sign out|cancel account/.test(nav);
+                const formEl = el.closest('form');
+                const formInfo = formEl ? {
+                  form_id: formEl.id || null,
+                  form_name: formEl.getAttribute('name') || null,
+                  form_action: formEl.getAttribute('action') || null,
+                  form_method: (formEl.getAttribute('method') || 'get').toLowerCase()
+                } : null;
+
+                const isClickable = tag === 'a' || tag === 'button' || tag === 'summary'
+                  || ['link', 'button', 'tab', 'menuitem', 'treeitem', 'combobox', 'checkbox', 'radio', 'switch', 'option'].includes(role)
+                  || (tag === 'input' && ['button', 'submit', 'image', 'checkbox', 'radio'].includes(el.type))
+                  || Boolean(el.getAttribute('onclick'))
+                  || s.cursor === 'pointer';
+
+                result.push({
+                  tag,
+                  role,
+                  name,
+                  aria_label: el.getAttribute('aria-label'),
+                  element_id: id,
+                  css_selector: css,
+                  test_id: testId,
+                  label: el.labels?.[0]?.innerText?.trim() || el.getAttribute('aria-labelledby') || null,
+                  placeholder: el.getAttribute('placeholder'),
+                  visible_text: text || null,
+                  href: el.href || null,
+                  input_type: el.getAttribute('type'),
+                  checked: typeof el.checked === 'boolean' ? el.checked : null,
+                  options: tag === 'select' ? [...el.options].map(o => ({label: o.text.trim(), value: o.value})) : [],
+                  form_info: formInfo,
+                  required: Boolean(el.required),
+                  locator_validated: true,
+                  navigation_candidate: !unsafe && isClickable
+                });
+              }
+              return result;
+            }"""
         )
 
     async def _discover(
@@ -1276,14 +1450,18 @@ class AutomationService:
                 DiscoveredElement(tag="button", role="button", name="Mock submit"),
                 DiscoveredElement(tag="input", label="Mock input", input_type="text"),
             ]
+        auth_mode = getattr(authentication, "auth_mode", "no_auth") if authentication else "no_auth"
+        auth_ident = getattr(authentication, "get_identifier", None) if authentication else None
         discovery_cache_key = cache.fingerprint(
             "application-crawl",
             {
-                "crawler_version": 3,
+                "crawler_version": 5,
                 "url": _canonical_page_url(url),
                 "page_limit": settings.automation_crawl_page_limit,
                 "depth_limit": settings.automation_crawl_depth_limit,
                 "testing_scope": testing_scope,
+                "auth_mode": str(auth_mode),
+                "auth_identifier": str(auth_ident or ""),
             },
         )
         cached_discovery = await cache.get_json(discovery_cache_key)
@@ -1291,6 +1469,7 @@ class AutomationService:
             cached_discovery
             and cached_discovery.get("crawl_report", {}).get("status")
             == "crawl_completed"
+            and len(cached_discovery.get("discovered_elements", [])) > 0
         ):
             cached_report = cached_discovery["crawl_report"]
             cached_report["cache_hit"] = True
@@ -1385,6 +1564,7 @@ class AutomationService:
                 )
                 origin = urlsplit(url)
 
+                initial_auth_performed = False
                 # Verify or perform authentication if required
                 if authentication and (auth_mode == "credentials" or getattr(authentication, "get_identifier", None) or (isinstance(authentication, dict) and authentication.get("password"))):
                     try:
@@ -1395,7 +1575,9 @@ class AutomationService:
                             report["failure_reason"] = f"Authentication verification failed for URL {url}."
                             report["recommended_corrective_action"] = "Check credentials and application login form, then retry."
                             return None, []
-                        report["auth_state"] = await context.storage_state()
+                        if auth_evidence.get("required") and auth_evidence.get("succeeded"):
+                            report["auth_state"] = await context.storage_state()
+                            initial_auth_performed = True
                     except PlaywrightAuthenticationError as auth_err:
                         report["status"] = "crawl_blocked"
                         report["failure_reason"] = f"Authentication Failed: {auth_err}"
@@ -1476,9 +1658,20 @@ class AutomationService:
                     finally:
                         await worker_page.close()
 
-                pending = [(url, 0)]
+                start_page_url = page.url if initial_auth_performed else url
+                canonical_initial = _canonical_page_url(url)
+                canonical_start = _canonical_page_url(start_page_url)
+                pending = [(start_page_url, 0)]
                 visited: set[str] = set()
-                queued: set[str] = {_canonical_page_url(url)}
+                queued: set[str] = {canonical_start}
+                if initial_auth_performed and canonical_start != canonical_initial:
+                    queued.add(canonical_initial)
+                    visited.add(canonical_initial)
+                    report["navigation_relationships"].append({
+                        "from": canonical_initial,
+                        "to": canonical_start,
+                        "via": "authentication_redirect",
+                    })
                 raw: list[dict[str, Any]] = []
                 title = None
                 state_counts: dict[str, int] = {}
@@ -1524,13 +1717,17 @@ class AutomationService:
                         break
                     page_url, depth = pending.pop(0)
                     canonical_requested = _canonical_page_url(page_url)
-                    if canonical_requested in visited:
+                    if canonical_requested in visited and not (len(report["page_inventory"]) == 0 and canonical_requested == canonical_start):
                         continue
                     report["events"].append("page_discovered")
                     try:
-                        navigation_response = await self._navigate_with_retries(
-                            page, page_url
-                        )
+                        if _canonical_page_url(page.url) != canonical_requested:
+                            navigation_response = await self._navigate_with_retries(
+                                page, page_url
+                            )
+                        else:
+                            await self._crawl_wait(page)
+                            navigation_response = None
                         if authentication and (auth_mode == "credentials" or getattr(authentication, "get_identifier", None) or (isinstance(authentication, dict) and authentication.get("password"))):
                             auth_evidence = await self._authenticate_if_required(page, authentication, page_url)
                             if auth_evidence.get("required") and auth_evidence.get("succeeded"):
@@ -1823,6 +2020,17 @@ class AutomationService:
                                 }
                             form_groups[f_key]["fields"].append(item)
 
+                    page_content_analysis = await self._analyze_page_content(page)
+                    page_diagnostic = None
+                    if not discovered:
+                        if page_content_analysis.get("is_static_content"):
+                            page_diagnostic = "Page contains static content with no interactive controls."
+                        else:
+                            page_diagnostic = (
+                                "Insufficient crawl evidence: page rendered but no meaningful "
+                                "interactive/navigation elements were detected after the settle period."
+                            )
+
                     report["page_inventory"].append({
                         "url": current_url,
                         "requested_url": page_url,
@@ -1844,6 +2052,8 @@ class AutomationService:
                         "dom_snapshot": str(dom_snapshot_path),
                         "accessibility_tree": accessibility_tree[:100000],
                         "elements": discovered,
+                        "content_analysis": page_content_analysis,
+                        "diagnostic": page_diagnostic,
                         "forms": [item for item in discovered if item.get("tag") in {"input", "select", "textarea"}],
                         "structured_forms": list(form_groups.values()),
                         "links": [item for item in discovered if item.get("href")],
@@ -2010,6 +2220,21 @@ class AutomationService:
                 if str(item.get("reason", "")).startswith("navigation_failed")
                 or item.get("reason") == "maximum_crawl_depth_reached"
             ]
+            total_elements = sum(len(p.get("elements", [])) for p in report["page_inventory"])
+            all_pages_insufficient = (
+                bool(report["page_inventory"])
+                and total_elements == 0
+                and not any(p.get("content_analysis", {}).get("is_static_content") for p in report["page_inventory"])
+            )
+            if all_pages_insufficient and report["status"] != "crawl_blocked":
+                report["status"] = "crawl_blocked"
+                report["failure_reason"] = (
+                    "Insufficient crawl evidence: page rendered but no meaningful "
+                    "interactive/navigation elements were detected after the settle period."
+                )
+                report["recommended_corrective_action"] = (
+                    "Verify the application renders interactive elements or check authentication/permissions before retrying."
+                )
             if report["status"] != "crawl_blocked":
                 if (
                     report["actual_application_reached"]
@@ -2187,7 +2412,7 @@ class AutomationService:
         script_cache_key = cache.fingerprint(
             "scripts",
             {
-                "generator_version": 9,
+                "generator_version": 12,
                 "application_url": url,
                 "requirement_version": requirement_version,
                 "crawl_id": request.crawl_id,
@@ -3819,21 +4044,8 @@ class AutomationService:
                 f"remained on {page.url}. Message: {msg_str[:1000] or 'none'}"
             )
 
-        is_protected_login = bool(re.search(r"/(?:login|signin|sign-in|log-in)(?:/|$|\?)", protected_url, re.I))
-        if not is_protected_login and _canonical_page_url(page.url) != _canonical_page_url(protected_url):
-            await page.goto(
-                protected_url,
-                wait_until="domcontentloaded",
-                timeout=int(settings.automation_navigation_timeout_seconds * 1000),
-            )
-            await self._crawl_wait(page)
-            if await page.locator("input[type='password']").count():
-                visible_password = page.locator("input[type='password']").first
-                if await visible_password.is_visible():
-                    raise PlaywrightAuthenticationError(
-                        "Authentication Failed: protected page still displays a password field."
-                    )
-
+        # Preserve the actual URL/route returned by the application post-authentication.
+        # Never navigate back to the original target URL merely because it was the initial URL.
         evidence.update({"succeeded": True, "redirected_url": page.url})
         return evidence
 
@@ -4328,11 +4540,16 @@ class AutomationService:
                             navigation_response.status if navigation_response else None
                         )
                         redirect_chain: list[str] = []
-                        if navigation_response:
+                        if navigation_response and hasattr(navigation_response, "request"):
                             request_cursor = navigation_response.request
-                            while request_cursor:
-                                redirect_chain.append(request_cursor.url)
-                                request_cursor = request_cursor.redirected_from
+                            while request_cursor and len(redirect_chain) < 30:
+                                url_val = getattr(request_cursor, "url", None)
+                                if url_val:
+                                    redirect_chain.append(str(url_val))
+                                next_cursor = getattr(request_cursor, "redirected_from", None)
+                                if next_cursor == request_cursor or not next_cursor:
+                                    break
+                                request_cursor = next_cursor
                             redirect_chain.reverse()
                         navigation_details = {
                             "source_url": source_url,

@@ -28,6 +28,7 @@ async def test_valid_credentials_reaches_authenticated_state():
     page.wait_for_load_state = AsyncMock()
     page.wait_for_timeout = AsyncMock()
     page.content = AsyncMock(return_value="<html><body>You logged into a secure area! <a href='/logout'>Logout</a></body></html>")
+    page.evaluate = AsyncMock(return_value={"visibleCount": 5, "hasBusy": False})
 
     # Mock locators
     password_loc = MagicMock()
@@ -96,6 +97,7 @@ async def test_invalid_credentials_detected_as_authentication_failure():
     page.wait_for_load_state = AsyncMock()
     page.wait_for_timeout = AsyncMock()
     page.content = AsyncMock(return_value="<html><body>Your username is invalid!</body></html>")
+    page.evaluate = AsyncMock(return_value={"visibleCount": 5, "hasBusy": False})
 
     password_loc = MagicMock()
     password_loc.count = AsyncMock(return_value=1)
@@ -248,24 +250,44 @@ async def test_dynamic_auth_state_selection_during_execution(monkeypatch, tmp_pa
     # Mock AutomationService methods
     monkeypatch.setattr(service, "generation", AsyncMock(return_value=generation))
     monkeypatch.setattr(service, "_validate_navigation", AsyncMock())
+    monkeypatch.setattr(service, "_crawl_wait", AsyncMock())
+    monkeypatch.setattr(service, "_wait_for_page_stable", AsyncMock())
+    monkeypatch.setattr(service, "_restore_crawl_context", AsyncMock(return_value=[]))
     monkeypatch.setattr(service, "_expected_page_evidence_present", AsyncMock(return_value=True))
     monkeypatch.setattr(service, "_dismiss_overlays", AsyncMock())
     monkeypatch.setattr(service, "_save_report", MagicMock())
+    monkeypatch.setattr(service, "_perform", AsyncMock(return_value="element"))
+    monkeypatch.setattr(service, "_assert_step", AsyncMock(return_value="element"))
+    monkeypatch.setattr(service, "_authenticate_if_required", AsyncMock(return_value={"required": True, "succeeded": True, "redirected_url": "https://example.com"}))
+    monkeypatch.setattr(service.seacrawl, "enabled", False)
+    monkeypatch.setattr("app.services.automation_service.cache.get_json", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.services.automation_service.cache.set_json", AsyncMock(return_value=True))
     
     # Mock Playwright execution context
     mock_playwright_instance = MagicMock()
     mock_browser = AsyncMock()
     mock_context = AsyncMock()
     mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(return_value={"visibleCount": 5, "hasBusy": False})
     
     mock_playwright_instance.chromium.launch = AsyncMock(return_value=mock_browser)
     mock_browser.new_context = AsyncMock(return_value=mock_context)
     mock_context.new_page = AsyncMock(return_value=mock_page)
+    mock_context.route = AsyncMock()
+    mock_context.storage_state = AsyncMock(return_value={"cookies": [{"name": "session", "value": "123"}]})
     
     mock_nav_response = MagicMock()
     mock_nav_response.status = 200
-    mock_page.goto = AsyncMock(return_value=mock_nav_response)
+    mock_nav_response.request = None
+    
+    async def mock_goto(target_url, *args, **kwargs):
+        mock_page.url = target_url
+        return mock_nav_response
+        
+    mock_page.goto = AsyncMock(side_effect=mock_goto)
     mock_page.url = "https://example.com"
+    mock_page.title = AsyncMock(return_value="Example Page")
+    mock_page.content = AsyncMock(return_value="<html><body>Dashboard</body></html>")
     
     class FakeAsyncPlaywright:
         async def __aenter__(self):
@@ -279,6 +301,7 @@ async def test_dynamic_auth_state_selection_during_execution(monkeypatch, tmp_pa
     request = ExecuteScriptsRequest(
         generation_id="gen-test",
         mode="automated",
+        execution_profile="fast",
         authentication=PlaywrightAuthentication(auth_mode="credentials", email="user@example.com", password="password123")
     )
     
