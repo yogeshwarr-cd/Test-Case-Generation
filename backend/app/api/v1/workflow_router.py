@@ -53,3 +53,6 @@ async def decide_all(workflow_id:uuid.UUID,request:WorkflowBulkDecisionRequest):
 async def regenerate(workflow_id:uuid.UUID,request:WorkflowRegenerationRequest): return await workflow_service.regenerate_entity(workflow_id,request)
 @router.post("/{workflow_id}/review/approve")
 async def approve_review(workflow_id:uuid.UUID,request:WorkflowReviewApprovalRequest): return await workflow_service.approve_review(workflow_id,request)
+@router.put("/{workflow_id}/testcases/{test_case_id}", summary="Update a testcase inside the workflow's active state")
+async def update_workflow_testcase(workflow_id: uuid.UUID, test_case_id: uuid.UUID, body: dict):
+    return await workflow_service.update_testcase(workflow_id, test_case_id, body)

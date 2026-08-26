@@ -629,6 +629,28 @@ function ExecutionDashboard({ report, generation }: { report: ExecutionReport; g
   const [preview, setPreview] = useState<{ path: string; name: string } | null>(null);
   return <section className="space-y-5">
     <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Execution dashboard</p><h2 className="mt-2 text-xl font-bold">Run results</h2></div>
+    
+    {report.build_status && (
+      <div className={`p-5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm ${
+        report.build_status === 'BUILD PASSED' 
+          ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-300'
+          : report.build_status === 'BUILD FAILED'
+          ? 'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300'
+          : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300'
+      }`}>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wider opacity-85">Build Status</p>
+          <h3 className="text-xl font-extrabold mt-1 tracking-tight">{report.build_status}</h3>
+        </div>
+        <div className="flex flex-wrap gap-4 text-xs font-semibold sm:text-sm">
+          <div>Critical Total: <span className="font-bold">{report.critical_total ?? 0}</span></div>
+          <div>Passed: <span className="font-bold text-green-600 dark:text-green-400">{report.critical_passed ?? 0}</span></div>
+          <div>Failed: <span className="font-bold text-red-600 dark:text-red-400">{report.critical_failed ?? 0}</span></div>
+          <div>Blocked: <span className="font-bold text-amber-600 dark:text-amber-400">{report.critical_blocked ?? 0}</span></div>
+        </div>
+      </div>
+    )}
+
     <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
       <Metric label="Total" value={report.total_scripts} /><Metric label="Passed" value={report.passed_scripts} /><Metric label="Failed" value={report.failed_scripts} /><Metric label="Skipped" value={report.skipped_scripts} /><Metric label="Seconds" value={report.execution_time_seconds} /><Metric label="Success" value={`${report.success_percentage}%`} />
     </div>
@@ -644,7 +666,15 @@ function ExecutionDashboard({ report, generation }: { report: ExecutionReport; g
         <summary className="flex cursor-pointer list-none items-start justify-between gap-4 p-4 marker:hidden sm:p-5">
           <div className="flex min-w-0 gap-3">
             <span className="mt-0.5 shrink-0">{result.status === 'passed' ? <CheckCircle2 className="h-5 w-5 text-green-500" /> : result.status === 'failed' ? <XCircle className="h-5 w-5 text-red-500" /> : <Play className="h-5 w-5 text-amber-500" />}</span>
-            <div className="min-w-0"><h3 className="truncate font-semibold">{result.script_name}</h3><p className={`mt-1 line-clamp-2 text-sm ${result.status === 'failed' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'}`}>{importantMessage}</p></div>
+            <div className="min-w-0">
+              <h3 className="truncate font-semibold">{result.script_name}</h3>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                {result.functional_area && <span className="inline-flex items-center rounded-md bg-blue-500/10 px-2 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400">Area: {result.functional_area}</span>}
+                {result.priority && <span className="inline-flex items-center rounded-md bg-purple-500/10 px-2 py-0.5 text-xs font-semibold text-purple-600 dark:text-purple-400">Priority: {result.priority}</span>}
+                {result.in_critical_suite && <span className="inline-flex items-center rounded-md bg-red-500/10 px-2 py-0.5 text-xs font-semibold text-red-600 dark:text-red-400">Critical Suite</span>}
+              </div>
+              <p className={`mt-2 line-clamp-2 text-sm ${result.status === 'failed' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'}`}>{importantMessage}</p>
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-2"><StatusBadge status={result.status} /><span className="hidden text-xs font-semibold text-muted-foreground sm:inline">{result.duration_seconds}s</span><span aria-hidden className="text-lg text-muted-foreground transition-transform group-open:rotate-180">⌄</span></div>
         </summary>

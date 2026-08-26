@@ -131,4 +131,22 @@ class WorkflowService:
             state=await nodes.fail_workflow_node(state)
         self._states[wid]=state
         await self._cache_completed(state)
+    async def update_testcase(self, wid, test_case_id, data):
+        state = self.get(wid)
+        found = False
+        for tc in state.setdefault("test_cases", []):
+            if str(tc.get("test_case_id")) == str(test_case_id):
+                if "functional_area" in data:
+                    tc["functional_area"] = data["functional_area"]
+                if "priority" in data:
+                    tc["priority"] = data["priority"]
+                if "in_critical_suite" in data:
+                    tc["in_critical_suite"] = data["in_critical_suite"]
+                found = True
+                break
+        if not found:
+            raise ValueError(f"Test case {test_case_id} was not found in this workflow")
+        self._persist_state(state)
+        await self._cache_completed(state)
+        return tc
 workflow_service=WorkflowService()

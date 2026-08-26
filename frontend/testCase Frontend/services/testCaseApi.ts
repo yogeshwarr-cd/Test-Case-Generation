@@ -275,6 +275,13 @@ export const testCaseApi = {
     });
   },
 
+  updateWorkflowTestCase(workflowId: string, testCaseId: string, fields: Partial<TestCase>) {
+    return request<TestCase>(`/api/v1/workflows/${workflowId}/testcases/${testCaseId}`, {
+      method: 'PUT',
+      body: JSON.stringify(fields),
+    });
+  },
+
   approveManualReview(workflowId: string, stage: 'scenario_manual_review' | 'testcase_manual_review') {
     return request<WorkflowEvent>(`/api/v1/workflows/${workflowId}/review/approve`, {
       method: 'POST', body: JSON.stringify({ stage }),

@@ -1,0 +1,220 @@
+{
+  "execution_id": "exec-5794587e-b187-4453-8712-e1f2795ad4e4",
+  "generation_id": "gen-test-build-status",
+  "execution_status": "execution_completed",
+  "mode": "automated",
+  "total_scripts": 2,
+  "passed_scripts": 1,
+  "failed_scripts": 1,
+  "skipped_scripts": 0,
+  "blocked_scripts": 0,
+  "rejected_scripts": 0,
+  "execution_time_seconds": 2.0,
+  "success_percentage": 50.0,
+  "results": [
+    {
+      "script_id": "s1",
+      "script_name": "s1",
+      "test_case_id": "tc-critical-pass",
+      "scenario_id": "sc-1",
+      "status": "passed",
+      "duration_seconds": 1.2,
+      "error_message": null,
+      "failure": null,
+      "traceability": {},
+      "functional_area": "Authentication",
+      "priority": "critical",
+      "in_critical_suite": true
+    },
+    {
+      "script_id": "s2",
+      "script_name": "s2",
+      "test_case_id": "tc-noncritical-fail",
+      "scenario_id": "sc-2",
+      "status": "failed",
+      "duration_seconds": 0.8,
+      "error_message": null,
+      "failure": null,
+      "traceability": {},
+      "functional_area": "Reports",
+      "priority": "low",
+      "in_critical_suite": false
+    }
+  ],
+  "rejected_results": [],
+  "overall_summary": {
+    "total_tests": 2,
+    "executed_tests": 2,
+    "passed": 1,
+    "failed": 1,
+    "skipped": 0,
+    "blocked": 0,
+    "rejected": 0,
+    "critical_total": 1,
+    "critical_passed": 1,
+    "critical_failed": 0,
+    "critical_blocked": 0,
+    "build_status": "BUILD PASSED",
+    "pass_rate": 50.0,
+    "pages_discovered": 0,
+    "page_failures": 0,
+    "locator_failures": 0,
+    "environment_failures": 0,
+    "application_failures": 0,
+    "automation_failures": 0,
+    "verified_fixes": 0,
+    "inconclusive": 0
+  },
+  "requirement_coverage": {
+    "total_mapped_requirements": 0,
+    "executed_requirement_references": [],
+    "failed_requirement_references": [],
+    "covered_percentage": 0
+  },
+  "failed_requirement_mapping": [],
+  "developer_ready_tickets": [],
+  "developer_execution_reports": [
+    {
+      "issue_title": "No application issue detected: s1",
+      "affected_feature_user_story": {
+        "feature": "s1",
+        "user_stories": []
+      },
+      "problem_description": "The application completed the mapped scenario and test case without detecting missing or incorrect functionality.",
+      "expected_vs_actual_application_behavior": {
+        "expected": "The mapped application behavior should complete successfully.",
+        "actual": "All executed steps and expected-result checks completed successfully."
+      },
+      "missing_functionality": "None identified.",
+      "developer_implementation_requirements": {
+        "ui": [
+          "No UI changes required."
+        ],
+        "backend_api": [
+          "No backend or API changes required."
+        ],
+        "validation": [
+          "No validation changes required."
+        ],
+        "database": [
+          "No database changes required."
+        ]
+      },
+      "acceptance_criteria": [],
+      "priority": "Low",
+      "classification": null,
+      "confidence": 1.0,
+      "developer_issue_created": false
+    },
+    {
+      "issue_title": "Application behavior not executed: s2",
+      "affected_feature_user_story": {
+        "feature": "s2",
+        "user_stories": []
+      },
+      "problem_description": "This test was not executed, so application functionality was not evaluated.",
+      "expected_vs_actual_application_behavior": {
+        "expected": "The mapped application behavior should complete successfully.",
+        "actual": "No application behavior was observed because execution was skipped."
+      },
+      "missing_functionality": "Not evaluated.",
+      "developer_implementation_requirements": {
+        "ui": [
+          "No UI changes required."
+        ],
+        "backend_api": [
+          "No backend or API changes required."
+        ],
+        "validation": [
+          "No validation changes required."
+        ],
+        "database": [
+          "No database changes required."
+        ]
+      },
+      "acceptance_criteria": [],
+      "priority": "Low",
+      "classification": null,
+      "confidence": 0.0,
+      "developer_issue_created": false
+    }
+  ],
+  "qa_diagnostic_reports": [
+    {
+      "script_id": "s1",
+      "status": "passed",
+      "classification": null,
+      "confidence": null,
+      "confidence_gate": {},
+      "locator": null,
+      "stack_trace": null,
+      "screenshots": [],
+      "dom_snapshot": null,
+      "network_errors": [],
+      "console_logs": [],
+      "playwright_trace": null,
+      "automation_recommendations": {}
+    },
+    {
+      "script_id": "s2",
+      "status": "failed",
+      "classification": null,
+      "confidence": null,
+      "confidence_gate": {},
+      "locator": null,
+      "stack_trace": null,
+      "screenshots": [],
+      "dom_snapshot": null,
+      "network_errors": [],
+      "console_logs": [],
+      "playwright_trace": null,
+      "automation_recommendations": {}
+    }
+  ],
+  "traceability_chains": [
+    {
+      "epic": [],
+      "feature": [],
+      "user_story": [],
+      "acceptance_criterion": [],
+      "scenario": [],
+      "test_case": [
+        {
+          "id": "tc-critical-pass",
+          "title": "Critical Passing TC"
+        }
+      ],
+      "script": "s1",
+      "execution_status": "passed",
+      "defect": null
+    },
+    {
+      "epic": [],
+      "feature": [],
+      "user_story": [],
+      "acceptance_criterion": [],
+      "scenario": [],
+      "test_case": [
+        {
+          "id": "tc-noncritical-fail",
+          "title": "Non-critical Failing TC"
+        }
+      ],
+      "script": "s2",
+      "execution_status": "failed",
+      "defect": null
+    }
+  ],
+  "requirement_version": null,
+  "script_lifecycle": [],
+  "retest_verification": [],
+  "total": 2,
+  "passed": 1,
+  "failed": 1,
+  "blocked": 0,
+  "critical_total": 1,
+  "critical_passed": 1,
+  "critical_failed": 0,
+  "critical_blocked": 0,
+  "build_status": "BUILD PASSED"
+}

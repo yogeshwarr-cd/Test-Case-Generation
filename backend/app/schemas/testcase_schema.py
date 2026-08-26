@@ -6,7 +6,7 @@ from app.schemas.common import Priority
 class TestStep(BaseModel): step_number:int=Field(ge=1); action:str=Field(min_length=1); expected_result:str=Field(min_length=1)
 class TestCase(BaseModel):
     model_config=ConfigDict(extra="ignore")
-    test_case_id:uuid.UUID=Field(default_factory=uuid.uuid4); scenario_id:uuid.UUID=Field(default_factory=uuid.uuid4); project_id:uuid.UUID=Field(default_factory=uuid.uuid4); title:str=Field(min_length=1); description:str=Field(min_length=1); test_case_type:str=Field(default="functional"); priority:Priority=Priority.medium
+    test_case_id:uuid.UUID=Field(default_factory=uuid.uuid4); scenario_id:uuid.UUID=Field(default_factory=uuid.uuid4); project_id:uuid.UUID=Field(default_factory=uuid.uuid4); title:str=Field(min_length=1); description:str=Field(min_length=1); test_case_type:str=Field(default="functional"); priority:Priority=Priority.medium; functional_area:str=Field(default="Unclassified"); in_critical_suite:bool=Field(default=False)
     preconditions:list[str]=Field(default_factory=list); test_data:dict[str,Any]=Field(default_factory=dict); steps:list[TestStep]=Field(min_length=1); postconditions:list[str]=Field(default_factory=list); requirement_ids:list[str]=Field(default_factory=list); acceptance_criteria_ids:list[str]=Field(default_factory=list); source_references:list[str]=Field(default_factory=list); automation_candidate:bool=False; generation_metadata:dict[str,Any]=Field(default_factory=dict)
 
     @model_validator(mode="before")

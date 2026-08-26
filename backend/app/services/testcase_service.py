@@ -10,7 +10,7 @@ class TestCaseService:
         return x
     async def edit(self,i,d):
         try:
-            x=await self.get(i);v=await self.r.create_testcase_version(x,title=d.title,description=d.description,test_case_type=d.type,priority=d.priority,preconditions=d.preconditions,test_data=d.test_data if isinstance(d.test_data,dict) else {},postconditions=d.postconditions,payload=d.model_dump(mode="json"),generation_reason="manual_edit",created_by_type="user");await self.r.create_steps(v,d.steps);await self.r.save_traceability_links(x.id,d.traceability);await self.r.update_current_version(x,v);await self.s.commit();return x
+            x=await self.get(i);v=await self.r.create_testcase_version(x,title=d.title,description=d.description,test_case_type=d.type,priority=d.priority,preconditions=d.preconditions,test_data=d.test_data if isinstance(d.test_data,dict) else {},postconditions=d.postconditions,functional_area=d.functional_area,in_critical_suite=d.in_critical_suite,payload=d.model_dump(mode="json"),generation_reason="manual_edit",created_by_type="user");await self.r.create_steps(v,d.steps);await self.r.save_traceability_links(x.id,d.traceability);await self.r.update_current_version(x,v);await self.s.commit();return x
         except Exception:
             await self.s.rollback();raise
     async def feedback(self,x,text,user=None): row=await self.f.create_feedback(project_id=x.project_id,entity_type="testcase",entity_id=x.id,version_id=x.current_version_id,feedback_text=text,feedback_type="manual",submitted_by=user);await self.s.commit();return row

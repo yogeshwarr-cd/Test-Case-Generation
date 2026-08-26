@@ -10,7 +10,7 @@ class InputPayload(BaseModel):
     tech_stack:dict=Field(default_factory=dict);functional_requirements:list=Field(default_factory=list);non_functional_requirements:list=Field(default_factory=list);epics:list=Field(default_factory=list);features:list=Field(default_factory=list);user_stories:list=Field(default_factory=list);acceptance_criteria:list=Field(default_factory=list);business_rules:list=Field(default_factory=list);dependencies:list=Field(default_factory=list);constraints:list=Field(default_factory=list)
 class InputRead(ORMModel): id:uuid.UUID;project_id:uuid.UUID;input_version:int;source_type:str;payload:dict;is_current:bool;created_at:datetime
 class EntityEdit(BaseModel):
-    title:str;description:str="";type:str="functional";priority:str="medium";preconditions:list=Field(default_factory=list);test_data:dict|list=Field(default_factory=dict);postconditions:list=Field(default_factory=list);expected_business_outcome:str="";steps:list[dict]=Field(default_factory=list);traceability:dict=Field(default_factory=dict)
+    title:str;description:str="";type:str="functional";priority:str="medium";preconditions:list=Field(default_factory=list);test_data:dict|list=Field(default_factory=dict);postconditions:list=Field(default_factory=list);expected_business_outcome:str="";steps:list[dict]=Field(default_factory=list);traceability:dict=Field(default_factory=dict);functional_area:str="Unclassified";in_critical_suite:bool=False
 class FeedbackRequest(BaseModel): feedback:str=Field(min_length=1);submitted_by:uuid.UUID|None=None
 class ApprovalRequest(BaseModel): version_id:uuid.UUID;comments:str|None=None;action_by:uuid.UUID|None=None
 

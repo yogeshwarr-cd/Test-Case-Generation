@@ -333,6 +333,9 @@ class ScriptExecutionResult(BaseModel):
     error_message: str | None = None
     failure: FailureAnalysis | None = None
     traceability: dict[str, Any] = Field(default_factory=dict)
+    functional_area: str | None = "Unclassified"
+    priority: str | None = "medium"
+    in_critical_suite: bool | None = False
 
 
 class ExecutionReport(BaseModel):
@@ -360,6 +363,15 @@ class ExecutionReport(BaseModel):
     requirement_version: str | None = None
     script_lifecycle: list[dict[str, Any]] = Field(default_factory=list)
     retest_verification: list[dict[str, Any]] = Field(default_factory=list)
+    total: int | None = None
+    passed: int | None = None
+    failed: int | None = None
+    blocked: int | None = None
+    critical_total: int | None = None
+    critical_passed: int | None = None
+    critical_failed: int | None = None
+    critical_blocked: int | None = None
+    build_status: str | None = None
 
 
 class ExecutionJobResponse(BaseModel):

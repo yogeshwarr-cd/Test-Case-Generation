@@ -5395,6 +5395,21 @@ class AutomationService:
         skipped = sum(result.status == "skipped" for result in results)
         blocked = sum(result.status == "blocked" for result in results)
         workflow = generation.get("workflow", {})
+        tc_map = {
+            str(tc.get("test_case_id")): tc
+            for tc in workflow.get("test_cases", [])
+        }
+        for result in results:
+            tc = tc_map.get(str(result.test_case_id))
+            if tc:
+                result.functional_area = tc.get("functional_area", "Unclassified")
+                result.priority = tc.get("priority", "medium")
+                result.in_critical_suite = tc.get("in_critical_suite", False)
+            else:
+                result.functional_area = "Unclassified"
+                result.priority = "medium"
+                result.in_critical_suite = False
+
         for result in results:
             if result.status == "failed" and result.failure:
                 result.failure.intelligence = self._failure_intelligence(
@@ -5773,6 +5788,21 @@ class AutomationService:
             key.split(":", 1)[1] for key, decision in decisions.items()
             if key.startswith("testCase:") and decision == "rejected"
         }
+        critical_results = [r for r in results if tc_map.get(str(r.test_case_id), {}).get("in_critical_suite", False)]
+        critical_total = len(critical_results)
+        critical_passed = sum(r.status == "passed" for r in critical_results)
+        critical_failed = sum(r.status == "failed" for r in critical_results)
+        critical_blocked = sum(r.status == "blocked" for r in critical_results)
+        
+        if critical_total == 0:
+            build_status = "BUILD PASSED"
+        elif critical_failed > 0:
+            build_status = "BUILD FAILED"
+        elif critical_blocked > 0:
+            build_status = "BUILD BLOCKED / NEEDS REVIEW"
+        else:
+            build_status = "BUILD PASSED"
+
         rejected_results = [
             {
                 "test_case_id": str(item.get("test_case_id")),
@@ -5782,6 +5812,9 @@ class AutomationService:
                 "duration_seconds": 0,
                 "screenshot": None,
                 "logs": [],
+                "functional_area": item.get("functional_area", "Unclassified"),
+                "priority": item.get("priority", "medium"),
+                "in_critical_suite": item.get("in_critical_suite", False),
             }
             for item in workflow.get("test_cases", [])
             if str(item.get("test_case_id")) in rejected_ids
@@ -5802,6 +5835,15 @@ class AutomationService:
             success_percentage=round((passed / len(results) * 100) if results else 0, 2),
             results=results,
             rejected_results=rejected_results,
+            total=overall_total,
+            passed=passed,
+            failed=failed,
+            blocked=blocked,
+            critical_total=critical_total,
+            critical_passed=critical_passed,
+            critical_failed=critical_failed,
+            critical_blocked=critical_blocked,
+            build_status=build_status,
             overall_summary={
                 "total_tests": overall_total,
                 "executed_tests": len(results),
@@ -5810,6 +5852,11 @@ class AutomationService:
                 "skipped": skipped,
                 "blocked": blocked,
                 "rejected": rejected,
+                "critical_total": critical_total,
+                "critical_passed": critical_passed,
+                "critical_failed": critical_failed,
+                "critical_blocked": critical_blocked,
+                "build_status": build_status,
                 "pass_rate": round((passed / overall_total * 100) if overall_total else 0, 2),
                 "pages_discovered": len(
                     (generation.get("response").application_map or {}).get("pages", [])

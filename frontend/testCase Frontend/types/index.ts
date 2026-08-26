@@ -122,6 +122,8 @@ export interface TestCase {
   confidence_score?: number;
   validation_status?: string;
   source_references?: string[];
+  functional_area?: string;
+  in_critical_suite?: boolean;
 }
 
 export interface StructuredContext {
