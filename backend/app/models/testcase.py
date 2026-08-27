@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 from app.database.base import Base
 from app.models.base import TimestampMixin, UUIDMixin, utcnow
 
@@ -15,6 +15,18 @@ class TestCase(UUIDMixin, TimestampMixin, Base):
 class TestCaseVersion(UUIDMixin, Base):
     __tablename__ = "test_case_versions"; __table_args__ = (UniqueConstraint("test_case_id", "version_number"),)
     test_case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("test_cases.id"), index=True); version_number: Mapped[int] = mapped_column(Integer); title: Mapped[str] = mapped_column(String(255)); description: Mapped[str] = mapped_column(Text); test_case_type: Mapped[str] = mapped_column(String(50)); priority: Mapped[str] = mapped_column(String(50)); preconditions: Mapped[list] = mapped_column(JSONB, default=list); test_data: Mapped[dict] = mapped_column(JSONB, default=dict); postconditions: Mapped[list] = mapped_column(JSONB, default=list); payload: Mapped[dict] = mapped_column(JSONB, default=dict); generation_reason: Mapped[str] = mapped_column(String(100)); feedback_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True)); created_by_type: Mapped[str] = mapped_column(String(50)); created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True); functional_area: Mapped[str] = mapped_column(String(100), default="Unclassified"); in_critical_suite: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    @validates("priority")
+    def validate_priority(self, key, value):
+        if value == "critical":
+            self.in_critical_suite = True
+        return value
+
+    @validates("in_critical_suite")
+    def validate_in_critical_suite(self, key, value):
+        if self.priority == "critical":
+            return True
+        return value
 
 class TestCaseStep(UUIDMixin, Base):
     __tablename__ = "test_case_steps"; __table_args__ = (UniqueConstraint("test_case_version_id", "step_number"),)

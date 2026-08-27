@@ -1,7 +1,7 @@
 import uuid
 from enum import Enum
 from datetime import datetime
-from pydantic import BaseModel,ConfigDict,Field
+from pydantic import BaseModel,ConfigDict,Field,model_validator
 class ORMModel(BaseModel): model_config=ConfigDict(from_attributes=True)
 class ProjectCreate(BaseModel): name:str=Field(examples=["Employee Leave Management Testing"]);description:str|None=None;external_project_id:str|None=None;status:str="active"
 class ProjectUpdate(BaseModel): name:str|None=None;description:str|None=None;external_project_id:str|None=None;status:str|None=None
@@ -11,6 +11,12 @@ class InputPayload(BaseModel):
 class InputRead(ORMModel): id:uuid.UUID;project_id:uuid.UUID;input_version:int;source_type:str;payload:dict;is_current:bool;created_at:datetime
 class EntityEdit(BaseModel):
     title:str;description:str="";type:str="functional";priority:str="medium";preconditions:list=Field(default_factory=list);test_data:dict|list=Field(default_factory=dict);postconditions:list=Field(default_factory=list);expected_business_outcome:str="";steps:list[dict]=Field(default_factory=list);traceability:dict=Field(default_factory=dict);functional_area:str="Unclassified";in_critical_suite:bool=False
+
+    @model_validator(mode="after")
+    def enforce_critical_priority(self):
+        if str(self.priority).strip().lower() == "critical":
+            self.in_critical_suite = True
+        return self
 class FeedbackRequest(BaseModel): feedback:str=Field(min_length=1);submitted_by:uuid.UUID|None=None
 class ApprovalRequest(BaseModel): version_id:uuid.UUID;comments:str|None=None;action_by:uuid.UUID|None=None
 

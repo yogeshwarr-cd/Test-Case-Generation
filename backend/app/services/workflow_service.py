@@ -140,8 +140,12 @@ class WorkflowService:
                     tc["functional_area"] = data["functional_area"]
                 if "priority" in data:
                     tc["priority"] = data["priority"]
+                    if data["priority"] == "critical":
+                        tc["in_critical_suite"] = True
                 if "in_critical_suite" in data:
                     tc["in_critical_suite"] = data["in_critical_suite"]
+                if tc.get("priority") == "critical":
+                    tc["in_critical_suite"] = True
                 found = True
                 break
         if not found:

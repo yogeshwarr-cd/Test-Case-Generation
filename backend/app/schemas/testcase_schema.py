@@ -108,6 +108,12 @@ class TestCase(BaseModel):
                 step.step_number = idx
         return self
 
+    @model_validator(mode="after")
+    def enforce_critical_priority(self):
+        if self.priority == Priority.critical:
+            self.in_critical_suite = True
+        return self
+
 class TestCaseBatch(BaseModel):
     test_cases: list[TestCase] = Field(min_length=1)
 

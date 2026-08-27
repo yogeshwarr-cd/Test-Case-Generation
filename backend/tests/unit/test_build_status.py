@@ -188,3 +188,100 @@ def test_build_status_defaults():
     assert report.results[0].in_critical_suite is False
     assert report.critical_total == 0
     assert report.build_status == "BUILD PASSED"
+
+
+def test_critical_priority_rules(monkeypatch, tmp_path):
+    from app.schemas.testcase_schema import TestCase as SchemaTestCase
+    from app.schemas.common import EntityEdit
+    from app.models.testcase import TestCaseVersion
+    from app.services.workflow_service import WorkflowService
+
+    # 1. Pydantic Schema enforcement: priority = critical automatically sets in_critical_suite = True
+    tc_data = {
+        "title": "Test case critical priority schema test",
+        "description": "Ensure critical priority automatically sets critical suite",
+        "priority": "critical",
+        "in_critical_suite": False,
+        "steps": [{"step_number": 1, "action": "Verify schema", "expected_result": "Sets critical suite to true"}]
+    }
+    tc_schema = SchemaTestCase.model_validate(tc_data)
+    assert tc_schema.in_critical_suite is True
+
+    # High/Medium/Low do not automatically add it to the Critical Suite
+    tc_data_high = tc_data.copy()
+    tc_data_high["priority"] = "high"
+    tc_schema_high = SchemaTestCase.model_validate(tc_data_high)
+    assert tc_schema_high.in_critical_suite is False
+
+    # 2. EntityEdit Schema enforcement
+    ee_data = {
+        "title": "Edit test",
+        "priority": "critical",
+        "in_critical_suite": False,
+    }
+    ee_schema = EntityEdit.model_validate(ee_data)
+    assert ee_schema.in_critical_suite is True
+
+    ee_data_medium = {
+        "title": "Edit test medium",
+        "priority": "medium",
+        "in_critical_suite": False,
+    }
+    ee_schema_medium = EntityEdit.model_validate(ee_data_medium)
+    assert ee_schema_medium.in_critical_suite is False
+
+    # 3. Model enforcement: priority = critical automatically sets in_critical_suite = True
+    model_version = TestCaseVersion(
+        test_case_id=uuid.uuid4(),
+        version_number=1,
+        title="Critical test model validation",
+        description="Verify model validation",
+        test_case_type="functional",
+        priority="critical",
+        in_critical_suite=False,
+    )
+    assert model_version.in_critical_suite is True
+
+    # 4. Model Update Enforcement: Changing priority to critical updates in_critical_suite
+    model_version_2 = TestCaseVersion(
+        test_case_id=uuid.uuid4(),
+        version_number=1,
+        title="Critical test model validation 2",
+        description="Verify model validation",
+        test_case_type="functional",
+        priority="medium",
+        in_critical_suite=False,
+    )
+    assert model_version_2.in_critical_suite is False
+    model_version_2.priority = "critical"
+    assert model_version_2.in_critical_suite is True
+
+    # Setting in_critical_suite to False on a critical test is overridden to True
+    model_version_2.in_critical_suite = False
+    assert model_version_2.in_critical_suite is True
+
+    # 5. Workflow State Update Enforcement
+    workflow_id = uuid.uuid4()
+    w_service = WorkflowService()
+    mock_workflow = {
+        "workflow_id": workflow_id,
+        "test_cases": [
+            {
+                "test_case_id": "tc-workflow-1",
+                "title": "Workflow TC 1",
+                "priority": "medium",
+                "in_critical_suite": False,
+            }
+        ]
+    }
+    w_service._states[workflow_id] = mock_workflow
+    
+    # Update priority to critical via workflow service
+    import asyncio
+    updated_tc = asyncio.run(w_service.update_testcase(workflow_id, "tc-workflow-1", {"priority": "critical"}))
+    assert updated_tc["in_critical_suite"] is True
+
+    # Attempt to set in_critical_suite to False on a critical test case in workflow
+    updated_tc = asyncio.run(w_service.update_testcase(workflow_id, "tc-workflow-1", {"in_critical_suite": False}))
+    assert updated_tc["in_critical_suite"] is True
+
