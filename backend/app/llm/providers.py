@@ -189,7 +189,7 @@ def _classify_error(exc: Exception) -> ProviderError:
         return ProviderError(
             "rate_limited", recoverable=True, retry_after=_retry_after(exc), **details
         )
-    if status in {408, 409, 500, 502, 503, 504} or "connection" in name:
+    if status in {408, 409, 500, 502, 503, 504} or "connection" in name or "connect" in name:
         return ProviderError("temporary_provider_error", **details)
     if status == 403:
         return ProviderError("permission_denied", **details)
@@ -450,6 +450,103 @@ class OpenAIProvider(LLMProvider):
             token_usage = None if usage is None else {
                 "input_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
                 "output_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+            }
+            return ProviderResponse(content, self.name, self.model, token_usage)
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise _classify_error(exc) from exc
+
+
+class OllamaProvider(LLMProvider):
+    name = "ollama"
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model: str = "llama3.1:8b",
+        client: Any = None,
+        *,
+        provider_name: str = "ollama",
+        structured_output: bool = True,
+    ):
+        self.base_url = (base_url or "http://localhost:11434").rstrip("/")
+        self.model = model or "llama3.1:8b"
+        self._client = client
+        self.name = provider_name
+        self.structured_output = structured_output
+
+    async def generate(self, **kwargs: Any) -> ProviderResponse:
+        if not self.base_url or not self.model:
+            raise ProviderError("missing_configuration")
+        try:
+            import httpx
+
+            payload: dict[str, Any] = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": kwargs["system_prompt"]},
+                    {"role": "user", "content": kwargs["user_prompt"]},
+                ],
+                "stream": False,
+                "options": {
+                    "temperature": kwargs["temperature"],
+                    "num_predict": kwargs["max_output_tokens"],
+                },
+            }
+            if self.structured_output:
+                payload["format"] = _schema(kwargs["response_model"])
+            else:
+                payload["format"] = "json"
+
+            url = f"{self.base_url}/api/chat"
+            timeout = kwargs.get("timeout", 60.0)
+
+            if self._client is not None:
+                if hasattr(self._client, "post"):
+                    response = await self._client.post(url, json=payload, timeout=timeout)
+                elif hasattr(self._client, "chat") and hasattr(self._client.chat, "completions"):
+                    completion = await self._client.chat.completions.create(
+                        model=self.model,
+                        messages=payload["messages"],
+                        temperature=kwargs["temperature"],
+                        max_tokens=kwargs["max_output_tokens"],
+                        response_format={"type": "json_object"},
+                    )
+                    content = completion.choices[0].message.content or ""
+                    return ProviderResponse(content, self.name, self.model, None)
+                else:
+                    response = await self._client(url, json=payload, timeout=timeout)
+            else:
+                async with httpx.AsyncClient(timeout=timeout) as http_client:
+                    response = await http_client.post(url, json=payload)
+
+            if response.status_code != 200:
+                body_text = response.text
+                status = response.status_code
+                if status == 404:
+                    raise ProviderError(
+                        "unsupported_model",
+                        status_code=status,
+                        provider_message=f"Model '{self.model}' not found in Ollama.",
+                    )
+                raise ProviderError(
+                    "temporary_provider_error",
+                    status_code=status,
+                    provider_message=body_text[:200],
+                )
+
+            data = response.json()
+            message = data.get("message", {})
+            content = message.get("content", "")
+            if not content.strip():
+                raise ProviderError("empty_response")
+
+            prompt_eval_count = data.get("prompt_eval_count", 0)
+            eval_count = data.get("eval_count", 0)
+            token_usage = {
+                "input_tokens": int(prompt_eval_count or 0),
+                "output_tokens": int(eval_count or 0),
             }
             return ProviderResponse(content, self.name, self.model, token_usage)
         except ProviderError:

@@ -1,4 +1,4 @@
-﻿import json
+import json
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -48,6 +48,16 @@ class Settings(BaseSettings):
             "http://127.0.0.1:5173",
         ]
     )
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1:8b"
+    ollama_generation_model: str = ""
+    ollama_validation_model: str = ""
+    ollama_regeneration_model: str = ""
+    ollama_timeout_seconds: float = 180.0
+    ollama_max_concurrent_requests: int = 1
+    ollama_min_request_interval_seconds: float = 0.0
+    ollama_quota_cooldown_seconds: float = 10.0
+    llm_provider_mode: str = "hybrid"
     groq_api_key: str = ""
     groq_fallback_api_key: str = ""
     groq_model: str = "openai/gpt-oss-120b"
@@ -74,7 +84,7 @@ class Settings(BaseSettings):
     cerebras_generation_model: str = ""
     cerebras_validation_model: str = ""
     cerebras_regeneration_model: str = ""
-    llm_request_timeout_seconds: float = 45.0
+    llm_request_timeout_seconds: float = 180.0
     llm_temperature: float = 0.2
     llm_max_output_tokens: int = 6000
     llm_generation_max_output_tokens: int = 2500

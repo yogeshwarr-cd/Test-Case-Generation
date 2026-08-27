@@ -670,6 +670,7 @@ def test_build_llm_client_configures_both_groq_keys(monkeypatch):
     monkeypatch.setattr("app.llm.client.settings.groq_api_key", "key-1")
     monkeypatch.setattr("app.llm.client.settings.groq_fallback_api_key", "key-2")
     monkeypatch.setattr("app.llm.client.settings.app_mock_mode", False)
+    monkeypatch.setattr("app.llm.client.settings.llm_provider_mode", "groq")
 
     from app.llm.client import build_llm_client
     client = build_llm_client("generation", mock_mode=False)

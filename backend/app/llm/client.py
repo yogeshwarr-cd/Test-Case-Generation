@@ -17,6 +17,7 @@ from app.llm.providers import (
     GroqProvider,
     LLMProvider,
     MockLLMProvider,
+    OllamaProvider,
     ProviderError,
 )
 
@@ -65,11 +66,10 @@ def _salvage_valid_collection(
     removed_fields: list[str] = []
     for item in error.errors():
         location = item["loc"]
-        is_valid_idx = isinstance(location[1], int) or (isinstance(location[1], str) and location[1].isdigit())
         if (
             len(location) >= 2
             and location[0] in {"test_cases", "scenarios"}
-            and is_valid_idx
+            and (isinstance(location[1], int) or (isinstance(location[1], str) and location[1].isdigit()))
             and item["type"] in {"missing", "too_short", "model_type", "dict_type", "list_type", "string_type"}
         ):
             idx = int(location[1])
@@ -471,6 +471,23 @@ class LLMClient:
                     "missing_required_fields",
                     "invalid_request",
                 }:
+                    if self._has_later_available_provider(provider_index, ordered_providers):
+                        next_candidate = next(
+                            candidate
+                            for candidate in ordered_providers[provider_index + 1 :]
+                            if candidate.name not in self.unavailable_providers
+                            and not self._globally_unavailable(candidate.name)
+                        )
+                        is_same_key_mirror = (
+                            provider.name.split("_")[0] == next_candidate.name.split("_")[0]
+                            and provider.model == next_candidate.model
+                        )
+                        if not is_same_key_mirror:
+                            logger.warning(
+                                "LLM provider validation failed, triggering fallback provider=%s model=%s next_provider=%s failure_reason=%s",
+                                provider.name, provider.model, next_candidate.name, error.category,
+                            )
+                            break
                     logger.warning(
                         "LLM generation failed with non-retryable error provider=%s model=%s request_id=%s failure_reason=%s decision=stop_failover",
                         provider.name, provider.model, request_id, error.category,
@@ -568,7 +585,9 @@ class LLMClient:
 def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None) -> LLMClient:
     task = task if task in {"generation", "validation", "regeneration"} else "generation"
     use_mock = settings.app_mock_mode if mock_mode is None else mock_mode
-    if use_mock:
+    provider_mode = (getattr(settings, "llm_provider_mode", "hybrid") or "hybrid").lower()
+
+    if use_mock or provider_mode == "mock":
         return LLMClient(
             [MockLLMProvider()],
             timeout=settings.llm_request_timeout_seconds,
@@ -577,53 +596,71 @@ def build_llm_client(task: str = "generation", *, mock_mode: bool | None = None)
             provider_retry_count=0,
             cerebras_provider_retry_count=0,
         )
-    task_model = getattr(settings, f"groq_{task}_model") or settings.groq_model
-    key_configs = [
-        ("groq", settings.groq_api_key, task_model),
-        (
-            "groq_fallback",
-            settings.groq_fallback_api_key,
-            settings.groq_fallback_model or settings.groq_model,
-        ),
-    ]
 
     providers = []
     provider_concurrency = {}
     provider_min_request_interval = {}
     provider_cooldown_seconds = {}
 
-    for provider_name, api_key, model in key_configs:
-        if api_key:
-            providers.append(
-                GroqProvider(
-                    api_key,
-                    model,
-                    max_output_tokens=settings.groq_max_output_tokens,
-                    provider_name=provider_name,
+    # 1. Primary: Ollama Provider
+    if provider_mode in {"hybrid", "ollama"}:
+        ollama_task_model = getattr(settings, f"ollama_{task}_model", "") or settings.ollama_model
+        ollama_provider = OllamaProvider(
+            base_url=settings.ollama_base_url,
+            model=ollama_task_model,
+            provider_name="ollama",
+        )
+        providers.append(ollama_provider)
+        provider_concurrency["ollama"] = settings.ollama_max_concurrent_requests
+        provider_min_request_interval["ollama"] = settings.ollama_min_request_interval_seconds
+        provider_cooldown_seconds["ollama"] = settings.ollama_quota_cooldown_seconds
+
+    # 2. Fallback: Groq Providers
+    if provider_mode in {"hybrid", "groq"}:
+        groq_task_model = getattr(settings, f"groq_{task}_model", "") or settings.groq_model
+        key_configs = [
+            ("groq", settings.groq_api_key, groq_task_model),
+            (
+                "groq_fallback",
+                settings.groq_fallback_api_key,
+                settings.groq_fallback_model or settings.groq_model,
+            ),
+        ]
+        for provider_name, api_key, model in key_configs:
+            if api_key:
+                providers.append(
+                    GroqProvider(
+                        api_key,
+                        model,
+                        max_output_tokens=settings.groq_max_output_tokens,
+                        provider_name=provider_name,
+                    )
                 )
+                provider_concurrency[provider_name] = settings.groq_max_concurrent_requests
+                provider_min_request_interval[provider_name] = settings.groq_min_request_interval_seconds
+                provider_cooldown_seconds[provider_name] = settings.groq_quota_cooldown_seconds
+
+        if not any(p.name.startswith("groq") for p in providers) and provider_mode == "groq":
+            default_p1 = GroqProvider(
+                settings.groq_api_key,
+                groq_task_model,
+                max_output_tokens=settings.groq_max_output_tokens,
+                provider_name="groq",
             )
-            provider_concurrency[provider_name] = settings.groq_max_concurrent_requests
-            provider_min_request_interval[provider_name] = settings.groq_min_request_interval_seconds
-            provider_cooldown_seconds[provider_name] = settings.groq_quota_cooldown_seconds
+            default_p2 = GroqProvider(
+                settings.groq_fallback_api_key,
+                settings.groq_fallback_model or settings.groq_model,
+                max_output_tokens=settings.groq_max_output_tokens,
+                provider_name="groq_fallback",
+            )
+            for p in (default_p1, default_p2):
+                providers.append(p)
+                provider_concurrency[p.name] = settings.groq_max_concurrent_requests
+                provider_min_request_interval[p.name] = settings.groq_min_request_interval_seconds
+                provider_cooldown_seconds[p.name] = settings.groq_quota_cooldown_seconds
 
     if not providers:
-        default_p1 = GroqProvider(
-            settings.groq_api_key,
-            task_model,
-            max_output_tokens=settings.groq_max_output_tokens,
-            provider_name="groq",
-        )
-        default_p2 = GroqProvider(
-            settings.groq_fallback_api_key,
-            settings.groq_fallback_model or settings.groq_model,
-            max_output_tokens=settings.groq_max_output_tokens,
-            provider_name="groq_fallback",
-        )
-        providers = [default_p1, default_p2]
-        for p in providers:
-            provider_concurrency[p.name] = settings.groq_max_concurrent_requests
-            provider_min_request_interval[p.name] = settings.groq_min_request_interval_seconds
-            provider_cooldown_seconds[p.name] = settings.groq_quota_cooldown_seconds
+        providers = [MockLLMProvider()]
 
     max_output_tokens = getattr(settings, f"llm_{task}_max_output_tokens")
     return LLMClient(

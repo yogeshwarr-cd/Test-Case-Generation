@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app.main import app
+from app.schemas.automation_schema import DiscoveredElement
 from app.services.automation_service import automation_service
 
 
@@ -25,6 +26,15 @@ async def test_automation_routes_are_registered_and_execute_end_to_end(monkeypat
     monkeypatch.setattr("app.services.automation_service.workflow_service.get", lambda _: state)
     monkeypatch.setattr("app.services.automation_service.settings.automation_artifacts_path", str(tmp_path))
     monkeypatch.setattr("app.services.automation_service.settings.app_mock_mode", True)
+
+    async def validate_url(_: str):
+        return None
+
+    async def discover(_: str):
+        return "Example", [DiscoveredElement(tag="button", role="button", name="Open application")]
+
+    monkeypatch.setattr(automation_service, "_validate_url", validate_url)
+    monkeypatch.setattr(automation_service, "_discover", discover)
     automation_service._generations.clear()
     automation_service._reports.clear()
     automation_service._crawls.clear()
