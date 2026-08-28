@@ -51,6 +51,7 @@ from app.schemas.automation_schema import (
 from app.services.seacrawl_service import SeacrawlAdapter
 from app.services.cache_service import cache
 from app.services.workflow_service import workflow_service
+from app.services.test_data_service import test_data_engine
 from tests import config as playwright_test_config
 
 R = TypeVar("R")
@@ -675,20 +676,53 @@ def _python_source(
     test_case: dict[str, Any],
     application_url: str,
     discovered_elements: list[dict[str, Any]] | None = None,
+    test_data: dict[str, Any] | None = None,
 ) -> str:
     """Generate a Playwright test script whose selectors come ONLY from the
     discovered DOM.  No CSS is inferred from action text."""
     class_name = "PageObject" + "".join(part.title() for part in _safe_name(test_case["title"]).split("-"))
     steps = pformat(test_case.get("steps", []), width=100, sort_dicts=False)
     discovered = pformat(discovered_elements or [], width=100, sort_dicts=False)
+    
+    os_import = "import os\n" if any(v.get("sensitive") for v in (test_data or {}).values()) else ""
+    masked_test_data = {}
+    if test_data:
+        for k, v in test_data.items():
+            if v.get("sensitive"):
+                masked_test_data[k] = {
+                    "value": "__SECRET_PLACEHOLDER__",
+                    "data_type": v.get("data_type"),
+                    "variation": v.get("variation"),
+                    "status": v.get("status"),
+                    "sensitive": True
+                }
+            else:
+                masked_test_data[k] = v
+                
+    test_data_formatted = pformat(masked_test_data, width=100, sort_dicts=False)
+    for k, v in (test_data or {}).items():
+        if v.get("sensitive"):
+            placeholder = f"'value': '__SECRET_PLACEHOLDER__'"
+            placeholder_d = f"'value': \"__SECRET_PLACEHOLDER__\""
+            placeholder_dq = f"\"value\": \"__SECRET_PLACEHOLDER__\""
+            placeholder_dqs = f"\"value\": '__SECRET_PLACEHOLDER__'"
+            env_call = f"'value': os.getenv(\"PLAYWRIGHT_{k.upper().replace(' ', '_')}\", \"********\")"
+            test_data_formatted = (
+                test_data_formatted.replace(placeholder, env_call)
+                .replace(placeholder_d, env_call)
+                .replace(placeholder_dq, env_call)
+                .replace(placeholder_dqs, env_call)
+            )
+
     return f'''"""Generated from test case {test_case["test_case_id"]}."""
-import re
+{os_import}import re
 from pathlib import Path
 from playwright.sync_api import Page, expect
 
 BASE_URL = {application_url!r}
 STEPS = {steps}
 DISCOVERED_ELEMENTS = {discovered}
+TEST_DATA = {test_data_formatted}
 
 
 class {class_name}:
@@ -869,7 +903,16 @@ class {class_name}:
             locator.scroll_into_view_if_needed()
             locator.click()
         elif any(token in lowered for token in ("enter", "type", "fill")):
-            if value is None:
+            phrase = self._locator_phrase(instruction)
+            mapped_value = None
+            if TEST_DATA:
+                for key, val_dict in TEST_DATA.items():
+                    if phrase.lower() in key.lower() or key.lower() in phrase.lower():
+                        mapped_value = val_dict.get("value")
+                        break
+            if mapped_value is not None:
+                value = mapped_value
+            elif value is None:
                 raise AssertionError(f"Input has no explicit UI value: {{instruction}}")
             locator = self.stable_locator(instruction)
             locator.wait_for(state="visible")
@@ -877,6 +920,25 @@ class {class_name}:
             locator.fill(value)
         else:
             expect(self.page).to_have_url(re.compile(r"^https?://"))
+
+    def _locator_phrase(self, action: str) -> str:
+        ignored = {{
+            "click", "press", "select", "choose", "check", "enter", "type",
+            "fill", "button", "link", "field", "dropdown", "into", "from",
+            "with", "the", "on", "in", "value",
+        }}
+        quoted = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", action)
+        lowered = action.lower()
+        target = (
+            quoted[0]
+            if quoted and any(t in lowered for t in ("click", "press"))
+            else re.sub(r"[\\'\\\"][^\\'\\\"]+[\\'\\\"]", "", action)
+        )
+        words = [
+            w for w in re.findall(r"[A-Za-z0-9]+", target)
+            if len(w) > 1 and w.lower() not in ignored
+        ]
+        return " ".join(words)
 
     def assert_expected(self, expected_result: str):
         quoted = re.findall(r"[\\'\\\"]([^\\'\\\"]+)[\\'\\\"]", expected_result)
@@ -2629,6 +2691,49 @@ class AutomationService:
             if not executable_steps:
                 skipped_count += 1
                 continue
+            test_data_map, blocked_reason = test_data_engine.get_test_data_for_case(
+                test_case,
+                evidence_elements,
+                credentials=None
+            )
+            if blocked_reason:
+                script_id = f"pw-{index:03d}-{_safe_name(str(test_case.get('test_case_id')))}"
+                scripts.append(
+                    GeneratedScript(
+                        script_id=script_id,
+                        workflow_id=request.workflow_id,
+                        test_case_id=str(test_case["test_case_id"]),
+                        scenario_id=str(test_case["scenario_id"]),
+                        name=test_case["title"],
+                        application_url=url,
+                        source=f"# Script BLOCKED: {blocked_reason}",
+                        download_path=f"/api/v1/automation/scripts/{generation_id}/{script_id}/download",
+                        application_map_version=application_map_version,
+                        requirement_version=requirement_version,
+                        lifecycle_status="Blocked",
+                        page_url=page_url,
+                        page_elements=evidence_elements,
+                        executable_steps=test_case.get("steps", []),
+                        requirement_ids=[
+                            str(item) for item in test_case.get("requirement_ids", [])
+                        ],
+                        user_story_ids=[
+                            str(item)
+                            for item in scenarios_by_id.get(
+                                str(test_case.get("scenario_id")), {}
+                            ).get("user_story_ids", [])
+                        ],
+                        test_data={},
+                    )
+                )
+                unsupported_requirements.append({
+                    "test_case_id": str(test_case.get("test_case_id")),
+                    "scenario_id": str(test_case.get("scenario_id")),
+                    "classification": "blocked",
+                    "reason": f"{blocked_reason} Marked as BLOCKED.",
+                })
+                continue
+
             executable_test_case = {
                 **test_case,
                 "steps": executable_steps,
@@ -2637,7 +2742,7 @@ class AutomationService:
             path = directory / f"{script_id}{SCRIPT_ARTIFACT_SUFFIX}"
             try:
                 source = _python_source(
-                    executable_test_case, page_url, evidence_elements
+                    executable_test_case, page_url, evidence_elements, test_data=test_data_map
                 )
                 # Bug 6 fix: catch per-script validation errors so one bad script
                 # doesn't abort generation of all remaining scripts.
@@ -2676,6 +2781,7 @@ class AutomationService:
                             str(test_case.get("scenario_id")), {}
                         ).get("user_story_ids", [])
                     ],
+                    test_data=test_data_map,
                 )
             )
         if crawl_report.get("status") == "crawl_incomplete":
@@ -3620,6 +3726,8 @@ class AutomationService:
         page: Any,
         action: str,
         discovered_elements: list[dict[str, Any]] | None = None,
+        test_data: dict[str, Any] | None = None,
+        credentials: dict | None = None,
     ) -> str | None:
         lowered = action.lower()
         phrase = self._locator_phrase(action)
@@ -3667,7 +3775,25 @@ class AutomationService:
         elif "hover" in lowered or "wait " in lowered:
             roles = ()
         elif any(token in lowered for token in ("enter", "type", "fill")):
-            if desired is None:
+            phrase = self._locator_phrase(action)
+            mapped_value = None
+            if test_data:
+                for key, val_dict in test_data.items():
+                    if phrase.lower() in key.lower() or key.lower() in phrase.lower():
+                        if val_dict.get("sensitive"):
+                            is_password_field = "password" in key.lower()
+                            if is_password_field and credentials and credentials.get("password"):
+                                mapped_value = credentials["password"]
+                            elif not is_password_field and credentials and credentials.get("username"):
+                                mapped_value = credentials["username"]
+                            else:
+                                mapped_value = val_dict.get("value")
+                        else:
+                            mapped_value = val_dict.get("value")
+                        break
+            if mapped_value is not None:
+                desired = mapped_value
+            elif desired is None:
                 if any(term in lowered for term in ("empty", "blank", "clear")):
                     desired = ""
                 elif "email" in lowered:
@@ -4207,10 +4333,31 @@ class AutomationService:
         page: Any,
         action: str,
         discovered_elements: list[dict[str, Any]],
+        test_data: dict[str, Any] | None = None,
+        credentials: dict | None = None,
     ) -> str:
         lowered = action.lower()
         quoted = re.findall(r"['\"]([^'\"]+)['\"]", action)
         expected_value = quoted[-1] if quoted else None
+        phrase = self._locator_phrase(action)
+        mapped_value = None
+        if test_data:
+            for key, val_dict in test_data.items():
+                if phrase.lower() in key.lower() or key.lower() in phrase.lower():
+                    if val_dict.get("sensitive"):
+                        is_password_field = "password" in key.lower()
+                        if is_password_field and credentials and credentials.get("password"):
+                            mapped_value = credentials["password"]
+                        elif not is_password_field and credentials and credentials.get("username"):
+                            mapped_value = credentials["username"]
+                        else:
+                            mapped_value = val_dict.get("value")
+                    else:
+                        mapped_value = val_dict.get("value")
+                    break
+        if mapped_value is not None:
+            expected_value = mapped_value
+
         if "url" in lowered:
             if not expected_value:
                 raise InvalidGeneratedStepError(
@@ -4373,39 +4520,61 @@ class AutomationService:
             )
             authentication = playwright_test_config.read(authentication_token)
         if request.mode == "manual":
-            results = [
-                ScriptExecutionResult(
-                    script_id=script.script_id,
-                    script_name=script.name,
-                    test_case_id=script.test_case_id,
-                    scenario_id=script.scenario_id,
-                    status="skipped",
-                    duration_seconds=0,
-                    traceability={
-                        "requirements": script.requirement_ids,
-                        "user_stories": script.user_story_ids,
-                        "scenario_id": script.scenario_id,
-                        "test_case_id": script.test_case_id,
-                    },
+            results = []
+            for script in response.scripts:
+                masked_td = None
+                script_test_data = getattr(script, "test_data", None)
+                if script_test_data:
+                    masked_td = {}
+                    for k, v in script_test_data.items():
+                        masked_td[k] = {
+                            **v,
+                            "value": "********" if v.get("sensitive") else v.get("value")
+                        }
+                results.append(
+                    ScriptExecutionResult(
+                        script_id=script.script_id,
+                        script_name=script.name,
+                        test_case_id=script.test_case_id,
+                        scenario_id=script.scenario_id,
+                        status="skipped",
+                        duration_seconds=0,
+                        traceability={
+                            "requirements": script.requirement_ids,
+                            "user_stories": script.user_story_ids,
+                            "scenario_id": script.scenario_id,
+                            "test_case_id": script.test_case_id,
+                        },
+                        test_data_used=masked_td,
+                    )
                 )
-                for script in response.scripts
-            ]
             playwright_test_config.clear(authentication_token)
             return self._save_report(request, results, 0, generation["directory"], generation)
 
         if settings.app_mock_mode:
-            results = [
-                ScriptExecutionResult(
-                    script_id=script.script_id,
-                    script_name=script.name,
-                    test_case_id=script.test_case_id,
-                    scenario_id=script.scenario_id,
-                    status="passed",
-                    duration_seconds=0.01,
-                    traceability=self._traceability(script),
+            results = []
+            for script in response.scripts:
+                masked_td = None
+                script_test_data = getattr(script, "test_data", None)
+                if script_test_data:
+                    masked_td = {}
+                    for k, v in script_test_data.items():
+                        masked_td[k] = {
+                            **v,
+                            "value": "********" if v.get("sensitive") else v.get("value")
+                        }
+                results.append(
+                    ScriptExecutionResult(
+                        script_id=script.script_id,
+                        script_name=script.name,
+                        test_case_id=script.test_case_id,
+                        scenario_id=script.scenario_id,
+                        status="passed",
+                        duration_seconds=0.01,
+                        traceability=self._traceability(script),
+                        test_data_used=masked_td,
+                    )
                 )
-                for script in response.scripts
-            ]
             playwright_test_config.clear(authentication_token)
             return self._save_report(request, results, 0.01 * len(results), generation["directory"], generation)
 
@@ -4428,7 +4597,20 @@ class AutomationService:
                 item.model_dump(mode="json") for item in response.discovered_elements
             ]
             for script in response.scripts:
+                masked_td = None
+                script_test_data = getattr(script, "test_data", None)
+                if script_test_data:
+                    masked_td = {}
+                    for k, v in script_test_data.items():
+                        masked_td[k] = {
+                            **v,
+                            "value": "********" if v.get("sensitive") else v.get("value")
+                        }
+
                 if script.lifecycle_status == "Blocked":
+                    blocked_msg = "BLOCKED: No matching crawl evidence directly associated with acceptance criteria was found."
+                    if script.source.startswith("# Script BLOCKED:"):
+                        blocked_msg = script.source.replace("# Script BLOCKED: ", "")
                     results.append(
                         ScriptExecutionResult(
                             script_id=script.script_id,
@@ -4437,8 +4619,9 @@ class AutomationService:
                             scenario_id=script.scenario_id,
                             status="blocked",
                             duration_seconds=0.0,
-                            error_message="BLOCKED: No matching crawl evidence directly associated with acceptance criteria was found.",
+                            error_message=blocked_msg,
                             traceability=self._traceability(script),
+                            test_data_used=masked_td,
                         )
                     )
                     continue
@@ -4699,11 +4882,15 @@ class AutomationService:
                             if step_kind == "assertion":
                                 failure_category = "Assertion Failure"
                                 element = await self._assert_step(
-                                    page, action, page_elements
+                                    page, action, page_elements,
+                                    test_data=script_test_data,
+                                    credentials=authentication
                                 )
                             else:
                                 element = await self._perform(
-                                    page, action, page_elements
+                                    page, action, page_elements,
+                                    test_data=script_test_data,
+                                    credentials=authentication
                                 )
                         except (LookupError, PlaywrightError, PlaywrightTimeoutError) as action_error:
                             # Classify timeout separately
@@ -4794,6 +4981,7 @@ class AutomationService:
                             status="passed",
                             duration_seconds=round(time.perf_counter() - test_started, 3),
                             traceability=traceability,
+                            test_data_used=masked_td,
                         )
                     )
                     # Stop trace cleanly on pass (no need to save)
@@ -4986,6 +5174,7 @@ class AutomationService:
                             error_message=str(exc),
                             failure=failure,
                             traceability=self._traceability(script),
+                            test_data_used=masked_td,
                         )
                     )
                 finally:

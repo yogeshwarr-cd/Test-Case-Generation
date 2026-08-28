@@ -570,6 +570,10 @@ export interface ExecutionReport {
     error_message?: string;
     failure?: FailureAnalysis;
     traceability: Record<string, unknown>;
+    test_data_used?: Record<string, any>;
+    functional_area?: string;
+    priority?: string;
+    in_critical_suite?: boolean;
   }>;
   rejected_results: Array<{
     test_case_id: string;
@@ -617,6 +621,15 @@ export interface ExecutionReport {
     application_map_version?: string;
   }>;
   retest_verification: Array<{ script_id: string; previous_status: string; current_status: string; verified: boolean; message: string }>;
+  total?: number;
+  passed?: number;
+  failed?: number;
+  blocked?: number;
+  critical_total?: number;
+  critical_passed?: number;
+  critical_failed?: number;
+  critical_blocked?: number;
+  build_status?: string;
 }
 
 export type HumanExecutionState =

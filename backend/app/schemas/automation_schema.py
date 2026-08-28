@@ -97,6 +97,7 @@ class GeneratedScript(BaseModel):
     page_url: str | None = None
     page_elements: list[dict[str, Any]] = Field(default_factory=list)
     executable_steps: list[dict[str, Any]] = Field(default_factory=list)
+    test_data: dict[str, Any] | None = None
 
 
 class ScriptGenerationResponse(BaseModel):
@@ -336,6 +337,7 @@ class ScriptExecutionResult(BaseModel):
     functional_area: str | None = "Unclassified"
     priority: str | None = "medium"
     in_critical_suite: bool | None = False
+    test_data_used: dict[str, Any] | None = None
 
 
 class ExecutionReport(BaseModel):

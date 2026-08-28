@@ -694,6 +694,21 @@ function ExecutionDashboard({ report, generation }: { report: ExecutionReport; g
             <Detail label="Error message" value={result.error_message} />
             <Detail label="HTTP response" value={failure?.http_response_status != null ? String(failure.http_response_status) : undefined} />
           </div>
+          {result.test_data_used && Object.keys(result.test_data_used).length > 0 && (
+            <section>
+              <h4 className="text-sm font-semibold">Test Data Used</h4>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {Object.entries(result.test_data_used).map(([key, data]: [string, any]) => (
+                  <div key={key} className="min-w-0 rounded-lg border border-border bg-background p-3">
+                    <p className="text-xs font-medium text-muted-foreground">{key}</p>
+                    <p className="mt-1 break-words text-sm font-medium">
+                      {data.value} <span className="text-[10px] text-muted-foreground">({data.data_type} / {data.status})</span>
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
           <section><h4 className="text-sm font-semibold">Steps performed</h4>{failure?.failed_action && <p className="mt-2 rounded-lg border border-border bg-background p-3 text-sm"><span className="font-medium">Failed action:</span> {failure.failed_action}</p>}{performedSteps.length ? <ol className="mt-2 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">{performedSteps.map((step, stepIndex) => <li key={stepIndex} className="pl-1"><pre className="whitespace-pre-wrap break-words font-sans">{typeof step === 'string' ? step : JSON.stringify(step, null, 2)}</pre></li>)}</ol> : failure?.reproduction_steps?.length ? <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">{failure.reproduction_steps.map((step, stepIndex) => <li key={`${step}-${stepIndex}`}>{step}</li>)}</ol> : <p className="mt-2 text-sm text-muted-foreground">No step-level execution data was captured.</p>}</section>
           {evidence.length > 0 && <section><h4 className="text-sm font-semibold">Screenshots and evidence</h4><div className="mt-2 flex flex-wrap gap-2">{Array.from(new Set(evidence)).map((path, evidenceIndex) => { const name = path.split(/[\\/]/).pop() || `Evidence ${evidenceIndex + 1}`; const isImage = /\.(png|jpe?g|webp|gif)$/i.test(path); return isImage ? <button type="button" key={`${path}-${evidenceIndex}`} onClick={() => setPreview({ path, name })} className="max-w-full truncate rounded-lg border border-primary/30 bg-background px-3 py-2 text-xs font-medium text-primary hover:bg-primary/5">{name}</button> : <a key={`${path}-${evidenceIndex}`} href={automationArtifactUrl(path)} target="_blank" rel="noreferrer" className="max-w-full truncate rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-primary hover:bg-muted">{name}</a>; })}</div></section>}
           {failure && <section><h4 className="text-sm font-semibold">Additional execution information</h4><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-xs">{JSON.stringify({ failure_stage: failure.failure_stage, failure_category: failure.failure_category, locator_details: failure.locator_details, alternate_locators_attempted: failure.alternate_locators_attempted, locator_diagnosis: failure.locator_diagnosis, assertion_details: failure.assertion_details, navigation_details: failure.navigation_details, input_details: failure.input_details, application_state_details: failure.application_state_details, console_logs: failure.console_logs, network_errors: failure.network_errors, stack_trace: failure.stack_trace, traceability: result.traceability }, null, 2)}</pre></section>}

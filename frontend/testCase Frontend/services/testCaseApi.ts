@@ -15,6 +15,7 @@ import type {
   HumanExecutionSession,
   DocumentSession,
   ParsedDocumentStory,
+  TestCase,
 } from '../types';
 import { parseWorkflowEvent } from '../utils';
 
