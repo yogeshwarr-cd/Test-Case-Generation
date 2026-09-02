@@ -1627,10 +1627,83 @@ class AutomationService:
                 origin = urlsplit(url)
 
                 initial_auth_performed = False
+                pre_auth_inventory_entry: dict[str, Any] | None = None
+                pre_auth_queued_links: list[str] = []
+                raw: list[dict[str, Any]] = []
+
                 # Verify or perform authentication if required
                 if authentication and (auth_mode == "credentials" or getattr(authentication, "get_identifier", None) or (isinstance(authentication, dict) and authentication.get("password"))):
                     try:
                         await self._navigate_with_retries(page, url)
+                        if testing_scope != "specific_page":
+                            pre_auth_discovered = await self._capture_interactive_elements(page)
+                            if pre_auth_discovered:
+                                pre_auth_page_title = await page.title()
+                                pre_auth_url = _canonical_page_url(page.url)
+                                pre_auth_raw = [dict(item) for item in pre_auth_discovered]
+                                for item in pre_auth_raw:
+                                    item["page_url"] = pre_auth_url
+                                raw.extend(pre_auth_raw)
+
+                                for item in pre_auth_discovered:
+                                    href = item.get("href")
+                                    if href:
+                                        skip_reason = _link_skip_reason(str(href), origin.netloc)
+                                        if not skip_reason:
+                                            clean_href = _canonical_page_url(href)
+                                            if clean_href not in pre_auth_queued_links and clean_href != pre_auth_url:
+                                                pre_auth_queued_links.append(clean_href)
+
+                                try:
+                                    pre_auth_dom = await page.content()
+                                except Exception:
+                                    pre_auth_dom = ""
+                                pre_auth_state_fp = hashlib.sha256(
+                                    re.sub(r"\s+", " ", pre_auth_dom).encode("utf-8", errors="ignore")
+                                ).hexdigest()[:16]
+                                snapshot_dir = self.artifact_root / "crawl-evidence" / "dom"
+                                snapshot_dir.mkdir(parents=True, exist_ok=True)
+                                dom_snapshot_path = snapshot_dir / f"{pre_auth_state_fp}.html"
+                                if not dom_snapshot_path.is_file():
+                                    dom_snapshot_path.write_text(pre_auth_dom, encoding="utf-8")
+
+                                try:
+                                    pre_auth_text = await page.locator("body").inner_text(timeout=5000)
+                                except Exception:
+                                    pre_auth_text = ""
+
+                                pre_auth_inventory_entry = {
+                                    "url": pre_auth_url,
+                                    "requested_url": url,
+                                    "final_url": pre_auth_url,
+                                    "is_redirect": False,
+                                    "redirect_chain": [url],
+                                    "route": urlsplit(pre_auth_url).path or "/",
+                                    "depth": 0,
+                                    "state_fingerprint": pre_auth_state_fp,
+                                    "application_state": {
+                                        "expanded_selectors": [],
+                                        "scroll_restoration": "top",
+                                    },
+                                    "discovery_timestamp": datetime.now(timezone.utc).isoformat(),
+                                    "http_status": 200,
+                                    "title": pre_auth_page_title,
+                                    "visible_text": pre_auth_text[:50000],
+                                    "dom": pre_auth_dom[:250000],
+                                    "dom_snapshot": str(dom_snapshot_path),
+                                    "accessibility_tree": "",
+                                    "elements": pre_auth_discovered,
+                                    "content_analysis": {},
+                                    "diagnostic": None,
+                                    "forms": [item for item in pre_auth_discovered if item.get("tag") in {"input", "select", "textarea"}],
+                                    "structured_forms": [],
+                                    "links": [item for item in pre_auth_discovered if item.get("href")],
+                                    "buttons": [item for item in pre_auth_discovered if item.get("role") == "button" or item.get("tag") == "button"],
+                                    "structured_regions": [],
+                                    "validation_messages": [],
+                                    "screenshot": None,
+                                }
+
                         auth_evidence = await self._authenticate_if_required(page, authentication, url)
                         if auth_evidence.get("required") and not auth_evidence.get("succeeded"):
                             report["status"] = "crawl_blocked"
@@ -1726,6 +1799,17 @@ class AutomationService:
                 pending = [(start_page_url, 0)]
                 visited: set[str] = set()
                 queued: set[str] = {canonical_start}
+
+                if pre_auth_inventory_entry is not None:
+                    report["page_inventory"].append(pre_auth_inventory_entry)
+                    report["pages_completed"] = len(report["page_inventory"])
+                    visited.add(pre_auth_inventory_entry["url"])
+                    queued.add(pre_auth_inventory_entry["url"])
+                    for link in pre_auth_queued_links:
+                        if link not in queued and link not in visited:
+                            pending.append((link, 1))
+                            queued.add(link)
+
                 if initial_auth_performed and canonical_start != canonical_initial:
                     queued.add(canonical_initial)
                     visited.add(canonical_initial)
@@ -1734,8 +1818,7 @@ class AutomationService:
                         "to": canonical_start,
                         "via": "authentication_redirect",
                     })
-                raw: list[dict[str, Any]] = []
-                title = None
+                title = pre_auth_inventory_entry.get("title") if pre_auth_inventory_entry else None
                 state_counts: dict[str, int] = {}
                 report["status"] = "crawl_in_progress"
                 report["events"].append("crawl_in_progress")
