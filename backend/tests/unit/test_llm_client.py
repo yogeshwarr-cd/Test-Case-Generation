@@ -666,16 +666,17 @@ def test_cerebras_429_codes_are_classified(message, category, recoverable):
     assert (classified.category, classified.recoverable) == (category, recoverable)
 
 
-def test_build_llm_client_configures_both_groq_keys(monkeypatch):
+def test_build_llm_client_configures_three_groq_keys(monkeypatch):
     monkeypatch.setattr("app.llm.client.settings.groq_api_key", "key-1")
     monkeypatch.setattr("app.llm.client.settings.groq_fallback_api_key", "key-2")
+    monkeypatch.setattr("app.llm.client.settings.groq_fallback_2_api_key", "key-3")
     monkeypatch.setattr("app.llm.client.settings.app_mock_mode", False)
     monkeypatch.setattr("app.llm.client.settings.llm_provider_mode", "groq")
 
     from app.llm.client import build_llm_client
     client = build_llm_client("generation", mock_mode=False)
     provider_names = [p.name for p in client.providers]
-    assert provider_names == ["groq", "groq_fallback"]
+    assert provider_names == ["groq", "groq_fallback_1", "groq_fallback_2"]
 
 
 @pytest.mark.asyncio

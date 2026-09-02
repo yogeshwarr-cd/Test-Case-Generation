@@ -48,20 +48,15 @@ class Settings(BaseSettings):
             "http://127.0.0.1:5173",
         ]
     )
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1:8b"
-    ollama_generation_model: str = ""
-    ollama_validation_model: str = ""
-    ollama_regeneration_model: str = ""
-    ollama_timeout_seconds: float = 180.0
-    ollama_max_concurrent_requests: int = 1
-    ollama_min_request_interval_seconds: float = 0.0
-    ollama_quota_cooldown_seconds: float = 10.0
-    llm_provider_mode: str = "hybrid"
+    llm_provider_mode: str = "groq"
     groq_api_key: str = ""
     groq_fallback_api_key: str = ""
+    groq_fallback_1_api_key: str = ""
+    groq_fallback_2_api_key: str = ""
     groq_model: str = "openai/gpt-oss-120b"
     groq_fallback_model: str = ""
+    groq_fallback_1_model: str = ""
+    groq_fallback_2_model: str = ""
     groq_generation_model: str = ""
     groq_validation_model: str = ""
     groq_regeneration_model: str = ""
