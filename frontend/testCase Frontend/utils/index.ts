@@ -173,3 +173,14 @@ export function downloadFile(name: string, content: string, type: string): void 
   anchor.click();
   URL.revokeObjectURL(url);
 }
+
+export function loadActiveProjectName(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const stored = window.localStorage.getItem('activeProjectName') || window.sessionStorage.getItem('activeProjectName');
+    return stored || undefined;
+  } catch {
+    return undefined;
+  }
+}
+

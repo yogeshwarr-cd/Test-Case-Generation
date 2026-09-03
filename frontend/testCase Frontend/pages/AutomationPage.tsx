@@ -9,7 +9,7 @@ import { ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../com
 import { automationArtifactPdfUrl, automationArtifactUrl, testCaseApi } from '../services/testCaseApi';
 import { loadTestProjectArtifacts, saveAutomationActivity, saveTestProjectArtifacts, useTestCaseWorkflowStore } from '../store/workflowStore';
 import type { CrawlAnalysis, DeveloperExecutionReport, ExecutionJob, ExecutionReport, HumanExecutionSession, QaDiagnosticReport, ScriptGeneration, TraceabilityComparisonReport, WorkflowCrawlJob } from '../types';
-import { downloadFile, friendlyError, friendlyId, registerFriendlyIds, setActiveProjectId } from '../utils';
+import { downloadFile, friendlyError, friendlyId, loadActiveProjectName, registerFriendlyIds, setActiveProjectId } from '../utils';
 
 export function AutomationPage() {
   const historyMode = useSearchParams().get('view') === 'history';
@@ -222,7 +222,7 @@ export function AutomationPage() {
     setBusy(true); setError('');
     try {
       const generated = await testCaseApi.generateScripts(
-        workflowId, applicationUrl.trim(), crawl.crawl_id,
+        workflowId, applicationUrl.trim(), crawl.crawl_id, loadActiveProjectName(),
       );
       setGeneration(generated);
       saveTestProjectArtifacts(workflowId, generated, report, comparison, crawl);
@@ -279,7 +279,7 @@ export function AutomationPage() {
             throw new Error('At least one successfully crawled page is required before regenerating scripts.');
           }
           const refreshed = await testCaseApi.generateScripts(
-            workflowId, applicationUrl.trim(), crawl.crawl_id,
+            workflowId, applicationUrl.trim(), crawl.crawl_id, loadActiveProjectName(),
           );
           setGeneration(refreshed);
           setSelectedScript(0);

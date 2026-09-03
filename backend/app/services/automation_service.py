@@ -52,6 +52,7 @@ from app.services.seacrawl_service import SeacrawlAdapter
 from app.services.cache_service import cache
 from app.services.workflow_service import workflow_service
 from app.services.test_data_service import test_data_engine
+from app.services.project_structure_generator import ProjectStructureGenerator, project_structure_generator
 from tests import config as playwright_test_config
 
 R = TypeVar("R")
@@ -1035,9 +1036,16 @@ class AutomationService:
     ) -> WorkflowCrawlJobResponse:
         job = self._workflow_crawl_jobs.get(job_id)
         if job is None:
+            job_file = self.artifact_root / "jobs" / f"{job_id}.json"
+            if job_file.is_file():
+                try:
+                    data = json.loads(job_file.read_text(encoding="utf-8"))
+                    return WorkflowCrawlJobResponse.model_validate(data)
+                except Exception:
+                    pass
             raise AutomationError("Workflow crawl job was not found or has expired.")
         report = self._crawl_reports.get(job["report_key"], {})
-        return WorkflowCrawlJobResponse(
+        response = WorkflowCrawlJobResponse(
             job_id=job_id,
             status=job["status"],
             stop_requested=job["cancel_event"].is_set(),
@@ -1046,6 +1054,15 @@ class AutomationService:
             generation=job.get("generation"),
             error=job.get("error"),
         )
+        try:
+            job_dir = self.artifact_root / "jobs"
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / f"{job_id}.json").write_text(
+                json.dumps(response.model_dump(mode="json"), default=str), encoding="utf-8"
+            )
+        except Exception:
+            pass
+        return response
 
     async def start_workflow_crawl_job(
         self, request: CrawlApplicationRequest
@@ -1076,11 +1093,18 @@ class AutomationService:
                     )
                 )
                 if has_scanned_data:
+                    project_name = None
+                    try:
+                        wf_state = workflow_service.get(request.workflow_id)
+                        project_name = wf_state.get("project_name") or wf_state.get("name")
+                    except Exception:
+                        pass
                     job["generation"] = await self.generate(
                         GenerateScriptsRequest(
                             workflow_id=request.workflow_id,
                             application_url=request.application_url,
                             crawl_id=crawl.crawl_id,
+                            project_name=project_name,
                         )
                     )
                 job["status"] = "completed"
@@ -1102,7 +1126,7 @@ class AutomationService:
     ) -> WorkflowCrawlJobResponse:
         job = self._workflow_crawl_jobs.get(job_id)
         if job is None:
-            raise AutomationError("Workflow crawl job was not found or has expired.")
+            return self._workflow_crawl_job_response(job_id)
         if job["status"] in {"queued", "running"}:
             job["cancel_event"].set()
             job["status"] = "stopping"
@@ -1735,12 +1759,16 @@ class AutomationService:
                 async def explore_control(
                     source_url: str, control: dict[str, Any]
                 ) -> dict[str, Any]:
+                    if cancel_event is not None and cancel_event.is_set():
+                        return {"success": False, "error": "cancelled"}
                     worker_page = await context.new_page()
                     last_error: Exception | None = None
                     try:
                         for attempt in range(
                             settings.automation_navigation_retry_limit + 1
                         ):
+                            if cancel_event is not None and cancel_event.is_set():
+                                return {"success": False, "error": "cancelled"}
                             try:
                                 await self._navigate_with_retries(
                                     worker_page, source_url
@@ -1757,19 +1785,19 @@ class AutomationService:
                                 if not await locator.is_visible():
                                     continue
                                 await locator.click(
-                                    timeout=int(
+                                    timeout=min(2000, int(
                                         settings.automation_action_timeout_seconds
                                         * 1000
-                                    )
+                                    ))
                                 )
                                 try:
                                     await worker_page.wait_for_url(
                                         lambda value: _canonical_page_url(str(value))
                                         != before,
-                                        timeout=int(
+                                        timeout=min(2000, int(
                                             settings.automation_navigation_settle_timeout_seconds
                                             * 1000
-                                        ),
+                                        )),
                                     )
                                 except Exception:
                                     pass
@@ -1791,7 +1819,10 @@ class AutomationService:
                             "error": str(last_error or "no visible alternate locator"),
                         }
                     finally:
-                        await worker_page.close()
+                        try:
+                            await worker_page.close()
+                        except Exception:
+                            pass
 
                 start_page_url = page.url if initial_auth_performed else url
                 canonical_initial = _canonical_page_url(url)
@@ -2597,6 +2628,7 @@ class AutomationService:
                     "remaining_crawl_queue": [],
                 }),
                 scripts=scripts,
+                project_structure=cached.get("project_structure"),
             )
             self._mark_prior_script_lifecycle(
                 request.workflow_id,
@@ -2777,7 +2809,8 @@ class AutomationService:
             test_data_map, blocked_reason = test_data_engine.get_test_data_for_case(
                 test_case,
                 evidence_elements,
-                credentials=None
+                credentials=None,
+                all_elements=element_dicts,
             )
             if blocked_reason:
                 script_id = f"pw-{index:03d}-{_safe_name(str(test_case.get('test_case_id')))}"
@@ -2949,6 +2982,46 @@ class AutomationService:
                 "No scripts available: the backend confirmed that zero valid scripts "
                 "could be generated from the preserved crawl data."
             )
+        # Generate standard Modular Page Object Model (POM) Project Structure
+        app_name = (
+            getattr(request, "project_name", None)
+            or state.get("project_name")
+            or state.get("name")
+            or title
+            or "web_automation"
+        )
+        gen = ProjectStructureGenerator(app_name=app_name)
+        modular_proj = gen.generate_project(
+            base_url=url,
+            discovered_elements=element_dicts,
+            page_inventory=crawl_report.get("page_inventory", []),
+            test_cases=state.get("test_cases", []),
+            scenarios=state.get("scenarios", []),
+            credentials=getattr(request, "authentication", None) or state.get("credentials"),
+        )
+        proj_root = directory / gen.app_name
+        for gen_file in modular_proj.files:
+            fpath = proj_root / gen_file.relative_path
+            fpath.parent.mkdir(parents=True, exist_ok=True)
+            fpath.write_text(gen_file.content, encoding="utf-8")
+
+        project_structure = {
+            "project_name": gen.app_name,
+            "root_path": str(proj_root),
+            "modules": list(modular_proj.modules),
+            "page_objects": modular_proj.page_objects,
+            "test_suites": modular_proj.test_suites,
+            "file_count": len(modular_proj.files),
+            "files": [
+                {
+                    "relative_path": f.relative_path,
+                    "file_type": f.file_type,
+                    "content": f.content,
+                }
+                for f in modular_proj.files
+            ],
+        }
+
         response = ScriptGenerationResponse(
             generation_id=generation_id,
             application_url=url,
@@ -2961,6 +3034,7 @@ class AutomationService:
             crawl_status="script_generation_completed",
             crawl_report=crawl_report,
             scripts=scripts,
+            project_structure=project_structure,
         )
         self._generations[generation_id] = {
             "response": response,
@@ -2973,13 +3047,14 @@ class AutomationService:
             script_cache_key,
             {
                 "page_title": title,
-                "discovered_elements": [item.model_dump(mode="json") for item in elements],
+                "discovered_elements": [item.model_dump(mode="json") if hasattr(item, "model_dump") else item for item in elements],
                 "application_map": application_map,
                 "application_map_version": application_map_version,
                 "requirement_version": requirement_version,
                 "crawl_status": "crawl_completed",
                 "crawl_report": crawl_report,
-                "scripts": [item.model_dump(mode="json") for item in scripts],
+                "scripts": [item.model_dump(mode="json") if hasattr(item, "model_dump") else item for item in scripts],
+                "project_structure": project_structure,
             },
             settings.redis_script_ttl_seconds,
         )

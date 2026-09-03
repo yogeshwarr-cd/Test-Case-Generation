@@ -241,7 +241,8 @@ class TestDataEngine:
         self,
         test_case: Dict[str, Any],
         discovered_elements: List[Dict[str, Any]],
-        credentials: Any = None
+        credentials: Any = None,
+        all_elements: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[Dict[str, Any], str | None]:
         """
         Analyze a test case and generate/reuse test data.
@@ -252,7 +253,7 @@ class TestDataEngine:
         blocked_reason = None
 
         identities = []
-        for element in discovered_elements:
+        for element in (discovered_elements or []):
             words = _meaningful_words(
                 " ".join(
                     str(element.get(key) or "")
@@ -260,6 +261,17 @@ class TestDataEngine:
                 )
             )
             identities.append((element, words))
+
+        all_identities = []
+        if all_elements:
+            for element in all_elements:
+                words = _meaningful_words(
+                    " ".join(
+                        str(element.get(key) or "")
+                        for key in ("name", "label", "test_id", "placeholder", "visible_text")
+                    )
+                )
+                all_identities.append((element, words))
 
         existing_data = test_case.get("test_data") or {}
 
@@ -282,9 +294,25 @@ class TestDataEngine:
                     best_score = score
                     best_element = element
 
+            # Fallback to all site elements (cross-page inventory match)
+            if not best_element and all_identities:
+                for element, words in all_identities:
+                    score = len(action_words & words)
+                    if score > best_score:
+                        best_score = score
+                        best_element = element
+
             if not best_element:
-                blocked_reason = f"Required input field matching '{phrase}' was not found in crawl evidence."
-                return {}, blocked_reason
+                # Handle auth credentials gracefully if mentioned in action
+                if any(k in lowered for k in ("username", "user", "email", "login", "password")):
+                    best_element = {
+                        "tag": "input",
+                        "name": "password" if "password" in lowered else "username",
+                        "input_type": "password" if "password" in lowered else "text",
+                    }
+                else:
+                    blocked_reason = f"Required input field matching '{phrase}' was not found in crawl evidence."
+                    return {}, blocked_reason
 
             field_key = phrase or best_element.get("name") or best_element.get("label") or "input_field"
             

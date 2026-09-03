@@ -81,10 +81,10 @@ export const testCaseApi = {
     }, 600000);
   },
 
-  generateScripts(workflowId: string, applicationUrl: string, crawlId: string) {
+  generateScripts(workflowId: string, applicationUrl: string, crawlId: string, projectName?: string) {
     return request<ScriptGeneration>('/api/v1/automation/scripts/generate', {
       method: 'POST', body: JSON.stringify({
-        workflow_id: workflowId, application_url: applicationUrl, crawl_id: crawlId,
+        workflow_id: workflowId, application_url: applicationUrl, crawl_id: crawlId, project_name: projectName,
       }),
     });
   },

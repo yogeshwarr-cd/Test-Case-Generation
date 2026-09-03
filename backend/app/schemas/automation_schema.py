@@ -11,6 +11,7 @@ class GenerateScriptsRequest(BaseModel):
     workflow_id: UUID
     application_url: HttpUrl
     crawl_id: str
+    project_name: str | None = None
 
 
 class CrawlApplicationRequest(BaseModel):
@@ -116,6 +117,7 @@ class ScriptGenerationResponse(BaseModel):
     ] = "script_generation_completed"
     crawl_report: dict[str, Any] = Field(default_factory=dict)
     scripts: list[GeneratedScript]
+    project_structure: dict[str, Any] | None = None
 
 
 class PlaywrightAuthentication(BaseModel):

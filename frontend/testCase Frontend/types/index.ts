@@ -218,6 +218,22 @@ export interface DiscoveredElement {
   locator_validated?: boolean;
 }
 
+export interface ProjectFile {
+  relative_path: string;
+  file_type: string;
+  content: string;
+}
+
+export interface ProjectStructure {
+  project_name: string;
+  root_path?: string;
+  modules: string[];
+  page_objects: string[];
+  test_suites: string[];
+  file_count: number;
+  files: ProjectFile[];
+}
+
 export interface ScriptGeneration {
   generation_id: string;
   application_url: string;
@@ -236,6 +252,7 @@ export interface ScriptGeneration {
   crawl_status: 'script_generation_completed';
   crawl_report: CrawlReport;
   scripts: GeneratedScript[];
+  project_structure?: ProjectStructure;
 }
 
 export interface CrawlReport {
