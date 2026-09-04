@@ -121,8 +121,12 @@ class Settings(BaseSettings):
     vision_llm_max_calls_per_image: int = 1
     image_analysis_cache_enabled: bool = True
     image_analysis_cache_ttl_seconds: int = 604800
-    llm_rate_limit_fallback_threshold_seconds: float = 10.0
-    automation_artifacts_path: str = "./artifacts/automation"
+    automation_artifacts_path: str = str(
+        Path(__file__).resolve().parents[3] / "artifacts" / "automation"
+    )
+    generated_automation_path: str = str(
+        Path(__file__).resolve().parents[3] / "generated_automation"
+    )
     automation_navigation_timeout_seconds: float = 15.0
     automation_action_timeout_seconds: float = 5.0
     automation_execution_workers: int = 4

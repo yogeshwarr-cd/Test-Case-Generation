@@ -174,9 +174,19 @@ export function downloadFile(name: string, content: string, type: string): void 
   URL.revokeObjectURL(url);
 }
 
-export function loadActiveProjectName(): string | undefined {
+export function loadActiveProjectName(workflowId?: string): string | undefined {
   if (typeof window === 'undefined') return undefined;
   try {
+    if (workflowId) {
+      const raw = window.localStorage.getItem('testcase-generator-projects');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const match = parsed.find((p) => p && (p.workflowId === workflowId || p.projectId === workflowId));
+          if (match && match.name && match.name.trim()) return match.name.trim();
+        }
+      }
+    }
     const stored = window.localStorage.getItem('activeProjectName') || window.sessionStorage.getItem('activeProjectName');
     return stored || undefined;
   } catch {

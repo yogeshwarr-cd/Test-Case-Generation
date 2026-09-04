@@ -1,7 +1,7 @@
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 def _meaningful_words(text: str) -> set[str]:
     ignored = {

@@ -135,6 +135,7 @@ export const testCaseApi = {
   startWorkflowCrawlJob(workflowId: string, applicationUrl: string, options?: {
     testing_scope?: 'full_application' | 'specific_page';
     authentication?: any;
+    project_name?: string;
   }) {
     return request<WorkflowCrawlJob>('/api/v1/automation/scripts/crawl/jobs', {
       method: 'POST',

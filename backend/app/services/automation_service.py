@@ -1010,11 +1010,17 @@ class AutomationService:
                 job["result"] = await self.crawl_and_generate(
                     request, cancel_event=job["cancel_event"]
                 )
-                job["status"] = "completed"
+                if job["cancel_event"].is_set():
+                    job["status"] = "stopped"
+                else:
+                    job["status"] = "completed"
             except Exception as exc:
-                job["error"] = str(exc)
-                job["status"] = "failed"
-                logger.exception("Crawl job failed job_id=%s", job_id)
+                if job["cancel_event"].is_set():
+                    job["status"] = "stopped"
+                else:
+                    job["error"] = str(exc)
+                    job["status"] = "failed"
+                    logger.exception("Crawl job failed job_id=%s", job_id)
 
         job["task"] = asyncio.create_task(run())
         return self._crawl_job_response(job_id)
@@ -1093,12 +1099,13 @@ class AutomationService:
                     )
                 )
                 if has_scanned_data:
-                    project_name = None
-                    try:
-                        wf_state = workflow_service.get(request.workflow_id)
-                        project_name = wf_state.get("project_name") or wf_state.get("name")
-                    except Exception:
-                        pass
+                    project_name = getattr(request, "project_name", None)
+                    if not project_name:
+                        try:
+                            wf_state = workflow_service.get(request.workflow_id)
+                            project_name = wf_state.get("project_name") or wf_state.get("name")
+                        except Exception:
+                            pass
                     job["generation"] = await self.generate(
                         GenerateScriptsRequest(
                             workflow_id=request.workflow_id,
@@ -1107,13 +1114,19 @@ class AutomationService:
                             project_name=project_name,
                         )
                     )
-                job["status"] = "completed"
+                if job["cancel_event"].is_set():
+                    job["status"] = "stopped"
+                else:
+                    job["status"] = "completed"
             except Exception as exc:
-                job["error"] = str(exc)
-                job["status"] = "failed"
-                logger.exception(
-                    "Workflow crawl job failed job_id=%s", job_id
-                )
+                if job["cancel_event"].is_set():
+                    job["status"] = "stopped"
+                else:
+                    job["error"] = str(exc)
+                    job["status"] = "failed"
+                    logger.exception(
+                        "Workflow crawl job failed job_id=%s", job_id
+                    )
 
         job["task"] = asyncio.create_task(run())
         return self._workflow_crawl_job_response(job_id)
@@ -1209,6 +1222,12 @@ class AutomationService:
     @property
     def artifact_root(self) -> Path:
         root = Path(settings.automation_artifacts_path).resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    @property
+    def generated_automation_root(self) -> Path:
+        root = Path(getattr(settings, "generated_automation_path", Path(settings.automation_artifacts_path).resolve().parents[0] / "generated_automation")).resolve()
         root.mkdir(parents=True, exist_ok=True)
         return root
 
@@ -2983,12 +3002,15 @@ class AutomationService:
                 "could be generated from the preserved crawl data."
             )
         # Generate standard Modular Page Object Model (POM) Project Structure
-        app_name = (
+        user_proj_name = (
             getattr(request, "project_name", None)
             or state.get("project_name")
             or state.get("name")
-            or title
-            or "web_automation"
+        )
+        app_name = (
+            user_proj_name.strip()
+            if user_proj_name and user_proj_name.strip()
+            else (title or "web_automation")
         )
         gen = ProjectStructureGenerator(app_name=app_name)
         modular_proj = gen.generate_project(
@@ -2999,15 +3021,23 @@ class AutomationService:
             scenarios=state.get("scenarios", []),
             credentials=getattr(request, "authentication", None) or state.get("credentials"),
         )
+        # 1. Write to generation artifact directory
         proj_root = directory / gen.app_name
         for gen_file in modular_proj.files:
             fpath = proj_root / gen_file.relative_path
             fpath.parent.mkdir(parents=True, exist_ok=True)
             fpath.write_text(gen_file.content, encoding="utf-8")
 
+        # 2. Write to isolated root generated_automation/<project_name>/ directory outside backend
+        isolated_root = self.generated_automation_root / gen.app_name
+        for gen_file in modular_proj.files:
+            fpath = isolated_root / gen_file.relative_path
+            fpath.parent.mkdir(parents=True, exist_ok=True)
+            fpath.write_text(gen_file.content, encoding="utf-8")
+
         project_structure = {
             "project_name": gen.app_name,
-            "root_path": str(proj_root),
+            "root_path": str(isolated_root),
             "modules": list(modular_proj.modules),
             "page_objects": modular_proj.page_objects,
             "test_suites": modular_proj.test_suites,

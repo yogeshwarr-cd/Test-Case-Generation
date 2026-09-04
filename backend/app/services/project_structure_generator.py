@@ -7,6 +7,7 @@ reusable Page Objects, Pytest fixtures (conftest.py), centralized configuration,
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -194,8 +195,8 @@ class ProjectStructureGenerator:
         # 6. Add __init__.py files
         self._add_init_files(project)
 
-        # 7. Add root config files (pytest.ini, pyproject.toml, README.md)
-        self._add_root_config_files(project, base_url)
+        # 7. Add root config files (pytest.ini, pyproject.toml, README.md, requirements.txt, .env.example)
+        self._add_root_config_files(project, base_url, credentials=credentials)
 
         return project
 
@@ -308,6 +309,40 @@ def load_test_data(filename: str = "test_data.json") -> Dict[str, Any]:
 '''
         project.files.append(
             GeneratedFile(relative_path="shared/test_data/data_loader.py", content=data_loader_code)
+        )
+
+        # Default Test Data
+        default_data = {
+            "credentials": {
+                "default": {
+                    "username": ident,
+                    "password": "secret_sauce",
+                }
+            },
+            "environment": {
+                "base_url": base_url,
+            },
+        }
+        project.files.append(
+            GeneratedFile(
+                relative_path="shared/test_data/test_data.json",
+                content=json.dumps(default_data, indent=2),
+                file_type="json",
+            )
+        )
+
+        # Assets, Screenshots, Traces, and Reports directory markers
+        project.files.append(
+            GeneratedFile(relative_path="shared/assets/.gitkeep", content="", file_type="text")
+        )
+        project.files.append(
+            GeneratedFile(relative_path="screenshots/.gitkeep", content="", file_type="text")
+        )
+        project.files.append(
+            GeneratedFile(relative_path="traces/.gitkeep", content="", file_type="text")
+        )
+        project.files.append(
+            GeneratedFile(relative_path="reports/.gitkeep", content="", file_type="text")
         )
 
     def _generate_page_object_code(self, meta: Dict[str, Any], base_url: str) -> str:
@@ -504,7 +539,26 @@ def {safe_func_name}(page: Page, default_credentials: dict) -> None:
             if not any(f.relative_path == p for f in project.files):
                 project.files.append(GeneratedFile(relative_path=p, content='"""Package marker."""\n'))
 
-    def _add_root_config_files(self, project: ModularProject, base_url: str) -> None:
+    def _add_root_config_files(self, project: ModularProject, base_url: str, credentials: Optional[Dict[str, Any]] = None) -> None:
+        ident = credentials.get("identifier") or credentials.get("username") or "standard_user" if credentials else "standard_user"
+
+        requirements_txt = """playwright>=1.40.0
+pytest>=8.0.0
+pytest-playwright>=0.4.4
+python-dotenv>=1.0.0
+"""
+        project.files.append(GeneratedFile(relative_path="requirements.txt", content=requirements_txt, file_type="text"))
+
+        env_example = f"""# Test Automation Environment Variables
+APP_BASE_URL={base_url}
+TEST_USERNAME={ident}
+TEST_PASSWORD=secret_sauce
+HEADLESS=true
+DEFAULT_TIMEOUT=10000
+SLOW_MO=0
+"""
+        project.files.append(GeneratedFile(relative_path=".env.example", content=env_example, file_type="text"))
+
         pytest_ini = f"""[pytest]
 testpaths = modules
 python_files = test_*.py
@@ -533,20 +587,33 @@ Automated test project generated with standard Page Object Model (POM) architect
 │       ├── pages/          # Page Object classes
 │       └── tests/          # Pytest test suites
 ├── shared/
+│   ├── assets/             # Test assets / uploads
 │   ├── config/             # Environment and settings
 │   ├── fixtures/           # Global conftest.py fixtures
-│   ├── test_data/          # Test data loader
+│   ├── test_data/          # Test data loader and JSON data
 │   └── utils/              # Helper utilities
+├── screenshots/            # Failure and execution screenshots
+├── traces/                 # Playwright debug traces
+├── reports/                # Pytest execution reports
+├── requirements.txt
+├── .env.example
 ├── pytest.ini
 └── pyproject.toml
 ```
 
-## Running Tests
-Run all tests:
+## Setup & Running Tests
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+playwright install chromium
+```
+
+2. Run all tests:
 ```bash
 pytest
 ```
-Run specific module:
+
+3. Run specific module:
 ```bash
 pytest modules/core/tests/
 ```

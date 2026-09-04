@@ -112,8 +112,16 @@ def test_modular_pom_project_generation():
     assert "shared/fixtures/conftest.py" in file_paths
     assert "shared/utils/helpers.py" in file_paths
     assert "shared/test_data/data_loader.py" in file_paths
+    assert "shared/test_data/test_data.json" in file_paths
+    assert "shared/assets/.gitkeep" in file_paths
+    assert "screenshots/.gitkeep" in file_paths
+    assert "traces/.gitkeep" in file_paths
+    assert "reports/.gitkeep" in file_paths
+    assert "requirements.txt" in file_paths
+    assert ".env.example" in file_paths
     assert "pytest.ini" in file_paths
     assert "pyproject.toml" in file_paths
+    assert "README.md" in file_paths
 
     # Page Objects
     assert any("pages" in p and "page.py" in p for p in file_paths)

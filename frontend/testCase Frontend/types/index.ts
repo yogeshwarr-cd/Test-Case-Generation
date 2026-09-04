@@ -293,7 +293,7 @@ export interface CrawlAnalysis {
 
 export interface WorkflowCrawlJob {
   job_id: string;
-  status: 'queued' | 'running' | 'stopping' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'stopping' | 'stopped' | 'completed' | 'failed';
   stop_requested: boolean;
   progress: CrawlReport['progress'];
   crawl: CrawlAnalysis | null;

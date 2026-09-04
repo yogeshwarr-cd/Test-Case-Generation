@@ -1,0 +1,66 @@
+{
+  "workflow_id": "6a2631e4-ec0b-482f-9c48-bf73e57ce4d7",
+  "project_id": "accbe743-4212-4eb5-892d-d7c3fcf4aa7f",
+  "name": "Swag Labs E2E Test Suite",
+  "project_name": "Swag Labs E2E Test Suite",
+  "status": "completed",
+  "current_stage": "completed",
+  "structured_context": {
+    "application_name": "Swag Labs",
+    "base_url": "https://www.saucedemo.com"
+  },
+  "scenarios": [
+    {
+      "scenario_id": "3bd3c6c5-8f06-4e65-b7cc-ae6e44127ad0",
+      "title": "User Authentication and Product Navigation",
+      "description": "Verify that a registered user can log in and view product inventory."
+    }
+  ],
+  "test_cases": [
+    {
+      "test_case_id": "675f4d3f-50ab-42c2-8007-457adaabae3d",
+      "scenario_id": "3bd3c6c5-8f06-4e65-b7cc-ae6e44127ad0",
+      "title": "Valid Login",
+      "description": "User logs in with standard credentials and reaches inventory page.",
+      "preconditions": "User is on the login page",
+      "steps": [
+        {
+          "step_number": 1,
+          "action": "Enter username 'standard_user'",
+          "expected_result": "Username entered"
+        },
+        {
+          "step_number": 2,
+          "action": "Enter password 'secret_sauce'",
+          "expected_result": "Password entered"
+        },
+        {
+          "step_number": 3,
+          "action": "Click login button",
+          "expected_result": "User navigated to inventory page"
+        }
+      ],
+      "expected_result": "Inventory page is displayed with products"
+    },
+    {
+      "test_case_id": "0a528b21-3940-473c-b7fc-a999964f4e6b",
+      "scenario_id": "3bd3c6c5-8f06-4e65-b7cc-ae6e44127ad0",
+      "title": "Add Item to Cart",
+      "description": "User adds a product to the shopping cart.",
+      "preconditions": "User is logged in on inventory page",
+      "steps": [
+        {
+          "step_number": 1,
+          "action": "Click 'Add to cart' on Sauce Labs Backpack",
+          "expected_result": "Item added to cart"
+        },
+        {
+          "step_number": 2,
+          "action": "Verify shopping cart badge displays '1'",
+          "expected_result": "Cart count updated to 1"
+        }
+      ],
+      "expected_result": "Cart contains 1 item"
+    }
+  ]
+}

@@ -23,6 +23,7 @@ class CrawlApplicationRequest(BaseModel):
     repeated_state_limit: int = Field(default=5, ge=1, le=20)
     testing_scope: Literal["full_application", "specific_page"] = "full_application"
     authentication: PlaywrightAuthentication | None = None
+    project_name: str | None = None
 
 
 
@@ -42,7 +43,7 @@ class WorkflowCrawlJobResponse(BaseModel):
     """State and results for a cancellable workflow-backed crawl."""
 
     job_id: str
-    status: Literal["queued", "running", "stopping", "completed", "failed"]
+    status: Literal["queued", "running", "stopping", "stopped", "completed", "failed"]
     stop_requested: bool = False
     progress: dict[str, Any] = Field(default_factory=dict)
     crawl: CrawlAnalysisResponse | None = None
@@ -449,7 +450,7 @@ class CrawlJobResponse(BaseModel):
     """Current state of a cancellable standalone crawl."""
 
     job_id: str
-    status: Literal["queued", "running", "stopping", "completed", "failed"]
+    status: Literal["queued", "running", "stopping", "stopped", "completed", "failed"]
     stop_requested: bool = False
     progress: dict[str, Any] = Field(default_factory=dict)
     result: CrawlGenerationResponse | None = None

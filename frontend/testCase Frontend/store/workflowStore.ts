@@ -121,9 +121,15 @@ export const useTestCaseWorkflowStore = create<WorkflowStore>((set) => ({
       const name = projectName && projectName.trim() ? projectName.trim() : `Test project ${String(projectId || workflowId).slice(0, 8)}`;
       projects.unshift({ workflowId, projectId, name, status: 'processing', createdAt: now, updatedAt: now, scenarioCount: 0, testCaseCount: 0, scriptCount: 0 });
       saveProjects(projects);
+      if (typeof window !== 'undefined' && projectName && projectName.trim()) {
+        window.localStorage.setItem('activeProjectName', projectName.trim());
+      }
     } else if (projectName && projectName.trim()) {
       projects[existingIndex].name = projectName.trim();
       saveProjects(projects);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('activeProjectName', projectName.trim());
+      }
     }
     set({ workflowId, projectId, projects });
   },

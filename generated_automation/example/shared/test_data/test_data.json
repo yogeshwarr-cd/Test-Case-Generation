@@ -1,0 +1,11 @@
+{
+  "credentials": {
+    "default": {
+      "username": "standard_user",
+      "password": "secret_sauce"
+    }
+  },
+  "environment": {
+    "base_url": "https://example.com/"
+  }
+}

@@ -206,7 +206,7 @@ async def test_crawl_job_stop_waits_for_partial_generation(monkeypatch):
     await service._crawl_jobs[started.job_id]["task"]
 
     completed = service.crawl_job(started.job_id)
-    assert completed.status == "completed"
+    assert completed.status == "stopped"
     assert completed.stop_requested is True
     assert completed.result is not None
     assert completed.result.crawl_status == "crawl_incomplete"
@@ -261,7 +261,7 @@ async def test_workflow_crawl_stop_generates_from_preserved_session(monkeypatch)
     await service._workflow_crawl_jobs[started.job_id]["task"]
 
     completed = service.workflow_crawl_job(started.job_id)
-    assert completed.status == "completed"
+    assert completed.status == "stopped"
     assert completed.stop_requested is True
     assert completed.crawl is not None
     assert completed.crawl.pages_crawled == 1

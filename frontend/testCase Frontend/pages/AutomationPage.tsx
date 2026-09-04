@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
-import { CheckCircle2, Download, LoaderCircle, Play, X, XCircle } from 'lucide-react';
+import { Check, CheckCircle2, Code2, Copy, Download, FileCode, Folder, Layers, LoaderCircle, Play, X, XCircle } from 'lucide-react';
 import { StatePanel } from '../components/StatePanel';
 import { ConfidenceRing, EntityId, StatusBadge, TraceabilityChain } from '../components/TraceabilityUI';
 import { automationArtifactPdfUrl, automationArtifactUrl, testCaseApi } from '../services/testCaseApi';
@@ -27,6 +27,9 @@ export function AutomationPage() {
   const [sessionState, setSessionState] = useState('');
   const [executionProfile, setExecutionProfile] = useState<'fast' | 'standard' | 'diagnostic'>('fast');
   const [selectedScript, setSelectedScript] = useState(0);
+  const [selectedProjectFile, setSelectedProjectFile] = useState(0);
+  const [activeGenTab, setActiveGenTab] = useState<'modular' | 'scripts'>('modular');
+  const [copiedCode, setCopiedCode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [showTestReport, setShowTestReport] = useState(false);
@@ -124,11 +127,12 @@ export function AutomationPage() {
           pollingErrorVisible = false;
         }
         setCrawlJob(current);
-        if (current.status === 'completed') {
+        if (current.status === 'completed' || current.status === 'stopped') {
           if (current.crawl) setCrawl(current.crawl);
           if (current.generation) {
             setGeneration(current.generation);
             setSelectedScript(0);
+            setSelectedProjectFile(0);
           }
         } else if (current.status === 'failed') {
           setError(current.error || 'The application crawl failed.');
@@ -204,7 +208,11 @@ export function AutomationPage() {
         ? { email: authenticationEmail.trim(), password: authenticationPassword }
         : undefined;
       const startedJob = await testCaseApi.startWorkflowCrawlJob(
-        workflowId, targetUrl, { testing_scope: testingScope, authentication }
+        workflowId, targetUrl, {
+          testing_scope: testingScope,
+          authentication,
+          project_name: loadActiveProjectName(workflowId),
+        }
       );
       setCrawlJob(startedJob);
       saveAutomationActivity(workflowId, { applicationUrl: targetUrl, crawlJobId: startedJob.job_id });
@@ -221,12 +229,14 @@ export function AutomationPage() {
     ) return;
     setBusy(true); setError('');
     try {
+      const activeProjectName = loadActiveProjectName(workflowId);
       const generated = await testCaseApi.generateScripts(
-        workflowId, applicationUrl.trim(), crawl.crawl_id, loadActiveProjectName(),
+        workflowId, applicationUrl.trim(), crawl.crawl_id, activeProjectName,
       );
       setGeneration(generated);
       saveTestProjectArtifacts(workflowId, generated, report, comparison, crawl);
       setSelectedScript(0);
+      setSelectedProjectFile(0);
     } catch (requestError) { setError(friendlyError(requestError)); }
     finally { setBusy(false); }
   };
@@ -557,28 +567,201 @@ export function AutomationPage() {
       {generation && (
         <>
           <section className={`rounded-2xl border p-5 ${partialGeneration ? 'border-amber-500/30 bg-amber-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
-            <div className={`flex items-center gap-2 font-semibold ${partialGeneration ? 'text-amber-700' : 'text-green-600'}`}><CheckCircle2 className="h-5 w-5" /> {partialGeneration ? 'Scripts Generated from Successfully Crawled Pages' : 'Generated Test Scripts'}</div>
-            <p className="mt-2 text-sm text-muted-foreground">{generation.page_title || generation.application_url} · {generation.application_map?.page_count ?? 1} pages · {generation.discovered_elements.length} verified interactive elements · {generation.scripts.length} scripts generated</p>
+            <div className={`flex items-center gap-2 font-semibold ${partialGeneration ? 'text-amber-700' : 'text-green-600'}`}>
+              <CheckCircle2 className="h-5 w-5" />
+              {partialGeneration ? 'Scripts Generated from Successfully Crawled Pages' : 'Generated Automation Project & Scripts'}
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {generation.project_structure?.project_name ? <span className="font-semibold text-foreground">{generation.project_structure.project_name}</span> : generation.page_title || generation.application_url}
+              {' '}· {generation.project_structure?.file_count ?? generation.scripts.length} files generated · {generation.application_map?.page_count ?? 1} pages scanned · {generation.discovered_elements.length} verified interactive elements
+            </p>
+            {generation.project_structure?.root_path && (
+              <p className="mt-1 font-mono text-xs text-muted-foreground">
+                Location: <span className="text-foreground">{generation.project_structure.root_path}</span>
+              </p>
+            )}
             {partialGeneration && <p className="mt-2 text-sm text-amber-700">These scripts use the pages and elements preserved before the crawl stopped.</p>}
           </section>
 
-          {generation.scripts.length === 0
-            ? <section className="rounded-2xl border border-border bg-card p-5 text-sm text-muted-foreground">No scripts available</section>
-            : <div className="grid items-start gap-6 lg:grid-cols-[20rem_minmax(0,1fr)]">
-            <aside className="flex max-h-[42rem] flex-col overflow-hidden rounded-2xl border border-border bg-card">
-              <div className="shrink-0 border-b border-border px-4 py-3">
-                <h2 className="font-semibold">Generated scripts</h2>
-                <p className="mt-1 text-xs text-muted-foreground">{generation.scripts.length} scripts · Select one to view its code</p>
-              </div>
-              <div className="space-y-2 overflow-y-auto p-3">
-                {generation.scripts.map((item, index) => <button key={item.script_id} onClick={() => setSelectedScript(index)} className={`w-full rounded-xl border p-3 text-left text-sm shadow-sm transition-all ${selectedScript === index ? 'border-primary/40 bg-primary/10 ring-1 ring-primary/20' : 'border-transparent hover:-translate-y-0.5 hover:border-border hover:bg-muted/60 hover:shadow-md'}`}><span className="block font-semibold">{item.name}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{item.page_url || item.application_url}</span><span className="mt-2 block truncate font-mono text-[10px] text-primary">Script · {friendlyId('script', item.script_id)}</span></button>)}
-              </div>
-            </aside>
-            {script && <section className="min-w-0 rounded-2xl border border-border bg-card">
-              <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border p-4"><div className="min-w-0"><h2 className="font-semibold">{script.name}</h2><p className="mt-1 break-all text-xs text-muted-foreground">{script.page_url || script.application_url}</p><TraceabilityChain className="mt-3" scenarioId={script.scenario_id} testCaseId={script.test_case_id} scriptId={script.script_id} /></div><button onClick={() => downloadFile(`${script.script_id}.py`, script.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold shadow-sm transition hover:-translate-y-0.5 hover:bg-muted hover:shadow-md"><Download className="h-4 w-4" /> Download</button></div>
-              <pre className="max-h-[36rem] overflow-auto p-4 text-xs">{script.source}</pre>
-            </section>}
-          </div>}
+          {/* View Mode Switcher Tabs */}
+          <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
+            <button
+              onClick={() => setActiveGenTab('modular')}
+              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                activeGenTab === 'modular'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'border border-border bg-card text-muted-foreground hover:bg-muted/70 hover:text-foreground'
+              }`}
+            >
+              <Folder className="h-4 w-4" />
+              Modular POM Project
+              {generation.project_structure && (
+                <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                  activeGenTab === 'modular' ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-muted text-muted-foreground'
+                }`}>
+                  {generation.project_structure.file_count} files
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setActiveGenTab('scripts')}
+              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                activeGenTab === 'scripts'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'border border-border bg-card text-muted-foreground hover:bg-muted/70 hover:text-foreground'
+              }`}
+            >
+              <FileCode className="h-4 w-4" />
+              Test Scripts &amp; Execution
+              <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                activeGenTab === 'scripts' ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-muted text-muted-foreground'
+              }`}>
+                {generation.scripts.length}
+              </span>
+            </button>
+          </div>
+
+          {activeGenTab === 'modular' && generation.project_structure ? (
+            <div className="grid items-start gap-6 lg:grid-cols-[22rem_minmax(0,1fr)]">
+              <aside className="flex max-h-[44rem] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+                <div className="shrink-0 border-b border-border bg-muted/30 px-4 py-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-semibold text-sm">Project Files</h2>
+                    <span className="rounded bg-primary/10 px-2 py-0.5 font-mono text-[11px] font-bold text-primary">
+                      {generation.project_structure.project_name}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {generation.project_structure.files.length} modular POM files
+                  </p>
+                </div>
+                <div className="space-y-1 overflow-y-auto p-2">
+                  {generation.project_structure.files.map((file, idx) => {
+                    const isSelected = selectedProjectFile === idx;
+                    const parts = file.relative_path.split('/');
+                    const fileName = parts[parts.length - 1];
+                    const folderPath = parts.slice(0, -1).join('/');
+                    return (
+                      <button
+                        key={`${file.relative_path}-${idx}`}
+                        onClick={() => setSelectedProjectFile(idx)}
+                        className={`w-full rounded-xl p-2.5 text-left text-xs transition-all ${
+                          isSelected
+                            ? 'border border-primary/40 bg-primary/10 text-foreground ring-1 ring-primary/20 shadow-sm'
+                            : 'border border-transparent hover:bg-muted/60 text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <FileCode className={`h-3.5 w-3.5 shrink-0 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
+                          <span className="font-semibold truncate">{fileName}</span>
+                        </div>
+                        {folderPath && (
+                          <span className="mt-0.5 block truncate pl-5.5 font-mono text-[10px] text-muted-foreground/80">
+                            {folderPath}/
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </aside>
+
+              {generation.project_structure.files[selectedProjectFile] && (
+                <section className="min-w-0 rounded-2xl border border-border bg-card shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/20 p-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <FileCode className="h-4 w-4 text-primary" />
+                        <h2 className="font-semibold text-sm truncate">
+                          {generation.project_structure.files[selectedProjectFile].relative_path}
+                        </h2>
+                      </div>
+                      <span className="mt-1 inline-block rounded bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground uppercase">
+                        {generation.project_structure.files[selectedProjectFile].file_type}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          const content = generation.project_structure?.files[selectedProjectFile]?.content || '';
+                          if (content) {
+                            navigator.clipboard.writeText(content);
+                            setCopiedCode(true);
+                            setTimeout(() => setCopiedCode(false), 2000);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold shadow-sm hover:bg-muted"
+                      >
+                        {copiedCode ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                        {copiedCode ? 'Copied' : 'Copy'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          const f = generation.project_structure?.files[selectedProjectFile];
+                          if (f) {
+                            const name = f.relative_path.split('/').pop() || 'file';
+                            const mime = f.file_type === 'python' ? 'text/x-python' : f.file_type === 'json' ? 'application/json' : 'text/plain';
+                            downloadFile(name, f.content, mime);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold shadow-sm hover:bg-muted"
+                      >
+                        <Download className="h-3.5 w-3.5" /> Download
+                      </button>
+                    </div>
+                  </div>
+                  <pre className="max-h-[38rem] overflow-auto p-4 font-mono text-xs leading-relaxed text-foreground bg-background/50">
+                    {generation.project_structure.files[selectedProjectFile].content}
+                  </pre>
+                </section>
+              )}
+            </div>
+          ) : generation.scripts.length === 0 ? (
+            <section className="rounded-2xl border border-border bg-card p-5 text-sm text-muted-foreground">
+              No scripts available
+            </section>
+          ) : (
+            <div className="grid items-start gap-6 lg:grid-cols-[20rem_minmax(0,1fr)]">
+              <aside className="flex max-h-[42rem] flex-col overflow-hidden rounded-2xl border border-border bg-card">
+                <div className="shrink-0 border-b border-border px-4 py-3">
+                  <h2 className="font-semibold">Generated scripts</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">{generation.scripts.length} scripts · Select one to view its code</p>
+                </div>
+                <div className="space-y-2 overflow-y-auto p-3">
+                  {generation.scripts.map((item, index) => (
+                    <button
+                      key={item.script_id}
+                      onClick={() => setSelectedScript(index)}
+                      className={`w-full rounded-xl border p-3 text-left text-sm shadow-sm transition-all ${
+                        selectedScript === index
+                          ? 'border-primary/40 bg-primary/10 ring-1 ring-primary/20'
+                          : 'border-transparent hover:-translate-y-0.5 hover:border-border hover:bg-muted/60 hover:shadow-md'
+                      }`}
+                    >
+                      <span className="block font-semibold">{item.name}</span>
+                      <span className="mt-1 block truncate text-xs text-muted-foreground">{item.page_url || item.application_url}</span>
+                      <span className="mt-2 block truncate font-mono text-[10px] text-primary">Script · {friendlyId('script', item.script_id)}</span>
+                    </button>
+                  ))}
+                </div>
+              </aside>
+              {script && (
+                <section className="min-w-0 rounded-2xl border border-border bg-card">
+                  <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border p-4">
+                    <div className="min-w-0">
+                      <h2 className="font-semibold">{script.name}</h2>
+                      <p className="mt-1 break-all text-xs text-muted-foreground">{script.page_url || script.application_url}</p>
+                      <TraceabilityChain className="mt-3" scenarioId={script.scenario_id} testCaseId={script.test_case_id} scriptId={script.script_id} />
+                    </div>
+                    <button onClick={() => downloadFile(`${script.script_id}.py`, script.source, 'text/x-python')} className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-semibold shadow-sm transition hover:-translate-y-0.5 hover:bg-muted hover:shadow-md">
+                      <Download className="h-4 w-4" /> Download
+                    </button>
+                  </div>
+                  <pre className="max-h-[36rem] overflow-auto p-4 text-xs">{script.source}</pre>
+                </section>
+              )}
+            </div>
+          )}
 
           {!historyMode && <section className="rounded-2xl border border-border bg-card p-5">
             <h2 className="font-semibold">Execution mode</h2>
